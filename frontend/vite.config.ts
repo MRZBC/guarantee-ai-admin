@@ -10,6 +10,13 @@ import vue from '@vitejs/plugin-vue'
 const BACKEND_PORT = process.env.BACKEND_PORT ?? '8081'
 const BACKEND_HOST = process.env.BACKEND_HOST ?? 'localhost'
 
+/**
+ * 开发服务器监听地址。默认 0.0.0.0（监听所有网卡），
+ * 这样局域网内其它设备可以用本机 IPv4 访问，例如 http://192.168.3.86:5273/。
+ * 只想本机访问时：$env:DEV_HOST='127.0.0.1'; npm run dev
+ */
+const DEV_HOST = process.env.DEV_HOST ?? '0.0.0.0'
+
 export default defineConfig({
   plugins: [vue()],
   resolve: {
@@ -25,8 +32,8 @@ export default defineConfig({
     port: 5273,
     // 端口被占用时直接报错，而不是悄悄换端口让人找不到地址
     strictPort: true,
-    // 默认只监听回环地址（更安全）。需要局域网访问时：npm run dev -- --host
-    host: '127.0.0.1',
+    // 监听所有网卡，局域网可用本机 IPv4 访问；用 DEV_HOST=127.0.0.1 可限制为本机
+    host: DEV_HOST,
     proxy: {
       '/api': {
         target: `http://${BACKEND_HOST}:${BACKEND_PORT}`,

@@ -177,6 +177,19 @@ npm run dev            # http://localhost:5273
 > $env:BACKEND_PORT=8082; npm run dev
 > ```
 
+> 📱 **局域网访问**：开发服务器默认监听 `0.0.0.0`，同一局域网的手机或同事电脑
+> 可用本机 IPv4 访问，例如 `http://192.168.3.86:5273/`
+> （Vite 启动时会打印 `➜ Network:` 地址，直接用它即可）。
+> 前端接口走相对路径 `/api`，经 Vite 代理转发，因此**从别的设备访问也不会跨域**。
+>
+> - 只想本机访问（更安全）：`$env:DEV_HOST='127.0.0.1'; npm run dev`
+> - 若开启了 Windows 防火墙且连不上，需放行该端口入站：
+>   ```powershell
+>   New-NetFirewallRule -DisplayName "Vite Dev 5273" -Direction Inbound `
+>     -Protocol TCP -LocalPort 5273 -Action Allow
+>   ```
+> - 注意 Vite dev server 是**开发用**的，不带认证、可读取源码，仅在可信网络内开放。
+
 **两种方式的区别**
 
 | | 方式 A（后端承载） | 方式 B（Vite dev） |
