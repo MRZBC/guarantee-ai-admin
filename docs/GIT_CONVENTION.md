@@ -11,11 +11,11 @@
 
 ```
                          ┌──────────────────────────────────────────┐
-                         │  master（主分支 / 生产）                  │
+                         │  main（主分支 / 生产）                    │
                          │  只接受 release_* 与 hotfix/* 合入        │
                          └───────▲──────────────────────┬───────────┘
                                  │                      │
-              release_v1.0.0 合入 │                      │ 从 master 拉出
+              release_v1.0.0 合入 │                      │ 从 main 拉出
                                  │                      ▼
                          ┌───────┴──────────┐    ┌──────────────────┐
                          │ release_v1.0.0   │    │ hotfix/xxx       │
@@ -36,9 +36,9 @@
 
 | 分支 | 角色 | 来源 | 合入目标 | 规则 |
 |---|---|---|---|---|
-| `master` | 主分支 / 生产分支 | 初始化 | — | **随时可发布**。禁止直接 push，只能由 `release_*` 或 `hotfix/*` 合并进入，合入即打 tag |
-| `develop` | 开发分支 / 日常集成 | `master` | `release_*` | 日常开发的集成分支，feature 完成后回合到此。禁止直接 push 业务代码 |
-| `release_v<版本>` | 发布分支 | `develop` | `master` + `develop` | 进入发布准备期：只接受 bugfix、版本号、文档改动，不再接受新功能 |
+| `main` | 主分支 / 生产分支 | 初始化 | — | **随时可发布**。禁止直接 push，只能由 `release_*` 或 `hotfix/*` 合并进入，合入即打 tag |
+| `develop` | 开发分支 / 日常集成 | `main` | `release_*` | 日常开发的集成分支，feature 完成后回合到此。禁止直接 push 业务代码 |
+| `release_v<版本>` | 发布分支 | `develop` | `main` + `develop` | 进入发布准备期：只接受 bugfix、版本号、文档改动，不再接受新功能 |
 
 **版本分支命名**：`release_v` + 语义化版本号
 
@@ -64,7 +64,7 @@ feature/analysis-region-drilldown    # 区域分析下钻
 
 ### 1.3 热修复分支（短期，用完即删）
 
-命名：`hotfix/<简述>`，**必须从 `master` 拉出**，修复线上问题。
+命名：`hotfix/<简述>`，**必须从 `main` 拉出**，修复线上问题。
 
 ```bash
 hotfix/login-token-expired
@@ -72,7 +72,7 @@ hotfix/order-amount-precision
 hotfix/sse-stream-cutoff
 ```
 
-修复完成后需**同时合回 `master` 与 `develop`**，否则下一次发布会把 bug 带回来。
+修复完成后需**同时合回 `main` 与 `develop`**，否则下一次发布会把 bug 带回来。
 
 ---
 
@@ -102,10 +102,10 @@ git checkout -b release_v1.0.0
 # 只允许：bugfix、版本号、CHANGELOG、文档
 git commit -m "chore(release): 发布 v1.0.0"
 
-git checkout master
+git checkout main
 git merge --no-ff release_v1.0.0
 git tag -a v1.0.0 -m "v1.0.0"
-git push origin master --follow-tags
+git push origin main --follow-tags
 
 # 把发布期的修复带回 develop
 git checkout develop
@@ -116,11 +116,11 @@ git branch -d release_v1.0.0
 ### 2.3 线上热修复
 
 ```bash
-git checkout master
+git checkout main
 git checkout -b hotfix/order-amount-precision
 git commit -m "fix(order): 修正保费金额四舍五入精度"
 
-git checkout master
+git checkout main
 git merge --no-ff hotfix/order-amount-precision
 git tag -a v1.0.1 -m "v1.0.1"
 
@@ -279,7 +279,7 @@ git checkout develop && git merge --no-ff feature/<模块>-<简述>
 
 # 发布
 git checkout -b release_v1.0.0 develop
-git checkout master && git merge --no-ff release_v1.0.0 && git tag -a v1.0.0 -m "v1.0.0"
+git checkout main && git merge --no-ff release_v1.0.0 && git tag -a v1.0.0 -m "v1.0.0"
 
 # 按提交规范生成 CHANGELOG（示例，未内置工具）
 git log --oneline --no-merges v1.0.0..HEAD

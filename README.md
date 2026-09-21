@@ -472,7 +472,7 @@ AI Plan -> Permission Check -> Preview -> User Confirmation -> Execute -> Audit
 
 分支模型与提交信息规范见 **[docs/GIT_CONVENTION.md](docs/GIT_CONVENTION.md)**：
 
-- **集成分支**：`master`（主分支，随时可发布）、`develop`（开发分支）、`release_v<版本>`（发布分支）
+- **集成分支**：`main`（主分支，随时可发布）、`develop`（开发分支）、`release_v<版本>`（发布分支）
 - **功能分支**：`feature/<模块>-<简述>`
 - **热修复分支**：`hotfix/<简述>`
 - **提交信息**：Conventional Commits，主题用中文，如 `feat(order): 新增投标订单导出接口`
