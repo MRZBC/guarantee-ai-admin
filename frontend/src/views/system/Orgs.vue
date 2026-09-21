@@ -2,6 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { pageOrgs } from '@/api/system'
 import { formatDateTime } from '@/utils/format'
+import { dictLabel, isEnabled, statusLabel, statusParam, STATUS_OPTIONS } from '@/utils/status'
 import type { OrgItem, OrgQuery } from '@/types/system'
 
 const loading = ref(false)
@@ -13,7 +14,7 @@ const query = reactive<OrgQuery>({
   pageSize: 10,
   orgName: '',
   regionCode: '',
-  status: ''
+  status: null
 })
 
 const orgLevelMap: Record<string, string> = {
@@ -26,24 +27,6 @@ const orgLevelMap: Record<string, string> = {
   BRANCH: '分支机构'
 }
 
-const statusMap: Record<string, string> = {
-  ACTIVE: '启用',
-  ENABLED: '启用',
-  NORMAL: '启用',
-  DISABLED: '停用',
-  INACTIVE: '停用'
-}
-
-function labelOf(map: Record<string, string>, value: string | null | undefined): string {
-  if (!value) return '--'
-  return map[value.toUpperCase()] ?? value
-}
-
-function isEnabled(status: string | null | undefined): boolean {
-  const code = (status ?? '').toUpperCase()
-  return ['ACTIVE', 'ENABLED', 'NORMAL'].includes(code)
-}
-
 async function loadData(): Promise<void> {
   loading.value = true
   try {
@@ -52,7 +35,7 @@ async function loadData(): Promise<void> {
       pageSize: query.pageSize,
       orgName: query.orgName || undefined,
       regionCode: query.regionCode || undefined,
-      status: query.status || undefined
+      status: statusParam(query.status)
     })
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
@@ -72,7 +55,7 @@ function handleSearch(): void {
 function handleReset(): void {
   query.orgName = ''
   query.regionCode = ''
-  query.status = ''
+  query.status = null
   query.pageNum = 1
   void loadData()
 }
@@ -114,8 +97,12 @@ onMounted(loadData)
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
             <el-form-item label="状态">
               <el-select v-model="query.status" placeholder="全部状态" clearable>
-                <el-option label="启用" value="ACTIVE" />
-                <el-option label="停用" value="DISABLED" />
+                <el-option
+                  v-for="opt in STATUS_OPTIONS"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                />
               </el-select>
             </el-form-item>
           </el-col>
@@ -143,7 +130,7 @@ onMounted(loadData)
           <template #default="{ row }">{{ row.regionCode || '--' }}</template>
         </el-table-column>
         <el-table-column prop="orgLevel" label="机构层级" width="110" align="center">
-          <template #default="{ row }">{{ labelOf(orgLevelMap, row.orgLevel) }}</template>
+          <template #default="{ row }">{{ dictLabel(orgLevelMap, row.orgLevel) }}</template>
         </el-table-column>
         <el-table-column prop="parentId" label="上级机构ID" width="120" align="center">
           <template #default="{ row }">{{ row.parentId ?? '--' }}</template>
@@ -154,7 +141,7 @@ onMounted(loadData)
         <el-table-column prop="status" label="状态" width="90" align="center">
           <template #default="{ row }">
             <el-tag :type="isEnabled(row.status) ? 'success' : 'info'" size="small">
-              {{ labelOf(statusMap, row.status) }}
+              {{ statusLabel(row.status) }}
             </el-tag>
           </template>
         </el-table-column>

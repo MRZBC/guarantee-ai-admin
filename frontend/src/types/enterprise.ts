@@ -11,7 +11,8 @@ export interface EnterpriseItem {
   entLevel: string | null
   contactName: string | null
   contactPhone: string | null
-  status: string | null
+  /** 后端 TINYINT：1 正常 / 0 停用 */
+  status: number | null
   orderCount: number
   totalGuaranteeAmount: number
 }
@@ -29,5 +30,6 @@ export interface EnterpriseQuery extends PageQuery {
   regionCode?: string
   industry?: string
   entLevel?: string
-  status?: string
+  /** 后端 TINYINT：1 正常 / 0 停用 */
+  status?: number | null
 }

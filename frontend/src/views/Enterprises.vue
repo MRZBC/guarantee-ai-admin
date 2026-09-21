@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { getEnterprise, pageEnterprises } from '@/api/enterprise'
 import { formatAmount } from '@/utils/format'
+import { dictLabel, isEnabled, statusLabel, statusParam, STATUS_OPTIONS } from '@/utils/status'
 import type { EnterpriseDetail, EnterpriseItem, EnterpriseQuery } from '@/types/enterprise'
 
 const loading = ref(false)
@@ -15,7 +16,7 @@ const query = reactive<EnterpriseQuery>({
   regionCode: '',
   industry: '',
   entLevel: '',
-  status: ''
+  status: null
 })
 
 const industryMap: Record<string, string> = {
@@ -40,31 +41,14 @@ const entLevelMap: Record<string, string> = {
   C: 'C'
 }
 
-const statusMap: Record<string, string> = {
-  ACTIVE: '正常',
-  ENABLED: '正常',
-  NORMAL: '正常',
-  PENDING: '待审核',
-  DISABLED: '已停用',
-  FROZEN: '已冻结',
-  BLACKLIST: '黑名单'
-}
-
-function labelOf(map: Record<string, string>, value: string | null | undefined): string {
-  if (!value) return '--'
-  return map[value.toUpperCase()] ?? value
-}
-
-function statusTagType(status: string | null | undefined): 'success' | 'warning' | 'danger' | 'info' {
-  const code = (status ?? '').toUpperCase()
-  if (['ACTIVE', 'ENABLED', 'NORMAL'].includes(code)) return 'success'
-  if (['PENDING'].includes(code)) return 'warning'
-  if (['DISABLED', 'FROZEN', 'BLACKLIST'].includes(code)) return 'danger'
-  return 'info'
+function statusTagType(status: unknown): 'success' | 'warning' | 'danger' | 'info' {
+  if (status === null || status === undefined || status === '') return 'info'
+  // 企业状态是 TINYINT：1 正常 / 0 停用
+  return isEnabled(status) ? 'success' : 'danger'
 }
 
 function levelTagType(level: string | null | undefined): 'success' | 'warning' | 'info' {
-  const code = (level ?? '').toUpperCase()
+  const code = String(level ?? '').toUpperCase()
   if (code.startsWith('AAA')) return 'success'
   if (code.startsWith('AA')) return 'warning'
   return 'info'
@@ -80,7 +64,7 @@ async function loadData(): Promise<void> {
       regionCode: query.regionCode || undefined,
       industry: query.industry || undefined,
       entLevel: query.entLevel || undefined,
-      status: query.status || undefined
+      status: statusParam(query.status)
     })
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
@@ -102,7 +86,7 @@ function handleReset(): void {
   query.regionCode = ''
   query.industry = ''
   query.entLevel = ''
-  query.status = ''
+  query.status = null
   query.pageNum = 1
   void loadData()
 }
@@ -190,10 +174,10 @@ onMounted(loadData)
             <el-form-item label="状态">
               <el-select v-model="query.status" placeholder="全部状态" clearable>
                 <el-option
-                  v-for="(label, value) in statusMap"
-                  :key="value"
-                  :label="label"
-                  :value="value"
+                  v-for="opt in STATUS_OPTIONS"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
                 />
               </el-select>
             </el-form-item>
@@ -220,12 +204,12 @@ onMounted(loadData)
         <el-table-column prop="creditCode" label="统一社会信用代码" width="190" show-overflow-tooltip />
         <el-table-column prop="regionName" label="区域" width="130" show-overflow-tooltip />
         <el-table-column prop="industry" label="所属行业" width="120" align="center">
-          <template #default="{ row }">{{ labelOf(industryMap, row.industry) }}</template>
+          <template #default="{ row }">{{ dictLabel(industryMap, row.industry) }}</template>
         </el-table-column>
         <el-table-column prop="entLevel" label="企业等级" width="100" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.entLevel" :type="levelTagType(row.entLevel)" size="small">
-              {{ labelOf(entLevelMap, row.entLevel) }}
+              {{ dictLabel(entLevelMap, row.entLevel) }}
             </el-tag>
             <span v-else>--</span>
           </template>
@@ -239,7 +223,7 @@ onMounted(loadData)
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="statusTagType(row.status)" size="small">
-              {{ labelOf(statusMap, row.status) }}
+              {{ statusLabel(row.status) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -280,10 +264,10 @@ onMounted(loadData)
             <span v-if="detail.regionCode" class="text-muted">({{ detail.regionCode }})</span>
           </el-descriptions-item>
           <el-descriptions-item label="所属行业">
-            {{ labelOf(industryMap, detail.industry) }}
+            {{ dictLabel(industryMap, detail.industry) }}
           </el-descriptions-item>
           <el-descriptions-item label="企业等级">
-            {{ labelOf(entLevelMap, detail.entLevel) }}
+            {{ dictLabel(entLevelMap, detail.entLevel) }}
           </el-descriptions-item>
           <el-descriptions-item label="联系人">{{ detail.contactName || '--' }}</el-descriptions-item>
           <el-descriptions-item label="联系电话">
@@ -291,7 +275,7 @@ onMounted(loadData)
           </el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="statusTagType(detail.status)" size="small">
-              {{ labelOf(statusMap, detail.status) }}
+              {{ statusLabel(detail.status) }}
             </el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="订单数">{{ detail.orderCount ?? 0 }} 笔</el-descriptions-item>

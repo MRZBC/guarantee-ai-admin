@@ -7,6 +7,15 @@ import {
   updateInsuranceType
 } from '@/api/system'
 import { formatAmount, formatDateTime, formatPercent } from '@/utils/format'
+import {
+  dictLabel,
+  isEnabled,
+  statusLabel,
+  statusParam,
+  STATUS_DISABLED,
+  STATUS_ENABLED,
+  STATUS_OPTIONS
+} from '@/utils/status'
 import type {
   InsuranceTypeCreateParams,
   InsuranceTypeItem,
@@ -23,7 +32,7 @@ const query = reactive<InsuranceTypeQuery>({
   pageSize: 10,
   typeName: '',
   category: '',
-  status: ''
+  status: null
 })
 
 const categoryMap: Record<string, string> = {
@@ -37,28 +46,9 @@ const categoryMap: Record<string, string> = {
   OTHER: '其他'
 }
 
-const statusMap: Record<string, string> = {
-  ACTIVE: '启用',
-  ENABLED: '启用',
-  NORMAL: '启用',
-  DISABLED: '停用',
-  INACTIVE: '停用'
-}
-
 function categoryLabel(row: InsuranceTypeItem): string {
   if (row.categoryName) return row.categoryName
-  if (!row.category) return '--'
-  return categoryMap[row.category.toUpperCase()] ?? row.category
-}
-
-function statusLabel(status: string | null | undefined): string {
-  if (!status) return '--'
-  return statusMap[status.toUpperCase()] ?? status
-}
-
-function isEnabled(status: string | null | undefined): boolean {
-  const code = (status ?? '').toUpperCase()
-  return ['ACTIVE', 'ENABLED', 'NORMAL'].includes(code)
+  return dictLabel(categoryMap, row.category)
 }
 
 type CategoryValue = 'TENDER' | 'PERFORMANCE' | 'QUALITY' | 'ADVANCE' | 'OTHER'
@@ -71,7 +61,8 @@ const form = reactive<{
   baseRate: number | null
   minAmount: number | null
   maxAmount: number | null
-  status: string
+  /** 后端 TINYINT：1 启用 / 0 停用 */
+  status: number
   description: string
 }>({
   id: null,
@@ -81,7 +72,7 @@ const form = reactive<{
   baseRate: null,
   minAmount: null,
   maxAmount: null,
-  status: 'ACTIVE',
+  status: STATUS_ENABLED,
   description: ''
 })
 
@@ -131,7 +122,7 @@ async function loadData(): Promise<void> {
       pageSize: query.pageSize,
       typeName: query.typeName || undefined,
       category: query.category || undefined,
-      status: query.status || undefined
+      status: statusParam(query.status)
     })
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
@@ -151,7 +142,7 @@ function handleSearch(): void {
 function handleReset(): void {
   query.typeName = ''
   query.category = ''
-  query.status = ''
+  query.status = null
   query.pageNum = 1
   void loadData()
 }
@@ -176,7 +167,7 @@ function resetForm(): void {
   form.baseRate = null
   form.minAmount = null
   form.maxAmount = null
-  form.status = 'ACTIVE'
+  form.status = STATUS_ENABLED
   form.description = ''
   formRef.value?.clearValidate()
 }
@@ -195,7 +186,7 @@ function openEdit(row: InsuranceTypeItem): void {
   form.baseRate = row.baseRate ?? null
   form.minAmount = row.minAmount ?? null
   form.maxAmount = row.maxAmount ?? null
-  form.status = row.status ?? 'ACTIVE'
+  form.status = row.status ?? STATUS_ENABLED
   form.description = row.description ?? ''
   dialogVisible.value = true
 }
@@ -283,8 +274,12 @@ onMounted(loadData)
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
             <el-form-item label="状态">
               <el-select v-model="query.status" placeholder="全部状态" clearable>
-                <el-option label="启用" value="ACTIVE" />
-                <el-option label="停用" value="DISABLED" />
+                <el-option
+                  v-for="opt in STATUS_OPTIONS"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                />
               </el-select>
             </el-form-item>
           </el-col>
@@ -416,8 +411,8 @@ onMounted(loadData)
         </el-form-item>
         <el-form-item v-if="isEdit" label="状态" prop="status">
           <el-radio-group v-model="form.status">
-            <el-radio value="ACTIVE">启用</el-radio>
-            <el-radio value="DISABLED">停用</el-radio>
+            <el-radio :value="STATUS_ENABLED">启用</el-radio>
+            <el-radio :value="STATUS_DISABLED">停用</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="说明" prop="description">

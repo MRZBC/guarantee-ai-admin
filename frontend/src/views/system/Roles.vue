@@ -2,6 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { pageRoles } from '@/api/system'
 import { formatDateTime } from '@/utils/format'
+import { isEnabled, statusLabel } from '@/utils/status'
 import type { RoleItem, RoleQuery } from '@/types/system'
 
 const loading = ref(false)
@@ -14,24 +15,6 @@ const query = reactive<RoleQuery>({
   roleCode: '',
   roleName: ''
 })
-
-const statusMap: Record<string, string> = {
-  ACTIVE: '启用',
-  ENABLED: '启用',
-  NORMAL: '启用',
-  DISABLED: '停用',
-  INACTIVE: '停用'
-}
-
-function labelOf(map: Record<string, string>, value: string | null | undefined): string {
-  if (!value) return '--'
-  return map[value.toUpperCase()] ?? value
-}
-
-function isEnabled(status: string | null | undefined): boolean {
-  const code = (status ?? '').toUpperCase()
-  return ['ACTIVE', 'ENABLED', 'NORMAL'].includes(code)
-}
 
 async function loadData(): Promise<void> {
   loading.value = true
@@ -140,7 +123,7 @@ onMounted(loadData)
         <el-table-column prop="status" label="状态" width="90" align="center">
           <template #default="{ row }">
             <el-tag :type="isEnabled(row.status) ? 'success' : 'info'" size="small">
-              {{ labelOf(statusMap, row.status) }}
+              {{ statusLabel(row.status) }}
             </el-tag>
           </template>
         </el-table-column>

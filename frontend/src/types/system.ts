@@ -10,7 +10,8 @@ export interface InsuranceTypeItem {
   baseRate: number | null
   minAmount: number | null
   maxAmount: number | null
-  status: string | null
+  /** 后端 TINYINT：1 启用 / 0 停用 */
+  status: number | null
   description: string | null
   createdAt: string | null
   updatedAt: string | null
@@ -27,7 +28,7 @@ export interface InsuranceTypeOption {
 export interface InsuranceTypeQuery extends PageQuery {
   typeName?: string
   category?: string
-  status?: string
+  status?: number | null
 }
 
 export interface InsuranceTypeCreateParams {
@@ -46,7 +47,8 @@ export interface InsuranceTypeUpdateParams {
   baseRate: number | null
   minAmount: number | null
   maxAmount: number | null
-  status: string
+  /** 后端 TINYINT：1 启用 / 0 停用 */
+  status: number
   description?: string
 }
 
@@ -59,7 +61,8 @@ export interface OrgItem {
   regionName: string | null
   orgLevel: string | null
   parentId: number | null
-  status: string | null
+  /** 后端 TINYINT：1 启用 / 0 停用 */
+  status: number | null
   sortNo: number | null
   createdAt: string | null
 }
@@ -74,7 +77,7 @@ export interface OrgOption {
 export interface OrgQuery extends PageQuery {
   orgName?: string
   regionCode?: string
-  status?: string
+  status?: number | null
 }
 
 /** 部门配置 */
@@ -85,7 +88,8 @@ export interface DepartmentItem {
   orgId: number | null
   orgName: string | null
   parentId: number | null
-  status: string | null
+  /** 后端 TINYINT：1 启用 / 0 停用 */
+  status: number | null
   sortNo: number | null
   createdAt: string | null
 }
@@ -99,7 +103,7 @@ export interface DepartmentOption {
 export interface DepartmentQuery extends PageQuery {
   orgId?: number | null
   deptName?: string
-  status?: string
+  status?: number | null
 }
 
 /** 用户配置 */
@@ -113,7 +117,8 @@ export interface UserItem {
   deptName: string | null
   phone: string | null
   email: string | null
-  status: string | null
+  /** 后端 TINYINT：1 启用 / 0 停用 */
+  status: number | null
   lastLoginAt: string | null
   createdAt: string | null
   roleIds: number[] | null
@@ -124,7 +129,7 @@ export interface UserQuery extends PageQuery {
   username?: string
   realName?: string
   orgId?: number | null
-  status?: string
+  status?: number | null
 }
 
 /** 角色配置 */
@@ -133,7 +138,8 @@ export interface RoleItem {
   roleCode: string
   roleName: string
   description: string | null
-  status: string | null
+  /** 后端 TINYINT：1 启用 / 0 停用 */
+  status: number | null
   createdAt: string | null
   permissionIds: number[] | null
   permissionNames: string[] | null
