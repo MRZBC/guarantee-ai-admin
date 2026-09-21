@@ -78,6 +78,18 @@ guarantee:
       secret: ${JWT_SECRET:guarantee-ai-admin-local-dev-secret-key-please-change-in-production}
       expire-minutes: 720
       issuer: guarantee-ai-admin
+    # 允许的前端来源（CORS）。
+    # 开发期 Vite dev server 监听 0.0.0.0，用 http://192.168.x.x:5273 访问时浏览器会携带
+    # 该 Origin，并经 Vite 代理原样转发到后端（changeOrigin 只改 Host，不改 Origin）。
+    # 若来源不在白名单，Spring CorsFilter 会直接返回 403 Invalid CORS request，
+    # 前端会把它显示成「没有权限访问该资源」，容易误判为权限问题。
+    # 生产环境请收敛为真实域名。
+    cors:
+      allowed-origin-patterns:
+        - http://localhost:*
+        - http://127.0.0.1:*
+        - http://192.168.*:*
+        - http://10.*:*
   data-init:
     # 固定随机种子，保证初始化数据分布稳定可复现
     enabled: true

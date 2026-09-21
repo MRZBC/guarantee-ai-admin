@@ -32,7 +32,7 @@ import java.util.List;
  */
 @Configuration(proxyBeanMethods = false)
 @EnableWebSecurity
-@EnableConfigurationProperties(JwtProperties.class)
+@EnableConfigurationProperties({JwtProperties.class, CorsProperties.class})
 public class SecurityConfig {
 
     @Bean
@@ -44,12 +44,13 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtTokenProvider tokenProvider,
                                                    TokenRevocationService revocationService,
+                                                   CorsConfigurationSource corsConfigurationSource,
                                                    ObjectMapper objectMapper) throws Exception {
         RestAuthErrorHandlers errorHandlers = new RestAuthErrorHandlers(objectMapper);
 
         http
                 .csrf(AbstractHttpConfigurer::disable)
-                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .formLogin(AbstractHttpConfigurer::disable)
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .logout(AbstractHttpConfigurer::disable)
@@ -73,11 +74,17 @@ public class SecurityConfig {
         return http.build();
     }
 
-    /** 允许 Vite 开发服务器直连后端。 */
+    /**
+     * 允许前端开发服务器直连后端。
+     *
+     * <p>白名单见 {@link CorsProperties}：除 localhost 外还必须覆盖局域网私有网段，
+     * 否则用 {@code http://192.168.x.x:5273} 访问时，浏览器带上的 Origin 经 Vite 代理
+     * 转发到后端会被 CorsFilter 拒绝为 403 {@code Invalid CORS request}。</p>
+     */
     @Bean
-    public CorsConfigurationSource corsConfigurationSource() {
+    public CorsConfigurationSource corsConfigurationSource(CorsProperties corsProperties) {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOriginPatterns(List.of("http://localhost:*", "http://127.0.0.1:*"));
+        configuration.setAllowedOriginPatterns(corsProperties.getAllowedOriginPatterns());
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
         configuration.setExposedHeaders(List.of("X-Trace-Id"));
