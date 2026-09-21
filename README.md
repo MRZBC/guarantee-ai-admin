@@ -103,6 +103,41 @@ redis-server --port 6379
 > 本仓库开发环境使用便携版 MySQL 8.0.29，因 3306 已被本机 MySQL 5.7 占用，故监听 **3307**。
 > 端口/账号全部可通过环境变量覆盖（`DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD`），默认值见 `application.yml`。
 
+**本机便携版的启动方式**
+
+便携版 MySQL 与 Redis 都是**普通进程，不会随系统自启**（也没有注册成 Windows 服务，
+注册服务需要管理员权限）。机器重启、或终端关闭后它们就没了，需要手动拉起：
+
+```powershell
+# 一键启动 MySQL(3307) + Redis(6379)
+pwsh -File scripts/start-local-env.ps1
+
+# 连后端一起启动
+pwsh -File scripts/start-local-env.ps1 -WithBackend
+
+# 停止
+pwsh -File scripts/start-local-env.ps1 -Stop
+```
+
+**连接信息（DataGrip / IDEA 数据库工具 / 客户端）**
+
+| 项 | 值 |
+|---|---|
+| Host | `127.0.0.1`（或 `localhost`） |
+| Port | `3307` |
+| Database | `guarantee_ai_admin` |
+| User / Password | `guarantee` / `guarantee@2026` |
+| root 密码 | 空 |
+
+> ✅ MySQL 同时绑定 `127.0.0.1` 与 `::1`（`bind-address=127.0.0.1,::1`）。
+> 因为 Windows 上 `localhost` 会**优先解析到 IPv6 的 `::1`**，若只绑 IPv4，
+> JDBC 用 `localhost` 就会直接连不上。两个回环都绑上即可，同时**不会暴露到局域网**。
+>
+> 想确认某个地址通不通：
+> ```powershell
+> Test-NetConnection -ComputerName ::1 -Port 3307 -InformationLevel Quiet
+> ```
+
 ### 3.3 启动后端
 
 ```bash
@@ -114,6 +149,12 @@ java -jar guarantee-web/target/guarantee-ai-admin.jar
 ```
 
 或直接：`mvn -pl guarantee-web -am spring-boot:run`
+
+> ⚠️ **用 IDEA 运行 / 调试时注意**：IDEA 是从 `target/classes` 直接运行源码的，
+> 所以 `application.yml` 的改动**不需要重新打包**就生效；
+> 但反过来，**只要 IDEA 的运行实例还开着，就不要执行 `mvn clean`** ——
+> `clean` 会删掉它正在使用的 `target/classes`，运行中的进程虽然不会立刻崩，
+> 但后续懒加载的类会抛 `NoClassDefFoundError`。需要重建时先停掉 IDEA 里的运行实例。
 
 启动时会自动：
 1. 执行 `guarantee-web/src/main/resources/db/schema.sql`（全部 `CREATE TABLE IF NOT EXISTS`，可重复执行）；
