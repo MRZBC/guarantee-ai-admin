@@ -464,6 +464,25 @@ AI Plan -> Permission Check -> Preview -> User Confirmation -> Execute -> Audit
 - 每个请求生成/透传 **TraceId**：写入 MDC、响应头 `X-Trace-Id`、统一响应体的 `traceId` 字段、`ai_audit_log.trace_id`。
 - 日志格式包含 `traceId`：`%d ... [%thread] [%X{traceId:-}] %logger - %msg`。
 - 全局异常处理把校验失败、业务异常、唯一约束冲突、未预期异常统一收敛为 `Result`，不泄漏堆栈。
+- 访问不存在的路径返回 404（`ResultCode.NOT_FOUND`），不会被兜底分支误报成 500。
+
+---
+
+## 十二·五、协作规范
+
+分支模型与提交信息规范见 **[docs/GIT_CONVENTION.md](docs/GIT_CONVENTION.md)**：
+
+- **集成分支**：`master`（主分支，随时可发布）、`develop`（开发分支）、`release_v<版本>`（发布分支）
+- **功能分支**：`feature/<模块>-<简述>`
+- **热修复分支**：`hotfix/<简述>`
+- **提交信息**：Conventional Commits，主题用中文，如 `feat(order): 新增投标订单导出接口`
+
+克隆后执行一次即可启用内置的提交校验钩子与提交模板：
+
+```bash
+pwsh -File scripts/setup-git.ps1     # Windows
+sh scripts/setup-git.sh              # Linux / macOS / Git Bash
+```
 
 ---
 

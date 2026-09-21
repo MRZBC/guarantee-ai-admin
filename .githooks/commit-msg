@@ -1,0 +1,58 @@
+#!/bin/sh
+#
+# commit-msg 钩子：校验提交信息是否符合 Conventional Commits 规范。
+# 详见 docs/GIT_CONVENTION.md
+#
+# 启用方式（克隆后执行一次）：
+#   git config core.hooksPath .githooks
+#
+# 临时跳过（不推荐）：git commit --no-verify
+#
+
+msg_file="$1"
+
+if [ -z "$msg_file" ] || [ ! -f "$msg_file" ]; then
+    exit 0
+fi
+
+# 取第一条非注释、非空行作为主题
+subject=$(grep -v '^#' "$msg_file" | sed '/^[[:space:]]*$/d' | head -n 1)
+
+# 空提交信息交给 Git 自己报错
+if [ -z "$subject" ]; then
+    exit 0
+fi
+
+# 合并 / 回滚 / 自动修补类提交直接放行
+case "$subject" in
+    Merge*|Revert*|fixup!*|squash!*)
+        exit 0
+        ;;
+esac
+
+allowed="feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert"
+pattern="^($allowed)(\([a-zA-Z0-9._/,-]+\))?!?: .+"
+
+if ! printf '%s\n' "$subject" | grep -Eq "$pattern"; then
+    echo ""
+    echo "  ✖ 提交信息不符合规范：$subject"
+    echo ""
+    echo "    正确格式：<type>(<scope>): <描述>"
+    echo "    允许的 type：$(printf '%s' "$allowed" | tr '|' ' ')"
+    echo "    示例：feat(order): 新增投标订单导出接口"
+    echo "    详见：docs/GIT_CONVENTION.md"
+    echo ""
+    echo "    （确需跳过校验可用 git commit --no-verify，请谨慎）"
+    echo ""
+    exit 1
+fi
+
+# 主题行过长的软提示：中文在部分环境下 wc -m 按字节计，故只警告不拦截
+bytes=$(printf '%s' "$subject" | wc -c | tr -d ' ')
+if [ "$bytes" -gt 200 ]; then
+    echo ""
+    echo "  ⚠ 提交主题偏长（${bytes} 字节），建议精简到一行内（约 72 字符）。"
+    echo ""
+fi
+
+exit 0
