@@ -1,0 +1,87 @@
+# =====================================================================
+#  智能电子保函运营管理平台 - 本地一键启动
+#
+#  只启动基础设施（MySQL 8 + Redis）：
+#      docker compose up -d mysql redis
+#
+#  连同后端一起启动（会先构建 jar，首次较慢）：
+#      docker compose --profile app up -d --build
+#
+#  说明：
+#    - mysql 首次初始化时会自动执行 db/schema.sql 建表；
+#    - 演示数据由后端启动时的 DataInitializer 生成（固定随机种子 20260920）；
+#    - 若本机已用便携版 MySQL/Redis，只需 `docker compose up -d mysql redis`
+#      或干脆不启动容器，直接用本机实例。
+# =====================================================================
+
+services:
+
+  mysql:
+    image: mysql:8.0
+    container_name: guarantee-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root@2026
+      MYSQL_DATABASE: guarantee_ai_admin
+      MYSQL_USER: guarantee
+      MYSQL_PASSWORD: guarantee@2026
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-authentication-plugin=mysql_native_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - guarantee-mysql-data:/var/lib/mysql
+      - ./guarantee-web/src/main/resources/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot@2026"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
+  redis:
+    image: redis:7-alpine
+    container_name: guarantee-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: guarantee-app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: guarantee_ai_admin
+      DB_USER: guarantee
+      DB_PASSWORD: guarantee@2026
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      # 真实调用模型必须提供，否则 AI 对话会返回明确的配置错误提示
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-not-configured}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      JAVA_OPTS: "-Xms512m -Xmx2g"
+    ports:
+      - "8080:8080"
+
+volumes:
+  guarantee-mysql-data:

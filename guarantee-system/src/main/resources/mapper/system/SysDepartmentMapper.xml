@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.system.mapper.SysDepartmentMapper">
+
+    <!-- 部门 -> 机构 关联，orgName 直接随列表返回。 -->
+    <sql id="voCols">
+        d.id         AS id,
+        d.dept_code  AS deptCode,
+        d.dept_name  AS deptName,
+        d.org_id     AS orgId,
+        o.org_name   AS orgName,
+        d.parent_id  AS parentId,
+        d.status     AS status,
+        d.sort_no    AS sortNo,
+        d.created_at AS createdAt
+    </sql>
+
+    <sql id="fromJoin">
+        FROM sys_department d
+        LEFT JOIN sys_org o ON o.id = d.org_id
+    </sql>
+
+    <!-- selectPage 与 countByQuery 共用，保证总数与列表口径一致。 -->
+    <sql id="queryWhere">
+        <where>
+            <if test="q.orgId != null">
+                AND d.org_id = #{q.orgId}
+            </if>
+            <if test="q.deptName != null and q.deptName != ''">
+                AND d.dept_name LIKE CONCAT('%', #{q.deptName}, '%')
+            </if>
+            <if test="q.status != null">
+                AND d.status = #{q.status}
+            </if>
+        </where>
+    </sql>
+
+    <select id="selectPage" resultType="com.guarantee.system.vo.DepartmentVO">
+        SELECT <include refid="voCols"/>
+        <include refid="fromJoin"/>
+        <include refid="queryWhere"/>
+        ORDER BY d.sort_no ASC, d.id ASC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countByQuery" resultType="long">
+        SELECT COUNT(*)
+        <include refid="fromJoin"/>
+        <include refid="queryWhere"/>
+    </select>
+
+    <select id="selectEnabledOptions" resultType="com.guarantee.system.vo.DepartmentOptionVO">
+        SELECT d.id        AS id,
+               d.dept_name AS deptName,
+               d.org_id    AS orgId
+        FROM sys_department d
+        WHERE d.status = 1
+        <if test="orgId != null">
+            AND d.org_id = #{orgId}
+        </if>
+        ORDER BY d.sort_no ASC, d.id ASC
+    </select>
+
+</mapper>

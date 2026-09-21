@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.order.mapper.TenderOrderMapper">
+
+    <!--
+      订单列全部显式取别名：MySQL 返回的列标签大小写不保证，
+      显式 AS camelCase 后配合 map-underscore-to-camel-case 才能稳定映射到 VO。
+      连接表字段同样使用 camelCase 别名（如 p.project_name AS projectName）。
+    -->
+    <sql id="cols">
+        o.id                  AS id,
+        o.order_no            AS orderNo,
+        o.project_id          AS projectId,
+        p.project_name        AS projectName,
+        o.enterprise_id       AS enterpriseId,
+        e.ent_name            AS enterpriseName,
+        o.insurance_type_id   AS insuranceTypeId,
+        it.type_name          AS insuranceTypeName,
+        it.category           AS insuranceTypeCategory,
+        o.org_id              AS orgId,
+        so.org_name           AS orgName,
+        o.region_code         AS regionCode,
+        o.region_name         AS regionName,
+        o.guarantee_amount    AS guaranteeAmount,
+        o.premium_amount      AS premiumAmount,
+        o.premium_rate        AS premiumRate,
+        o.status              AS status,
+        o.apply_date          AS applyDate,
+        o.effective_date      AS effectiveDate,
+        o.expire_date         AS expireDate
+    </sql>
+
+    <!-- 关联链：项目 -> 企业，险种，承保机构。 -->
+    <sql id="fromJoin">
+        FROM tender_order o
+        LEFT JOIN project p ON p.id = o.project_id
+        LEFT JOIN enterprise e ON e.id = o.enterprise_id
+        LEFT JOIN insurance_type it ON it.id = o.insurance_type_id
+        LEFT JOIN sys_org so ON so.id = o.org_id
+    </sql>
+
+    <!-- selectPage 与 countByQuery 共用，保证总数与列表口径永远一致。 -->
+    <sql id="queryWhere">
+        <where>
+            <if test="q.orderNo != null and q.orderNo != ''">
+                AND o.order_no LIKE CONCAT('%', #{q.orderNo}, '%')
+            </if>
+            <if test="q.regionCode != null and q.regionCode != ''">
+                AND o.region_code = #{q.regionCode}
+            </if>
+            <if test="q.orgId != null">
+                AND o.org_id = #{q.orgId}
+            </if>
+            <if test="q.insuranceTypeId != null">
+                AND o.insurance_type_id = #{q.insuranceTypeId}
+            </if>
+            <if test="q.status != null and q.status != ''">
+                AND o.status = #{q.status}
+            </if>
+            <if test="q.startDate != null">
+                AND o.apply_date &gt;= #{q.startDate}
+            </if>
+            <if test="q.endDate != null">
+                AND o.apply_date &lt;= #{q.endDate}
+            </if>
+            <if test="q.projectId != null">
+                AND o.project_id = #{q.projectId}
+            </if>
+            <if test="q.enterpriseId != null">
+                AND o.enterprise_id = #{q.enterpriseId}
+            </if>
+        </where>
+    </sql>
+
+    <select id="selectPage" resultType="com.guarantee.order.vo.TenderOrderVO">
+        SELECT
+        <include refid="cols"/>
+        <include refid="fromJoin"/>
+        <include refid="queryWhere"/>
+        ORDER BY o.apply_date DESC, o.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countByQuery" resultType="long">
+        SELECT COUNT(*)
+        <include refid="fromJoin"/>
+        <include refid="queryWhere"/>
+    </select>
+
+    <select id="selectDetailById" resultType="com.guarantee.order.vo.TenderOrderVO">
+        SELECT
+        <include refid="cols"/>
+        <include refid="fromJoin"/>
+        WHERE o.id = #{id}
+    </select>
+
+</mapper>

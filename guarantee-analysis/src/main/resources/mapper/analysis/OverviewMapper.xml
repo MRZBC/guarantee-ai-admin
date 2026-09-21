@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.analysis.mapper.OverviewMapper">
+
+    <!--
+      数据概览订单口径：
+      1) 投标/履约用 UNION ALL 合并后再聚合，所有派生指标只扫描一次 merged 派生表；
+      2) 每个分支用 WHERE 1 = 1 起头，保证两个分支列数一致且动态条件可插拔；
+      3) 兜底分支 SELECT 1 WHERE 1 = 0 让派生表在极端情况下仍然可被聚合。
+    -->
+    <select id="selectOrderOverview" resultType="com.guarantee.analysis.vo.OverviewVO">
+        SELECT
+            COALESCE(SUM(order_kind = 'TENDER'), 0)                          AS tenderOrderCount,
+            COALESCE(SUM(order_kind = 'PERFORMANCE'), 0)                     AS performanceOrderCount,
+            COUNT(*)                                                         AS totalOrderCount,
+            COALESCE(SUM(CASE WHEN order_kind = 'TENDER' THEN guarantee_amount END), 0)
+                                                                             AS tenderGuaranteeAmount,
+            COALESCE(SUM(CASE WHEN order_kind = 'PERFORMANCE' THEN guarantee_amount END), 0)
+                                                                             AS performanceGuaranteeAmount,
+            COALESCE(SUM(guarantee_amount), 0)                               AS totalGuaranteeAmount,
+            COALESCE(SUM(premium_amount), 0)                                 AS totalPremiumAmount,
+            MIN(apply_date)                                                  AS dataStartDate,
+            MAX(apply_date)                                                  AS dataEndDate
+        FROM (
+            SELECT 'TENDER' AS order_kind, guarantee_amount, premium_amount, apply_date
+            FROM tender_order
+            UNION ALL
+            SELECT 'PERFORMANCE' AS order_kind, guarantee_amount, premium_amount, apply_date
+            FROM performance_order
+        ) merged
+    </select>
+
+    <!-- 基数统计：企业与项目跨两张订单表去重；生效订单量为两表合计 -->
+    <select id="selectOverviewCount" resultType="com.guarantee.analysis.vo.OverviewCountVO">
+        SELECT
+            (SELECT COUNT(*) FROM (
+                SELECT enterprise_id FROM tender_order
+                UNION
+                SELECT enterprise_id FROM performance_order
+            ) e)                                                              AS enterpriseCount,
+            (SELECT COUNT(*) FROM (
+                SELECT project_id FROM tender_order
+                UNION
+                SELECT project_id FROM performance_order
+            ) p)                                                              AS projectCount,
+            (SELECT COUNT(*) FROM sys_org)                                    AS orgCount,
+            (SELECT COUNT(*) FROM tender_order WHERE status = 'EFFECTIVE')
+              + (SELECT COUNT(*) FROM performance_order WHERE status = 'EFFECTIVE')
+                                                                              AS effectiveOrderCount
+    </select>
+
+</mapper>

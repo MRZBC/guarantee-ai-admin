@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.order.mapper.OrderStatisticsMapper">
+
+    <!--
+      过滤条件同时作用于 UNION 的两个分支，保证 orderType=ALL 的口径与单类型一致。
+      金额使用 DECIMAL 聚合，COALESCE 保证空结果返回 0 而不是 NULL。
+    -->
+    <sql id="branchFilter">
+        <if test="c.startDate != null">
+            AND apply_date &gt;= #{c.startDate}
+        </if>
+        <if test="c.endDate != null">
+            AND apply_date &lt;= #{c.endDate}
+        </if>
+        <if test="c.regionCode != null and c.regionCode != ''">
+            AND region_code = #{c.regionCode}
+        </if>
+        <if test="c.orgId != null">
+            AND org_id = #{c.orgId}
+        </if>
+    </sql>
+
+    <select id="selectSummary" resultType="com.guarantee.order.vo.OrderSummaryVO">
+        SELECT
+            COUNT(*)                            AS order_count,
+            COALESCE(SUM(guarantee_amount), 0)  AS guarantee_amount,
+            COALESCE(SUM(premium_amount), 0)    AS premium_amount,
+            COUNT(DISTINCT enterprise_id)       AS enterprise_count,
+            COUNT(DISTINCT project_id)          AS project_count
+        FROM (
+            <if test="c.includeTender()">
+                SELECT enterprise_id, project_id, guarantee_amount, premium_amount
+                FROM tender_order
+                WHERE 1 = 1
+                <include refid="branchFilter"/>
+            </if>
+            <if test="c.includeTender() and c.includePerformance()">
+                UNION ALL
+            </if>
+            <if test="c.includePerformance()">
+                SELECT enterprise_id, project_id, guarantee_amount, premium_amount
+                FROM performance_order
+                WHERE 1 = 1
+                <include refid="branchFilter"/>
+            </if>
+        ) merged
+    </select>
+
+</mapper>

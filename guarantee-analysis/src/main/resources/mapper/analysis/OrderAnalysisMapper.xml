@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.analysis.mapper.OrderAnalysisMapper">
+
+    <!--
+      共享的日期 / 地区 / 机构过滤片段：同时作用于 UNION ALL 的两个分支，
+      保证 orderType=ALL 的统计口径与单类型完全一致。
+    -->
+    <sql id="criteriaFilter">
+        <if test="c.startDate != null">
+            AND apply_date &gt;= #{c.startDate}
+        </if>
+        <if test="c.endDate != null">
+            AND apply_date &lt;= #{c.endDate}
+        </if>
+        <if test="c.regionCode != null and c.regionCode != ''">
+            AND region_code = #{c.regionCode}
+        </if>
+        <if test="c.orgId != null">
+            AND org_id = #{c.orgId}
+        </if>
+    </sql>
+
+    <!--
+      统一的订单数据源：
+      orderType=ALL 时 UNION ALL 合并投标与履约订单，合并后再由外层聚合，口径与单类型一致；
+      只查单一类型时退化为干净的单表查询。未命中任何分支时退化为恒 FALSE 的占位查询，
+      保证派生表结构仍然合法（orderType 归一化后实际不会出现该情形）。
+    -->
+    <sql id="orderSource">
+        <choose>
+            <when test="c.includeTender() and c.includePerformance()">
+                SELECT id, 'TENDER' AS order_kind, project_id, enterprise_id,
+                       insurance_type_id, org_id, region_code, region_name,
+                       guarantee_amount, premium_amount, apply_date
+                FROM tender_order
+                WHERE 1 = 1
+                <include refid="criteriaFilter"/>
+                UNION ALL
+                SELECT id, 'PERFORMANCE' AS order_kind, project_id, enterprise_id,
+                       insurance_type_id, org_id, region_code, region_name,
+                       guarantee_amount, premium_amount, apply_date
+                FROM performance_order
+                WHERE 1 = 1
+                <include refid="criteriaFilter"/>
+            </when>
+            <when test="c.includeTender()">
+                SELECT id, 'TENDER' AS order_kind, project_id, enterprise_id,
+                       insurance_type_id, org_id, region_code, region_name,
+                       guarantee_amount, premium_amount, apply_date
+                FROM tender_order
+                WHERE 1 = 1
+                <include refid="criteriaFilter"/>
+            </when>
+            <when test="c.includePerformance()">
+                SELECT id, 'PERFORMANCE' AS order_kind, project_id, enterprise_id,
+                       insurance_type_id, org_id, region_code, region_name,
+                       guarantee_amount, premium_amount, apply_date
+                FROM performance_order
+                WHERE 1 = 1
+                <include refid="criteriaFilter"/>
+            </when>
+            <otherwise>
+                <!-- 占位分支：恒 FALSE，保证派生表列结构仍然合法 -->
+                SELECT id, 'TENDER' AS order_kind, project_id, enterprise_id,
+                       insurance_type_id, org_id, region_code, region_name,
+                       guarantee_amount, premium_amount, apply_date
+                FROM tender_order
+                WHERE 1 = 0
+            </otherwise>
+        </choose>
+    </sql>
+
+    <!-- 趋势：月粒度 yyyy-MM，日粒度 yyyy-MM-dd，按时间升序 -->
+    <select id="selectTrend" resultType="com.guarantee.analysis.vo.OrderTrendVO">
+        SELECT
+            <choose>
+                <when test="c.granularity == 'day'">
+                    DATE_FORMAT(apply_date, '%Y-%m-%d') AS period
+                </when>
+                <otherwise>
+                    DATE_FORMAT(apply_date, '%Y-%m') AS period
+                </otherwise>
+            </choose>
+            , COUNT(*)                           AS orderCount
+            , COALESCE(SUM(guarantee_amount), 0) AS guaranteeAmount
+            , COALESCE(SUM(premium_amount), 0)   AS premiumAmount
+        FROM (
+            <include refid="orderSource"/>
+        ) merged
+        GROUP BY period
+        ORDER BY period ASC
+    </select>
+
+    <!-- 地区分布：按订单量倒序取前 limit 条；企业数按地区去重 -->
+    <select id="selectRegionDistribution" resultType="com.guarantee.analysis.vo.OrderRegionVO">
+        SELECT
+            o.region_code                                                        AS regionCode,
+            MAX(o.region_name)                                                   AS regionName,
+            COUNT(*)                                                             AS orderCount,
+            COALESCE(SUM(o.guarantee_amount), 0)                                 AS guaranteeAmount,
+            COALESCE(SUM(o.premium_amount), 0)                                   AS premiumAmount,
+            COUNT(DISTINCT o.enterprise_id)                                      AS enterpriseCount
+        FROM (
+            <include refid="orderSource"/>
+        ) o
+        LEFT JOIN enterprise et ON et.id = o.enterprise_id AND et.region_code = o.region_code
+        GROUP BY o.region_code
+        ORDER BY `orderCount` DESC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 险种分布：join insurance_type 补齐编码/名称/分类 -->
+    <select id="selectInsuranceDistribution" resultType="com.guarantee.analysis.vo.OrderInsuranceVO">
+        SELECT
+            o.insurance_type_id                      AS insuranceTypeId,
+            MAX(t.type_code)                         AS typeCode,
+            MAX(t.type_name)                         AS typeName,
+            MAX(t.category)                          AS category,
+            COUNT(*)                                 AS orderCount,
+            COALESCE(SUM(o.guarantee_amount), 0)     AS guaranteeAmount,
+            COALESCE(SUM(o.premium_amount), 0)       AS premiumAmount
+        FROM (
+            <include refid="orderSource"/>
+        ) o
+        LEFT JOIN insurance_type t ON t.id = o.insurance_type_id AND t.status = 1
+        GROUP BY o.insurance_type_id
+        ORDER BY `orderCount` DESC, o.insurance_type_id ASC
+    </select>
+
+    <!-- 机构分布：join sys_org 补齐机构编码/名称，按订单量倒序取前 limit 条 -->
+    <select id="selectInstitutionDistribution" resultType="com.guarantee.analysis.vo.OrderInstitutionVO">
+        SELECT
+            o.org_id                                                             AS orgId,
+            MAX(g.org_code)                                                      AS orgCode,
+            MAX(g.org_name)                                                      AS orgName,
+            o.region_code                                                        AS regionCode,
+            MAX(o.region_name)                                                   AS regionName,
+            COUNT(*)                                                             AS orderCount,
+            COALESCE(SUM(o.guarantee_amount), 0)                                 AS guaranteeAmount,
+            COALESCE(SUM(o.premium_amount), 0)                                   AS premiumAmount,
+            COUNT(DISTINCT o.enterprise_id)                                      AS enterpriseCount
+        FROM (
+            <include refid="orderSource"/>
+        ) o
+        LEFT JOIN sys_org g ON g.id = o.org_id AND g.status = 1
+        GROUP BY o.org_id, o.region_code
+        ORDER BY `orderCount` DESC, o.org_id ASC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

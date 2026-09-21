@@ -1,0 +1,483 @@
+# guarantee-ai-admin · 智能电子保函运营管理平台
+
+第一阶段：**传统电子保函管理后台 + AI 基础能力**。
+模块化单体（Modular Monolith），一个 Spring 上下文聚合 7 个 Maven 模块，不引入微服务。
+
+本阶段**未实现**（刻意留到后续）：MCP、RAG、Vector DB、Agent Planner、Memory、AI 配置写入、多模型路由、LangChain4j、MQ。
+
+---
+
+## 一、技术栈
+
+| 层面 | 选型 | 版本 |
+|---|---|---|
+| 语言 | Java | 21（Temurin 21.0.12.1） |
+| 框架 | Spring Boot | 4.1.1 |
+| AI | Spring AI | 2.0.1（`spring-ai-starter-model-openai`） |
+| 持久层 | MyBatis Spring Boot Starter | 4.0.0 |
+| 数据库 | MySQL | 8.0.29 |
+| 缓存 | Redis | 7 / 5.0.14 |
+| 前端 | Vue 3 + TypeScript + Vite + Element Plus + ECharts + Pinia + Axios | 见 `frontend/package.json` |
+| 模型 | OpenAI-compatible API，默认 DeepSeek（`deepseek-chat`） | — |
+
+> **Spring Boot 4 / Spring AI 2.0 的关键差异**（本项目已按 2.0.1 官方文档实现，未沿用 1.x 写法）：
+> 1. OpenAI 聊天模型的属性名是 **`spring.ai.openai.chat.model`**，1.x 的 `spring.ai.openai.chat.options.model` 已失效。
+> 2. Spring Boot 4.1 默认使用 **Jackson 3**（`tools.jackson.databind.ObjectMapper`），不是 Jackson 2 的 `com.fasterxml.jackson.databind`。
+> 3. 工具注册用 **`.tools(...)`**；`ChatClient.toolCallbacks(...)` 在 2.0.1 中已标记 `@Deprecated(forRemoval = true)`。
+> 4. 向模型传 options 时**必须基于模型自身的 options 派生**：`OpenAiChatModel` 会把 `prompt.getOptions()` 强转为
+>    `OpenAiChatOptions`，若传入通用的 `ToolCallingChatOptions` 会在运行时抛 `ClassCastException`。
+>    正确做法是 `chatModel.getOptions().mutate()` 后再挂载 `toolCallbacks` / `toolContext`。
+> 5. 流式输出只支持响应式栈，因此 `guarantee-ai` 依赖 `spring-boot-starter-webflux`（仅提供 Reactor），
+>    应用仍以 Servlet(MVC) 方式运行（`spring.main.web-application-type=servlet`）。
+>
+> 关于工具调用循环，见 §8.2 的说明：本项目**显式**使用框架的 `ToolCallingManager` 驱动循环，
+> 而不是依赖 `ToolCallingAdvisor` 的隐式自动装配。
+
+---
+
+## 二、模块结构
+
+```
+guarantee-ai-admin/
+├── pom.xml                     # 聚合 POM：统一版本、Lombok、surefire/failsafe
+├── docker-compose.yml          # MySQL 8 + Redis（+ 可选 app profile）
+├── Dockerfile                  # 后端多阶段构建
+├── guarantee-common/           # 统一响应、异常、TraceId、分页、当前用户上下文
+├── guarantee-auth/             # 登录、JWT、Spring Security、Redis 撤销列表
+├── guarantee-system/           # 机构/部门/用户/角色/权限/险种
+├── guarantee-order/            # 投标订单、履约订单、订单统计
+├── guarantee-analysis/         # 数据概览、区域/险种/机构分析、项目、企业
+├── guarantee-ai/               # 会话、SSE 流式聊天、只读 Tool、Tool Call 审计、Prompt、时间语义
+├── guarantee-web/              # 启动模块：主类、application.yml、建表 SQL、演示数据初始化
+└── frontend/                   # Vue 3 管理后台 + 全局 AI Copilot
+```
+
+依赖方向（单向，无环）：
+
+```
+web ──> auth ──> system ──> common
+ │       │         ↑
+ ├──> order ───────┤
+ ├──> analysis ──> order, system
+ └──> ai ───────> order, system, analysis
+```
+
+`common` 不依赖任何业务模块；`CurrentUser` 放在 common，使 `ai` / `analysis` 无需反向依赖 `auth`。
+
+---
+
+## 三、快速开始
+
+### 3.1 环境要求
+
+- JDK 21
+- Maven 3.8+
+- MySQL 8.0
+- Redis 5+
+- Node.js 18+ / npm
+
+### 3.2 启动 MySQL 与 Redis
+
+**方式 A：Docker（推荐）**
+
+```bash
+docker compose up -d mysql redis
+```
+
+MySQL 首次启动会自动执行 `db/schema.sql` 建表（见 `docker-compose.yml` 挂载）。
+
+**方式 B：本机已安装的实例**
+
+```sql
+CREATE DATABASE guarantee_ai_admin
+  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE USER 'guarantee'@'%' IDENTIFIED BY 'guarantee@2026';
+GRANT ALL PRIVILEGES ON guarantee_ai_admin.* TO 'guarantee'@'%';
+FLUSH PRIVILEGES;
+```
+
+```bash
+redis-server --port 6379
+```
+
+> 本仓库开发环境使用便携版 MySQL 8.0.29，因 3306 已被本机 MySQL 5.7 占用，故监听 **3307**。
+> 端口/账号全部可通过环境变量覆盖（`DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD`），默认值见 `application.yml`。
+
+### 3.3 启动后端
+
+```bash
+# 全量构建（跳过测试）
+mvn clean install -DskipTests
+
+# 启动
+java -jar guarantee-web/target/guarantee-ai-admin.jar
+```
+
+或直接：`mvn -pl guarantee-web -am spring-boot:run`
+
+启动时会自动：
+1. 执行 `guarantee-web/src/main/resources/db/schema.sql`（全部 `CREATE TABLE IF NOT EXISTS`，可重复执行）；
+2. 若 `sys_user` 为空，则由 `DataInitializer` 生成演示数据（**首次约 30–60 秒**）。
+
+后端地址：<http://localhost:8080>，健康检查：`GET /actuator/health`。
+
+### 3.4 配置模型 Key
+
+```bash
+# Linux / macOS
+export DEEPSEEK_API_KEY=sk-xxxxxxxx
+
+# Windows PowerShell
+$env:DEEPSEEK_API_KEY="sk-xxxxxxxx"
+```
+
+未配置 Key 时应用**仍可正常启动**（占位 Key），浏览后台一切正常；只有调用 AI 对话时会返回明确提示：
+
+> AI 模型调用失败：API Key 未配置或无效（请设置环境变量 DEEPSEEK_API_KEY 后重启服务）
+
+可覆盖的模型配置：`DEEPSEEK_BASE_URL`（默认 `https://api.deepseek.com`）、`DEEPSEEK_MODEL`（默认 `deepseek-chat`）。
+
+### 3.5 启动前端
+
+有**两种**方式，可任选其一（也可以并存）。
+
+**方式 A：直接访问后端端口（推荐，最省事）**
+
+后端会自动挂载前端构建产物，构建一次后直接访问**后端端口**即可：
+
+```bash
+cd frontend
+npm install
+npm run build          # 产出 frontend/dist
+```
+
+然后浏览器打开 <http://localhost:8080/>（改过端口就用你自己的端口，例如 8081）。
+前端使用 hash 路由，所以 `http://localhost:8080/#/dashboard` 这类深链接也由后端同一个地址承载。
+
+> ⚠️ `frontend/dist` 不存在时首页返回 404（启动日志会给出提示），后端本身仍正常工作。
+
+**方式 B：Vite 开发服务器（带 HMR，改前端代码即时生效）**
+
+```bash
+cd frontend
+npm install
+npm run dev            # http://localhost:5173
+```
+
+访问 <http://localhost:5173>。
+
+> ⚠️ **改过后端端口时必须同步改代理**：`frontend/vite.config.ts` 里的
+> `server.proxy['/api'].target` 默认是 `http://localhost:8080`。
+> 若后端跑在 8081，要改成 `http://localhost:8081`，否则前端会去连 8080（连不上或被别的进程占用）。
+
+**两种方式的区别**
+
+| | 方式 A（后端承载） | 方式 B（Vite dev） |
+|---|---|---|
+| 访问地址 | 后端端口，如 `http://localhost:8080` | `http://localhost:5173` |
+| 前端改动 | 需重新 `npm run build` | 热更新，即时生效 |
+| 跨域 | 同源，无跨域 | 由 Vite 代理转发 |
+| 适合 | 演示、验收、单端口部署 | 前端开发 |
+
+### 3.6 打不开页面时的排查顺序
+
+1. **拼写**：是 `localhost`，不是 `loclhost` / `localhos`（域名解析失败会直接"无法访问"）。
+2. **端口**：确认后端实际监听的端口 —— `Get-NetTCPConnection -State Listen | Where-Object LocalPort -in 8080,8081`。
+   注意 `application.yml` 的 `server.port` 只影响后端；方式 B 的前端在 5173。
+3. **后端是否活着**：`http://localhost:<port>/actuator/health` 应返回 `{"status":"UP"}`。
+   该地址不需要登录，最适合判断"服务起来了没"。
+4. **是不是只打开了 API**：业务接口都在 `/api/**`，直接访问
+   `http://localhost:8080/api/orders/tender` 只会得到 401/JSON —— 这是正常的，它不是一个网页。
+   想看到界面，请按 §3.5 的方式 A（后端承载 dist）或方式 B（Vite 5173）。
+5. **前端能开但没数据**：方式 B 下检查 `frontend/vite.config.ts` 的代理 target 是否与后端端口一致。
+
+---
+
+## 四、测试账号
+
+| 账号 | 密码 | 角色 | 说明 |
+|---|---|---|---|
+| `admin` | `Admin@123` | ADMIN | 全部权限 |
+| `operator` | `Operator@123` | OPERATOR | 订单与基础配置运营 |
+| `analyst` | `Analyst@123` | ANALYST | 业务分析 + AI 助手 |
+
+另有 297 个演示用户 `user0004` ~ `user0300`，统一密码 `User@123`。
+
+---
+
+## 五、数据库
+
+16 张表，DDL 见 **`guarantee-web/src/main/resources/db/schema.sql`**。
+
+| 域 | 表 |
+|---|---|
+| 系统配置 | `sys_org`、`sys_department`、`sys_user`、`sys_role`、`sys_permission`、`sys_user_role`、`sys_role_permission` |
+| 险种 | `insurance_type` |
+| 业务分析 | `enterprise`、`project` |
+| 订单 | `tender_order`、`performance_order` |
+| AI | `ai_conversation`、`ai_message`、`ai_tool_call`、`ai_audit_log` |
+
+订单表在 `apply_date`、`region_code`、`org_id`、`insurance_type_id` 以及 `(org_id, apply_date)` 上建了索引，保证 15 万行下的分析查询性能。
+
+---
+
+## 六、初始化数据逻辑
+
+`guarantee-web/.../init/DataInitializer.java`，**固定随机种子 `20260920`**，生成顺序与随机数消耗顺序完全固定，因此数据可复现。
+
+数据量：20 机构 / 80 部门 / 300 用户 / 6 险种 / 3000 企业 / 5000 项目 / **100000 投标订单 + 50000 履约订单**。
+
+### 人为注入的业务规律（AI 分析可验证）
+
+数据**不是**纯随机，而是显式按业务规则加权采样（`DaySampler` 为每个机构预计算按天累积权重，订单日期用二分查找采样）：
+
+1. **区域分布**（合计 100）：浙江 **35%** > 江苏 **24%** > 广东 14% > 山东 9% > 四川 6% > 湖北 5% > 北京 4% > 上海 3%。
+2. **机构季节性**（2026 Q3）：20 个机构各带系数 `ORG_Q3_FACTOR` —— 前 7 个显著上调（1.45 → 1.08）、
+   中间 7 个接近持平、后 6 个明显下调（0.82 → 0.60）。
+   实测 Q2→Q3 环比：14 个机构增长（高的 +38%），5 个机构逆季节性下降（低的 −21%）。
+   → 可用「机构分析 + 2026Q3 过滤」直接验证「哪些机构在增长、哪些在下降」。
+3. **月份季节性** `MONTH_FACTOR`：2 月（春节）最低 0.60，Q3 为全年高点（7/8/9 月 1.25/1.30/1.35）。
+4. **险种结构因区域而异**：浙江偏向标准/电子投标保函；江苏履约保函占比更高；其他区域居中。
+5. **数据时间范围**：2025-01-01 ~ 2026-09-30，使「今年/去年/本季度/上季度」都有数据。
+6. 金额取平方分布（大额项目更少，更贴近真实）；投标保函金额为项目额的 4%–14%，履约保函 8%–25%；保费 = 保额 × 费率。
+
+幂等：`sys_user` 非空时直接跳过，不会重复灌数据。
+
+---
+
+## 七、后端 API
+
+统一响应结构：`{ "code": 0, "message": "成功", "data": ..., "traceId": "..." }`，`code === 0` 为成功。
+分页结构：`{ pageNum, pageSize, total, list }`。
+
+### 认证
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/auth/login` | 登录，返回 JWT 与用户信息 |
+| GET | `/api/auth/me` | 当前用户 |
+| POST | `/api/auth/logout` | 登出（Redis 撤销当前令牌） |
+
+### 订单
+
+| 方法 | 路径 |
+|---|---|
+| GET | `/api/orders/tender` |
+| GET | `/api/orders/tender/{id}` |
+| GET | `/api/orders/performance` |
+| GET | `/api/orders/performance/{id}` |
+
+过滤参数：`orderNo`、`regionCode`、`orgId`、`insuranceTypeId`、`status`、`startDate`、`endDate`、`projectId`、`enterpriseId`。
+
+### 业务分析
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/analysis/overview` | 数据概览总览指标 |
+| GET | `/api/analysis/order-trend` | 订单趋势（`granularity=month\|day`） |
+| GET | `/api/analysis/order-region` | 区域分布 |
+| GET | `/api/analysis/order-insurance` | 险种分布 |
+| GET | `/api/analysis/order-institution` | 机构排行 |
+| GET | `/api/projects` / `/api/projects/{id}` | 项目管理 |
+| GET | `/api/enterprises` / `/api/enterprises/{id}` | 企业管理 |
+
+> `orderType=ALL` 时所有分析查询都对 `tender_order` 与 `performance_order` 做 `UNION ALL` 后再聚合，保证去重企业数/项目数口径正确。
+> `orderType` 支持 `TENDER` / `PERFORMANCE` / `ALL`，也接受中文「投标」「履约」。
+
+### 系统配置
+
+| 方法 | 路径 |
+|---|---|
+| GET / POST / PUT | `/api/system/insurance-types`、`/api/system/insurance-types/{id}` |
+| GET | `/api/system/insurance-types/options` |
+| GET | `/api/system/orgs`、`/api/system/orgs/options`、`/api/system/orgs/{id}` |
+| GET | `/api/system/departments`、`/api/system/departments/options` |
+| GET | `/api/system/users`、`/api/system/users/{id}` |
+| GET | `/api/system/roles`、`/api/system/roles/{id}` |
+| GET | `/api/system/permissions` |
+
+用户接口任何读路径都**不返回** `password` 字段。
+
+### AI
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/ai/chat` | **SSE 流式**对话 |
+| GET | `/api/ai/conversations` | 会话列表 |
+| GET | `/api/ai/conversations/{id}` | 会话详情（含全部消息） |
+| GET | `/api/ai/tool-calls/{conversationId}` | 该会话的 Tool Call 记录 |
+
+---
+
+## 八、AI 第一阶段
+
+### 8.1 Tool：`queryOrderSummary`
+
+定义在 `guarantee-ai/.../tool/OrderSummaryTool.java`，使用 Spring AI 2.0 的 `@Tool` / `@ToolParam`。
+
+入参：`orderType`、`startDate`、`endDate`、`regionCode`、`orgId`（日期必须是 `yyyy-MM-dd` 明确格式）。
+出参：`orderCount`、`guaranteeAmount`、`premiumAmount`、`enterpriseCount`、`projectCount`，并回显查询条件与 `dataSource` 便于核对口径。
+
+**分层铁律**：
+
+```
+Tool -> Service -> Mapper -> DB
+```
+
+`OrderSummaryTool` 只注入 `OrderStatisticsService`，**不注入任何 Mapper，不生成 SQL**。
+
+另附一个只读工具 `getCurrentDate`，用于让模型在换算相对时间前拿到可信基准日期。
+
+### 8.2 工具调用循环与 Tool Call 记录
+
+`AiChatService` **显式驱动**工具调用循环：流式调用模型 → 若返回 `tool_calls`，
+交给框架的 `ToolCallingManager.executeToolCalls(prompt, response)` 执行 → 把
+`ToolExecutionResult.conversationHistory()` 回灌继续下一轮，直到模型给出最终答案（最多 4 轮，防止死循环）。
+
+**为什么不用 `ToolCallingAdvisor` 的自动装配**：已实测在本项目的装配方式下，
+`DefaultChatClient` 并不会把 `ToolCallingAdvisor` 放进顾问链（自定义顾问会被调用，而它不会；
+无论用 `.tools()` 还是显式 `defaultAdvisors(...)`、是否开启
+`AdvisorParams.toolCallingAdvisorAutoRegister(true)` 都一样）。因此改为直接使用框架的
+`ToolCallingManager` 显式驱动，行为可控、可测试，也便于精确计时。
+
+这样做还有一个好处：**工具调用轮次的 assistant 消息只包含 tool_calls、没有正文**，
+所以可以把每轮流式正文直接转发给前端而不会泄漏中间态，最终答案依然是**真流式**。
+
+`RecordingToolCallback` 装饰 `ToolCallback`，逐次采集并写入 `ai_tool_call`：
+
+| 字段 | 含义 |
+|---|---|
+| `tool_name` | 工具名 |
+| `tool_type` | `READ` / `WRITE` |
+| `arguments` | 入参 JSON |
+| `result` | 执行结果 |
+| `status` | `SUCCESS` / `FAILED` |
+| `duration_ms` | 单次执行耗时 |
+| `error_message` | 失败原因 |
+
+用「装饰器」而非全局 `ToolCallingManager`，是为了拿到**每次调用**的精确耗时（Manager 只能拿到一批的总耗时）。
+执行过程中同时通过 `ToolContext` 里的 `ToolCallEventSink` 把 `tool_call` 事件实时推给前端。
+
+### 8.3 Prompt
+
+`guarantee-ai/src/main/resources/prompts/business-assistant.st`，包含规范要求的 7 项：业务身份、数据必须来自 Tool、不允许编造数据、时间语义必须转换为明确日期、无法证明的只能作为推测、Tool 失败必须明确说明、输出关键数据与数据来源。
+
+每轮运行时还会追加「当前系统日期」与「系统预解析的时间范围」。
+
+### 8.4 时间语义：`TimeSemanticParser`
+
+`guarantee-ai/.../time/TimeSemanticParser.java`，统一转换为：
+
+```java
+record TimeRange(LocalDate startDate, LocalDate endDate, String description)
+```
+
+支持：今天、昨天、前天、本月、上月、本季度、上季度、今年、去年、Q1–Q4、`2026年第三季度`、`2026年7月`、`2026年`、`最近N天/周/月`。
+
+流程是**双保险**：服务端先解析出明确日期并注入 System Prompt，模型再据此调用 Tool，避免模型自己算错季度边界。
+
+### 8.5 SSE 事件协议
+
+`POST /api/ai/chat` 请求体 `{ "conversationId": number|null, "message": string }`，响应 `text/event-stream`：
+
+| event | data |
+|---|---|
+| `meta` | `{"conversationId":1,"conversationNo":"CV...","title":"..."}` |
+| `delta` | `{"content":"文本片段"}` |
+| `tool_call` | `{"id":1,"toolName":"queryOrderSummary","toolType":"READ","arguments":"{...}","result":"{...}","status":"SUCCESS","durationMs":12}` |
+| `done` | `{"conversationId":1,"messageId":9}` |
+| `error` | `{"message":"..."}` |
+
+> 因为是 POST，浏览器 `EventSource` 不适用；前端用 `fetch` + `ReadableStream` 手工解析 SSE 帧（`frontend/src/utils/sse.ts`）。
+
+---
+
+## 九、第一条 AI Demo 操作说明
+
+> 目标：**登录后台 → 打开投标订单 → 打开 AI Copilot → 输入问题 → AI 调用真实业务 Tool → 返回真实统计结果 → 前端流式展示。**
+
+**前置**：配置好 `DEEPSEEK_API_KEY`，后端与前端均已启动。
+
+1. 浏览器打开 <http://localhost:5173>。
+2. 用 `admin` / `Admin@123` 登录。
+3. 左侧菜单进入 **投标订单**，确认列表有真实数据（可分页浏览）。
+4. 点击右下角悬浮按钮，打开 **业务分析助手（AI Copilot）**。
+5. 点击「新建会话」，输入：
+
+   ```
+   2026年第三季度投标订单有多少？
+   ```
+
+6. 发送。观察右侧对话面板依次出现：
+   - **工具调用卡片**：`queryOrderSummary` · `READ` · `SUCCESS` · 耗时 xx ms，可展开查看入参与返回的 JSON；
+   - **流式正文**：逐字出现，包含订单量、保函金额、保费、企业数、项目数；
+   - 末尾标注「数据来源：queryOrderSummary(orderType=TENDER, startDate=2026-07-01, endDate=2026-09-30)」。
+7. 交叉验证：进入 **数据概览**，把时间范围设为 `2026-07-01 ~ 2026-09-30`，订单类型选「投标订单」，页面统计数字应与 AI 回答**完全一致**。
+
+**可验证的其它问题**：
+
+- 「2026年第三季度哪些机构订单量在下滑？」→ 应识别出后 6 个机构（区域看机构分析）。
+- 「浙江省和江苏省哪个地区的投标订单更多？」→ 浙江应显著高于江苏。
+- 「最近三个月履约订单的保费合计是多少？」
+
+**没有 API Key 时**：第 6 步会明确返回「AI 模型调用失败：API Key 未配置或无效…」，不会编造任何数字——这本身就是 Prompt 约束生效的体现。
+
+---
+
+## 十、测试
+
+```bash
+# 单元测试（不需要数据库）
+mvn test
+
+# 集成测试（需要 MySQL + Redis 已启动，且已初始化演示数据）
+mvn verify
+```
+
+- `TimeSemanticParserTest`（`guarantee-ai`）：13 个用例覆盖全部时间语义，基准日固定为 2026-09-21，断言与运行时间无关。
+- `AiToolChainIT`（`guarantee-web`）：用确定性 **Stub ChatModel** 替换真实模型，**无需 API Key** 即可验证完整链路——
+  模型发起 Tool Call → `ToolCallingAdvisor` 执行 → `OrderSummaryTool` → `OrderStatisticsService` → `OrderStatisticsMapper` → MySQL，
+  并断言 **Tool 返回的 5 个指标与直接调用 Service 的结果逐一相等**，同时校验 `ai_message` / `ai_tool_call` 落库（含 `duration_ms`、`message_id` 关联）与 SSE 事件序列（`meta`/`tool_call`/`delta`/`done`）。
+
+---
+
+## 十一、安全原则
+
+第一阶段只有查询能力，但架构上已提前区分读写：
+
+- `ToolKind.READ` / `ToolKind.WRITE` 枚举，`AiToolRegistry` 当前**只注册 READ 工具**。
+- 禁止 AI 直接访问数据库；禁止 AI 生成任意 SQL；禁止 AI 直接操作 Mapper。
+- 所有 Tool 只能调用业务 Service。
+
+后续所有 WRITE Tool 必须走：
+
+```
+AI Plan -> Permission Check -> Preview -> User Confirmation -> Execute -> Audit
+```
+
+`ai_audit_log` 已预留并已在写入（`CHAT` / `TOOL_CALL` / `ERROR`，带 `trace_id`）。
+
+---
+
+## 十二、可观测性
+
+- 每个请求生成/透传 **TraceId**：写入 MDC、响应头 `X-Trace-Id`、统一响应体的 `traceId` 字段、`ai_audit_log.trace_id`。
+- 日志格式包含 `traceId`：`%d ... [%thread] [%X{traceId:-}] %logger - %msg`。
+- 全局异常处理把校验失败、业务异常、唯一约束冲突、未预期异常统一收敛为 `Result`，不泄漏堆栈。
+
+---
+
+## 十三、已知偏差与说明
+
+| 项 | 说明 |
+|---|---|
+| MySQL 端口 | 开发机 3306 被已有 MySQL 5.7 占用，本仓库本地实例跑在 **3307**；可用 `DB_PORT` 覆盖，`docker-compose.yml` 用标准 3306。 |
+| Docker | 开发机未安装 Docker，本项目的 `docker-compose.yml` / `Dockerfile` 未在容器中实测；本地验证使用便携版 MySQL 8.0.29 + Redis。 |
+| Jackson | Spring Boot 4.1 默认 Jackson 3（`tools.jackson.*`），代码已按此实现。 |
+| AI 流式 | `guarantee-ai` 引入 `spring-boot-starter-webflux` 仅为提供 Reactor；应用类型显式固定为 Servlet（`spring.main.web-application-type=servlet`）。 |
+| 工具循环 | 未使用 `ToolCallingAdvisor` 的隐式自动装配（实测在本项目装配下不会进入顾问链），改为显式调用 `ToolCallingManager` 驱动，详见 §8.2。 |
+| SSE 与 Spring Security | 必须放行 `DispatcherType.ASYNC`，否则异步派发时会因上下文已清理而抛 `Access Denied` 并截断事件流（已在 `SecurityConfig` 中处理）。 |
+| 前端 | 使用 hash 路由（`createWebHashHistory`），避免静态部署需要 history fallback。 |
+| 权限 | 登录态与权限编码已下发，前端按菜单展示；第一阶段未在接口上开启 `@PreAuthorize` 细粒度拦截。 |
+| 真实模型验证 | 本机未提供 `DEEPSEEK_API_KEY`，因此**真实模型**的问答未做端到端实测；工具链路由 `AiToolChainIT`（Stub 模型）确定性验证，未配 Key 时的行为也已实测为「明确报错、不编造数据」。 |
+| 前端运行验证 | 前端 `npm run build` 通过（vue-tsc 类型检查 + 打包）；SSE 客户端已按后端实测事件协议对齐。但本次开发会话的沙箱禁止 Node 监听端口（`listen EACCES`），**未能启动 Vite dev server 做浏览器实测**；在你自己的终端里 `npm run dev` 可正常启动。 |

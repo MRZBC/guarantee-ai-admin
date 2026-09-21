@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.analysis.mapper.EnterpriseMapper">
+
+    <!--
+      订单指标派生表：投标/履约 UNION ALL 合并后按企业聚合。
+      LEFT JOIN 保证零订单企业也出现在列表里（指标由 COALESCE 兜底为 0）。
+    -->
+    <sql id="orderAgg">
+        SELECT merged.enterprise_id                   AS enterprise_id,
+               COUNT(*)                               AS order_count,
+               COALESCE(SUM(merged.guarantee_amount), 0) AS guarantee_amount,
+               COALESCE(SUM(merged.premium_amount), 0)   AS premium_amount,
+               COALESCE(SUM(merged.order_kind = 'TENDER'), 0)      AS tender_order_count,
+               COALESCE(SUM(merged.order_kind = 'PERFORMANCE'), 0) AS performance_order_count,
+               COUNT(DISTINCT merged.project_id)      AS project_count
+        FROM (
+            SELECT 'TENDER' AS order_kind, enterprise_id, project_id, guarantee_amount, premium_amount
+            FROM tender_order
+            UNION ALL
+            SELECT 'PERFORMANCE' AS order_kind, enterprise_id, project_id, guarantee_amount, premium_amount
+            FROM performance_order
+        ) merged
+        GROUP BY merged.enterprise_id
+    </sql>
+
+    <!-- 动态条件片段：selectPage 与 countByQuery 共用，保证总数与列表口径一致 -->
+    <sql id="queryWhere">
+        <where>
+            <if test="q.entName != null and q.entName != ''">
+                AND en.ent_name LIKE CONCAT('%', #{q.entName}, '%')
+            </if>
+            <if test="q.regionCode != null and q.regionCode != ''">
+                AND en.region_code = #{q.regionCode}
+            </if>
+            <if test="q.industry != null and q.industry != ''">
+                AND en.industry = #{q.industry}
+            </if>
+            <if test="q.entLevel != null and q.entLevel != ''">
+                AND en.ent_level = #{q.entLevel}
+            </if>
+            <if test="q.status != null">
+                AND en.status = #{q.status}
+            </if>
+        </where>
+    </sql>
+
+    <!-- 列表列：基础信息 + 订单指标，LEFT JOIN 派生表保证零订单企业 orderCount=0 -->
+    <sql id="listCols">
+        en.id                                      AS id,
+        en.ent_code                                AS entCode,
+        en.ent_name                                AS entName,
+        en.credit_code                             AS creditCode,
+        en.region_code                             AS regionCode,
+        en.region_name                             AS regionName,
+        en.industry                                AS industry,
+        en.ent_level                               AS entLevel,
+        en.contact_name                            AS contactName,
+        en.contact_phone                           AS contactPhone,
+        en.status                                  AS status,
+        COALESCE(agg.order_count, 0)               AS orderCount,
+        COALESCE(agg.guarantee_amount, 0)          AS totalGuaranteeAmount
+    </sql>
+
+    <select id="selectPage" resultType="com.guarantee.analysis.vo.EnterpriseVO">
+        SELECT <include refid="listCols"/>
+        FROM enterprise en
+        LEFT JOIN (
+            <include refid="orderAgg"/>
+        ) agg ON agg.enterprise_id = en.id
+        <include refid="queryWhere"/>
+        ORDER BY `orderCount` DESC, en.id ASC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countByQuery" resultType="long">
+        SELECT COUNT(*)
+        FROM enterprise en
+        <include refid="queryWhere"/>
+    </select>
+
+    <select id="selectDetailById" resultType="com.guarantee.analysis.vo.EnterpriseDetailVO">
+        SELECT <include refid="listCols"/>
+        FROM enterprise en
+        LEFT JOIN (
+            <include refid="orderAgg"/>
+        ) agg ON agg.enterprise_id = en.id
+        WHERE en.id = #{id}
+    </select>
+
+    <!-- 企业详情细分指标：项目去重数、投标/履约订单量、保费合计 -->
+    <select id="selectOrderMetricsByEnterpriseId" resultType="com.guarantee.analysis.vo.EnterpriseDetailVO">
+        SELECT
+            COALESCE(COUNT(DISTINCT merged.project_id), 0)      AS projectCount,
+            COALESCE(SUM(merged.order_kind = 'TENDER'), 0)      AS tenderOrderCount,
+            COALESCE(SUM(merged.order_kind = 'PERFORMANCE'), 0) AS performanceOrderCount,
+            COALESCE(SUM(merged.premium_amount), 0)             AS totalPremiumAmount
+        FROM (
+            SELECT 'TENDER' AS order_kind, project_id, premium_amount
+            FROM tender_order
+            WHERE enterprise_id = #{id}
+            UNION ALL
+            SELECT 'PERFORMANCE' AS order_kind, project_id, premium_amount
+            FROM performance_order
+            WHERE enterprise_id = #{id}
+        ) merged
+    </select>
+
+</mapper>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.system.mapper.SysPermissionMapper">
+
+    <!-- 前端按 parentId 自行组树，这里只保证 sort_no 有序返回。 -->
+    <select id="selectAllOrdered" resultType="com.guarantee.system.vo.PermissionVO">
+        SELECT id        AS id,
+               perm_code AS permCode,
+               perm_name AS permName,
+               perm_type AS permType,
+               parent_id AS parentId,
+               path      AS path,
+               component AS component,
+               icon      AS icon,
+               sort_no   AS sortNo
+        FROM sys_permission
+        ORDER BY sort_no ASC, id ASC
+    </select>
+
+</mapper>

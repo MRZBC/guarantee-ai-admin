@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.analysis.mapper.ProjectMapper">
+
+    <!-- 列表列：连接字段用 AS camelCase 别名，配合全局 map-underscore-to-camel-case -->
+    <sql id="listCols">
+        p.id                AS id,
+        p.project_code      AS projectCode,
+        p.project_name      AS projectName,
+        p.enterprise_id     AS enterpriseId,
+        e.ent_name          AS enterpriseName,
+        p.region_code       AS regionCode,
+        p.region_name       AS regionName,
+        p.project_amount    AS projectAmount,
+        p.project_type      AS projectType,
+        p.status            AS status,
+        p.tender_date       AS tenderDate
+    </sql>
+
+    <!-- 动态条件片段：selectPage 与 countByQuery 共用，保证总数与列表口径一致 -->
+    <sql id="queryWhere">
+        <where>
+            <if test="q.projectName != null and q.projectName != ''">
+                AND p.project_name LIKE CONCAT('%', #{q.projectName}, '%')
+            </if>
+            <if test="q.regionCode != null and q.regionCode != ''">
+                AND p.region_code = #{q.regionCode}
+            </if>
+            <if test="q.projectType != null and q.projectType != ''">
+                AND p.project_type = #{q.projectType}
+            </if>
+            <if test="q.status != null and q.status != ''">
+                AND p.status = #{q.status}
+            </if>
+            <if test="q.enterpriseId != null">
+                AND p.enterprise_id = #{q.enterpriseId}
+            </if>
+        </where>
+    </sql>
+
+    <select id="selectPage" resultType="com.guarantee.analysis.vo.ProjectVO">
+        SELECT <include refid="listCols"/>
+        FROM project p
+        LEFT JOIN enterprise e ON e.id = p.enterprise_id
+        <include refid="queryWhere"/>
+        ORDER BY p.tender_date DESC, p.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countByQuery" resultType="long">
+        SELECT COUNT(*)
+        FROM project p
+        <include refid="queryWhere"/>
+    </select>
+
+    <select id="selectDetailById" resultType="com.guarantee.analysis.vo.ProjectDetailVO">
+        SELECT <include refid="listCols"/>
+        FROM project p
+        LEFT JOIN enterprise e ON e.id = p.enterprise_id
+        WHERE p.id = #{id}
+    </select>
+
+    <!--
+      项目订单指标：投标/履约 UNION ALL 合并后按 project_id 一次聚合。
+      两个分支都按 project_id 过滤，聚合列由 SELECT 列表决定类型。
+    -->
+    <select id="selectOrderMetricsByProjectId" resultType="com.guarantee.analysis.vo.ProjectDetailVO">
+        SELECT
+            COALESCE(SUM(order_kind = 'TENDER'), 0)      AS tenderOrderCount,
+            COALESCE(SUM(order_kind = 'PERFORMANCE'), 0) AS performanceOrderCount,
+            COALESCE(SUM(guarantee_amount), 0)           AS totalGuaranteeAmount,
+            COALESCE(SUM(premium_amount), 0)             AS totalPremiumAmount
+        FROM (
+            SELECT 'TENDER' AS order_kind, project_id, guarantee_amount, premium_amount
+            FROM tender_order
+            WHERE project_id = #{id}
+            UNION ALL
+            SELECT 'PERFORMANCE' AS order_kind, project_id, guarantee_amount, premium_amount
+            FROM performance_order
+            WHERE project_id = #{id}
+        ) merged
+    </select>
+
+</mapper>

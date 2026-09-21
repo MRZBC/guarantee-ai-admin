@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.system.mapper.SysOrgMapper">
+
+    <!--
+      VO 列显式取 camelCase 别名：MySQL 返回的列标签大小写不保证，
+      显式别名可稳定映射到 VO 字段。实体查询依赖全局 map-underscore-to-camel-case。
+    -->
+    <sql id="voCols">
+        id          AS id,
+        org_code    AS orgCode,
+        org_name    AS orgName,
+        region_code AS regionCode,
+        region_name AS regionName,
+        org_level   AS orgLevel,
+        parent_id   AS parentId,
+        status      AS status,
+        sort_no     AS sortNo,
+        created_at  AS createdAt
+    </sql>
+
+    <sql id="entityCols">
+        id, org_code, org_name, region_code, region_name, org_level, parent_id,
+        status, sort_no, created_at, updated_at
+    </sql>
+
+    <sql id="queryWhere">
+        <where>
+            <if test="q.orgName != null and q.orgName != ''">
+                AND org_name LIKE CONCAT('%', #{q.orgName}, '%')
+            </if>
+            <if test="q.regionCode != null and q.regionCode != ''">
+                AND region_code = #{q.regionCode}
+            </if>
+            <if test="q.status != null">
+                AND status = #{q.status}
+            </if>
+        </where>
+    </sql>
+
+    <select id="selectPage" resultType="com.guarantee.system.vo.OrgVO">
+        SELECT <include refid="voCols"/>
+        FROM sys_org
+        <include refid="queryWhere"/>
+        ORDER BY sort_no ASC, id ASC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countByQuery" resultType="long">
+        SELECT COUNT(*) FROM sys_org
+        <include refid="queryWhere"/>
+    </select>
+
+    <select id="selectVoById" resultType="com.guarantee.system.vo.OrgVO">
+        SELECT <include refid="voCols"/> FROM sys_org WHERE id = #{id}
+    </select>
+
+    <select id="selectEnabledOptions" resultType="com.guarantee.system.vo.OrgOptionVO">
+        SELECT id         AS id,
+               org_name   AS orgName,
+               region_code AS regionCode,
+               region_name AS regionName
+        FROM sys_org
+        WHERE status = 1
+        ORDER BY sort_no ASC, id ASC
+    </select>
+
+    <select id="selectAllEnabled" resultType="com.guarantee.system.entity.SysOrg">
+        SELECT <include refid="entityCols"/>
+        FROM sys_org
+        WHERE status = 1
+        ORDER BY sort_no ASC, id ASC
+    </select>
+
+    <select id="selectEntityById" resultType="com.guarantee.system.entity.SysOrg">
+        SELECT <include refid="entityCols"/> FROM sys_org WHERE id = #{id}
+    </select>
+
+</mapper>

@@ -1,0 +1,120 @@
+:root {
+  --app-header-height: 56px;
+  --app-sidebar-width: 220px;
+  --app-sidebar-collapsed-width: 64px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    Arial, sans-serif;
+  font-size: 14px;
+  color: #303133;
+  background-color: #f0f2f5;
+}
+
+/* 页面通用容器 */
+.page-container {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.filter-card :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+
+/*
+  查询 / 重置 按钮组：
+  默认所在栅格列只有 6/24 宽（约 150~200px），而 Element Plus 的
+  .el-form-item__content 是 flex-wrap: wrap，两个按钮放不下就会竖向堆叠。
+  这里禁止换行并靠右对齐，让按钮始终并排停在筛选区右端。
+*/
+.filter-actions {
+  margin-left: auto;
+}
+
+.filter-actions .el-form-item__content {
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+
+.table-card {
+  border-radius: 6px;
+}
+
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 14px;
+}
+
+.stat-card {
+  border-radius: 8px;
+}
+
+.stat-card__label {
+  font-size: 13px;
+  color: #909399;
+  margin-bottom: 8px;
+  white-space: nowrap;
+}
+
+.stat-card__value {
+  font-size: 22px;
+  font-weight: 600;
+  color: #303133;
+  line-height: 1.3;
+  word-break: break-all;
+}
+
+.stat-card__unit {
+  font-size: 13px;
+  font-weight: 400;
+  color: #909399;
+  margin-left: 4px;
+}
+
+.text-muted {
+  color: #909399;
+}
+
+.mono {
+  font-family: Consolas, Monaco, 'Courier New', monospace;
+}
+
+pre.json-block {
+  margin: 0;
+  padding: 8px 10px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  font-family: Consolas, Monaco, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 260px;
+  overflow: auto;
+  color: #303133;
+}

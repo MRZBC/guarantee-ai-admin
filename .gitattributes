@@ -1,0 +1,22 @@
+# =====================================================================
+#  .gitattributes
+#
+#  仓库内统一按 LF 存储；工作区换行仍由各人 core.autocrlf 决定。
+#  但对少数「CRLF 会破坏其行为」的文件强制 LF。
+# =====================================================================
+
+* text=auto
+
+# Dockerfile 用了反斜杠行连接，CRLF 会让续行失效（尤其在 Linux 上构建时）
+Dockerfile  text eol=lf
+*.sh        text eol=lf
+
+# 二进制文件不参与换行转换
+*.jar    binary
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.woff   binary
+*.woff2  binary

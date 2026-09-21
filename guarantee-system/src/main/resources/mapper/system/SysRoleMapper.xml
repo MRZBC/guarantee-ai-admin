@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.system.mapper.SysRoleMapper">
+
+    <sql id="voCols">
+        id          AS id,
+        role_code   AS roleCode,
+        role_name   AS roleName,
+        description AS description,
+        status      AS status,
+        created_at  AS createdAt
+    </sql>
+
+    <sql id="queryWhere">
+        <where>
+            <if test="q.roleCode != null and q.roleCode != ''">
+                AND role_code LIKE CONCAT('%', #{q.roleCode}, '%')
+            </if>
+            <if test="q.roleName != null and q.roleName != ''">
+                AND role_name LIKE CONCAT('%', #{q.roleName}, '%')
+            </if>
+        </where>
+    </sql>
+
+    <select id="selectPage" resultType="com.guarantee.system.vo.RoleVO">
+        SELECT <include refid="voCols"/>
+        FROM sys_role
+        <include refid="queryWhere"/>
+        ORDER BY id ASC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countByQuery" resultType="long">
+        SELECT COUNT(*) FROM sys_role
+        <include refid="queryWhere"/>
+    </select>
+
+    <select id="selectVoById" resultType="com.guarantee.system.vo.RoleVO">
+        SELECT <include refid="voCols"/> FROM sys_role WHERE id = #{id}
+    </select>
+
+    <select id="selectPermissionRefsByRoleIds" resultType="com.guarantee.system.dto.RolePermissionRef">
+        SELECT rp.role_id       AS roleId,
+               p.id             AS permissionId,
+               p.perm_name      AS permissionName
+        FROM sys_role_permission rp
+        INNER JOIN sys_permission p ON p.id = rp.permission_id
+        WHERE rp.role_id IN
+        <foreach collection="roleIds" item="roleId" open="(" separator="," close=")">
+            #{roleId}
+        </foreach>
+        ORDER BY rp.role_id ASC, p.sort_no ASC, p.id ASC
+    </select>
+
+</mapper>

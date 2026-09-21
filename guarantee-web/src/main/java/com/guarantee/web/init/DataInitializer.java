@@ -1,0 +1,750 @@
+package com.guarantee.web.init;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.sql.Date;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+
+/**
+ * 演示数据初始化器。
+ *
+ * <p><b>不是纯随机数据。</b>固定随机种子 {@code 20260920}，并显式注入业务规律，
+ * 使后续 AI 分析可以产生可验证的结论：</p>
+ * <ul>
+ *   <li>区域分布：浙江省占比最高，江苏次之，其后广东/山东/四川/湖北/北京/上海；</li>
+ *   <li>机构季节性：部分机构 2026 Q3 环比增长，部分机构下降；</li>
+ *   <li>月份季节性：2 月（春节）最低，Q3 为全年高点；</li>
+ *   <li>险种分布：不同区域在投标/履约保函上的结构不同。</li>
+ * </ul>
+ *
+ * <p>生成顺序与随机数消耗顺序完全固定，因此每次初始化得到完全相同的数据。</p>
+ */
+@Component
+@ConditionalOnProperty(name = "guarantee.data-init.enabled", havingValue = "true", matchIfMissing = true)
+public class DataInitializer implements ApplicationRunner {
+
+    private static final Logger log = LoggerFactory.getLogger(DataInitializer.class);
+
+    private static final LocalDate DATA_START = LocalDate.of(2025, 1, 1);
+    private static final LocalDate DATA_END = LocalDate.of(2026, 9, 30);
+
+    private static final int ORG_COUNT = 20;
+    private static final int DEPT_COUNT = 80;
+    private static final int USER_COUNT = 300;
+    private static final int ENTERPRISE_COUNT = 3000;
+    private static final int PROJECT_COUNT = 5000;
+    private static final int TENDER_ORDER_COUNT = 100_000;
+    private static final int PERFORMANCE_ORDER_COUNT = 50_000;
+
+    private static final int BATCH_SIZE = 2000;
+
+    /** 演示账号密码。 */
+    private static final String ADMIN_PASSWORD = "Admin@123";
+    private static final String OPERATOR_PASSWORD = "Operator@123";
+    private static final String ANALYST_PASSWORD = "Analyst@123";
+    private static final String DEFAULT_PASSWORD = "User@123";
+
+    /** 区域权重（合计 100）。浙江最高、江苏次之。 */
+    private static final String[][] REGIONS = {
+            {"330000", "浙江省", "35", "6"},
+            {"320000", "江苏省", "24", "4"},
+            {"440000", "广东省", "14", "3"},
+            {"370000", "山东省", "9", "2"},
+            {"510000", "四川省", "6", "2"},
+            {"420000", "湖北省", "5", "1"},
+            {"110000", "北京市", "4", "1"},
+            {"310000", "上海市", "3", "1"},
+    };
+
+    /** 月度季节性系数：2 月最低，Q3 最高。 */
+    private static final double[] MONTH_FACTOR = {
+            0.85, 0.60, 1.05, 1.10, 1.15, 1.20, 1.25, 1.30, 1.35, 1.10, 1.05, 0.95
+    };
+
+    /**
+     * 机构 2026 Q3 相对基线的系数。
+     * 前 7 个机构明显增长，中间 7 个基本持平，最后 6 个明显下降，
+     * 用于让「哪些机构 Q3 在增长/下降」成为可验证结论。
+     */
+    private static final double[] ORG_Q3_FACTOR = {
+            1.45, 1.38, 1.30, 1.24, 1.18, 1.12, 1.08,
+            1.02, 1.00, 0.99, 0.98, 0.97, 0.96, 0.95,
+            0.82, 0.78, 0.74, 0.70, 0.66, 0.60
+    };
+
+    private static final String[] INDUSTRIES = {
+            "建筑工程", "市政工程", "交通运输", "水利水电", "电力能源", "通信信息", "园林绿化", "装饰装修"
+    };
+
+    private static final String[] PROJECT_TYPES = {"房建", "市政", "交通", "水利", "其他"};
+
+    private static final String[] ENT_LEVELS = {"AAA", "AA", "A", "BBB"};
+
+    private final JdbcTemplate jdbcTemplate;
+    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+
+    @Value("${guarantee.data-init.seed:20260920}")
+    private long seed;
+
+    public DataInitializer(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    @Override
+    @Transactional
+    public void run(ApplicationArguments args) {
+        Integer existing = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_user", Integer.class);
+        if (existing != null && existing > 0) {
+            log.info("检测到已有业务数据（sys_user={} 行），跳过演示数据初始化", existing);
+            return;
+        }
+        long start = System.currentTimeMillis();
+        Random random = new Random(seed);
+        log.info("开始初始化演示数据，随机种子={}", seed);
+
+        List<OrgRow> orgs = seedOrgs();
+        seedDepartments(orgs);
+        seedRolesAndPermissions();
+        seedUsers(random, orgs);
+        List<InsuranceRow> insuranceTypes = seedInsuranceTypes();
+        List<EnterpriseRow> enterprises = seedEnterprises(random);
+        List<ProjectRow> projects = seedProjects(random, enterprises);
+
+        seedTenderOrders(random, orgs, insuranceTypes, enterprises, projects);
+        seedPerformanceOrders(random, orgs, insuranceTypes, enterprises, projects);
+
+        log.info("演示数据初始化完成，耗时 {} ms", System.currentTimeMillis() - start);
+    }
+
+    // ==================================================================
+    // 机构 / 部门 / 角色 / 用户
+    // ==================================================================
+
+    private record OrgRow(long id, String code, String name, String regionCode, String regionName) {
+    }
+
+    private List<OrgRow> seedOrgs() {
+        List<OrgRow> orgs = new ArrayList<>(ORG_COUNT);
+        List<Object[]> batch = new ArrayList<>(ORG_COUNT);
+        long id = 1;
+        for (String[] region : REGIONS) {
+            int count = Integer.parseInt(region[3]);
+            for (int i = 1; i <= count; i++) {
+                String code = "ORG" + region[0].substring(0, 2) + String.format("%02d", i);
+                String name = region[1] + "第" + i + "保函运营机构";
+                batch.add(new Object[]{id, code, name, region[0], region[1], i == 1 ? 1 : 2, 0, 1, (int) id});
+                orgs.add(new OrgRow(id, code, name, region[0], region[1]));
+                id++;
+            }
+        }
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO sys_org (id, org_code, org_name, region_code, region_name, org_level, parent_id, status, sort_no)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, batch);
+        log.info("已生成机构 {} 个", orgs.size());
+        return orgs;
+    }
+
+    private void seedDepartments(List<OrgRow> orgs) {
+        String[] deptNames = {"业务受理部", "风险审查部", "承保运营部", "财务结算部", "客户服务部"};
+        List<Object[]> batch = new ArrayList<>(DEPT_COUNT);
+        long id = 1;
+        int orgIdx = 0;
+        while (batch.size() < DEPT_COUNT) {
+            OrgRow org = orgs.get(orgIdx % orgs.size());
+            String base = deptNames[(int) ((id - 1) % deptNames.length)];
+            String name = org.name() + "-" + base;
+            String code = "DEPT" + String.format("%04d", id);
+            batch.add(new Object[]{id, code, name, org.id(), 0, 1, (int) id});
+            id++;
+            orgIdx++;
+        }
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO sys_department (id, dept_code, dept_name, org_id, parent_id, status, sort_no)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, batch);
+        log.info("已生成部门 {} 个", batch.size());
+    }
+
+    /** 权限编码 -> 名称 -> 路由。 */
+    private static final String[][] PERMISSIONS = {
+            {"dashboard:view", "首页", "/dashboard"},
+            {"order:tender:view", "投标订单", "/orders/tender"},
+            {"order:performance:view", "履约订单", "/orders/performance"},
+            {"analysis:overview:view", "数据概览", "/analysis/overview"},
+            {"project:view", "项目管理", "/projects"},
+            {"enterprise:view", "企业管理", "/enterprises"},
+            {"system:insurance:view", "险种配置", "/system/insurance-types"},
+            {"system:insurance:create", "险种新增", null},
+            {"system:insurance:update", "险种修改", null},
+            {"system:org:view", "机构配置", "/system/orgs"},
+            {"system:dept:view", "部门配置", "/system/departments"},
+            {"system:user:view", "用户配置", "/system/users"},
+            {"system:role:view", "角色配置", "/system/roles"},
+            {"system:permission:view", "权限配置", null},
+            {"ai:chat", "AI 业务助手", null},
+    };
+
+    private static final String[][] ROLES = {
+            {"ADMIN", "超级管理员", "拥有全部权限"},
+            {"OPERATOR", "运营人员", "订单与基础配置的日常运营"},
+            {"ANALYST", "数据分析师", "业务分析与 AI 助手"},
+            {"VIEWER", "只读用户", "仅可查看"},
+    };
+
+    private void seedRolesAndPermissions() {
+        List<Object[]> perms = new ArrayList<>();
+        long permId = 1;
+        for (String[] p : PERMISSIONS) {
+            perms.add(new Object[]{permId++, p[0], p[1], p[2] == null ? "BUTTON" : "MENU", 0, p[2], (int) permId});
+        }
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO sys_permission (id, perm_code, perm_name, perm_type, parent_id, path, sort_no)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, perms);
+
+        List<Object[]> roles = new ArrayList<>();
+        long roleId = 1;
+        for (String[] r : ROLES) {
+            roles.add(new Object[]{roleId++, r[0], r[1], r[2], 1});
+        }
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO sys_role (id, role_code, role_name, description, status)
+                VALUES (?, ?, ?, ?, ?)
+                """, roles);
+
+        // 角色-权限：ADMIN 全部；OPERATOR 除角色/权限外的全部；ANALYST 分析相关；VIEWER 只读
+        List<Object[]> rolePerms = new ArrayList<>();
+        for (long pid = 1; pid <= PERMISSIONS.length; pid++) {
+            String code = PERMISSIONS[(int) (pid - 1)][0];
+            rolePerms.add(new Object[]{1L, pid});
+            if (!code.equals("system:role:view") && !code.equals("system:permission:view")) {
+                rolePerms.add(new Object[]{2L, pid});
+            }
+            if (code.startsWith("analysis") || code.startsWith("project") || code.startsWith("enterprise")
+                    || code.startsWith("order") || code.equals("dashboard:view") || code.equals("ai:chat")) {
+                rolePerms.add(new Object[]{3L, pid});
+            }
+            if (code.endsWith(":view") || code.equals("ai:chat")) {
+                rolePerms.add(new Object[]{4L, pid});
+            }
+        }
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO sys_role_permission (role_id, permission_id) VALUES (?, ?)
+                """, rolePerms);
+        log.info("已生成权限 {} 条、角色 {} 个、角色权限 {} 条",
+                PERMISSIONS.length, ROLES.length, rolePerms.size());
+    }
+
+    private void seedUsers(Random random, List<OrgRow> orgs) {
+        String[] surnames = {"张", "王", "李", "赵", "陈", "刘", "杨", "黄", "周", "吴", "徐", "孙", "马", "朱", "胡"};
+        String[] givenNames = {"伟", "芳", "娜", "敏", "静", "磊", "强", "军", "洋", "勇", "艳", "杰", "娟", "涛", "明"};
+
+        List<Object[]> batch = new ArrayList<>(USER_COUNT);
+        List<Object[]> userRoles = new ArrayList<>();
+
+        String adminHash = passwordEncoder.encode(ADMIN_PASSWORD);
+        String operatorHash = passwordEncoder.encode(OPERATOR_PASSWORD);
+        String analystHash = passwordEncoder.encode(ANALYST_PASSWORD);
+        String defaultHash = passwordEncoder.encode(DEFAULT_PASSWORD);
+
+        for (int i = 1; i <= USER_COUNT; i++) {
+            int orgIndex = i % orgs.size();
+            OrgRow org = orgs.get(orgIndex);
+            // 每个机构恰好 4 个部门：部门 id 满足 (id-1) % ORG_COUNT == orgIndex
+            long deptId = orgIndex + 1L + (long) ORG_COUNT * (i % 4);
+            String username;
+            String hash;
+            long roleId;
+            if (i == 1) {
+                username = "admin";
+                hash = adminHash;
+                roleId = 1;
+            } else if (i == 2) {
+                username = "operator";
+                hash = operatorHash;
+                roleId = 2;
+            } else if (i == 3) {
+                username = "analyst";
+                hash = analystHash;
+                roleId = 3;
+            } else {
+                username = "user" + String.format("%04d", i);
+                hash = defaultHash;
+                // 其余用户按稳定分布分配角色：运营 40%、分析 35%、只读 25%
+                roleId = switch (i % 20) {
+                    case 0, 1, 2, 3, 4, 5, 6, 7 -> 2;
+                    case 8, 9, 10, 11, 12, 13 -> 3;
+                    default -> 4;
+                };
+            }
+            String realName = surnames[random.nextInt(surnames.length)]
+                    + givenNames[random.nextInt(givenNames.length)]
+                    + (random.nextInt(3) == 0 ? givenNames[random.nextInt(givenNames.length)] : "");
+            batch.add(new Object[]{
+                    (long) i, username, hash, realName, org.id(), deptId,
+                    "138" + String.format("%08d", random.nextInt(100_000_000)),
+                    username + "@guarantee.com", 1
+            });
+            userRoles.add(new Object[]{(long) i, roleId});
+        }
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO sys_user (id, username, password, real_name, org_id, dept_id, phone, email, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, batch);
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO sys_user_role (user_id, role_id) VALUES (?, ?)
+                """, userRoles);
+        log.info("已生成用户 {} 个（admin/operator/analyst + {} 个普通用户）", USER_COUNT, USER_COUNT - 3);
+    }
+
+    // ==================================================================
+    // 险种
+    // ==================================================================
+
+    private record InsuranceRow(long id, String code, String name, String category, BigDecimal rate) {
+    }
+
+    private List<InsuranceRow> seedInsuranceTypes() {
+        Object[][] rows = {
+                {1L, "TENDER_STD", "投标保函（标准）", "TENDER", "0.008000"},
+                {2L, "TENDER_ELEC", "电子投标保函", "TENDER", "0.006000"},
+                {3L, "TENDER_SMALL", "投标保函（小额）", "TENDER", "0.010000"},
+                {4L, "PERF_STD", "履约保函（标准）", "PERFORMANCE", "0.012000"},
+                {5L, "PERF_ADVANCE", "履约保函（预付款）", "PERFORMANCE", "0.015000"},
+                {6L, "PERF_QUALITY", "履约保函（质量）", "PERFORMANCE", "0.014000"},
+        };
+        List<Object[]> batch = new ArrayList<>();
+        List<InsuranceRow> result = new ArrayList<>();
+        for (Object[] r : rows) {
+            batch.add(new Object[]{r[0], r[1], r[2], r[3], new BigDecimal((String) r[4]),
+                    new BigDecimal("100000.00"), new BigDecimal("50000000.00"), 1,
+                    r[2] + " 演示险种"});
+            result.add(new InsuranceRow((Long) r[0], (String) r[1], (String) r[2], (String) r[3],
+                    new BigDecimal((String) r[4])));
+        }
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO insurance_type (id, type_code, type_name, category, base_rate, min_amount, max_amount, status, description)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, batch);
+        log.info("已生成险种 {} 个", result.size());
+        return result;
+    }
+
+    // ==================================================================
+    // 企业 / 项目
+    // ==================================================================
+
+    private record EnterpriseRow(long id, String name, String regionCode, String regionName) {
+    }
+
+    private record ProjectRow(long id, String name, long enterpriseId, String regionCode,
+                              String regionName, BigDecimal amount) {
+    }
+
+    private List<EnterpriseRow> seedEnterprises(Random random) {
+        String[] prefixes = {"中建", "中铁", "中交", "华建", "宏远", "方正", "鼎盛", "恒基", "嘉华", "瑞泰",
+                "天工", "兴业", "联创", "金鼎", "远洋", "博远"};
+        String[] suffixes = {"建设工程有限公司", "市政工程有限公司", "路桥工程有限公司", "水利工程有限公司",
+                "电力工程有限公司", "园林绿化有限公司", "装饰工程有限公司", "科技有限公司"};
+
+        List<EnterpriseRow> enterprises = new ArrayList<>(ENTERPRISE_COUNT);
+        List<Object[]> batch = new ArrayList<>(ENTERPRISE_COUNT);
+        for (int i = 1; i <= ENTERPRISE_COUNT; i++) {
+            String[] region = pickRegion(random);
+            // 企业序号 -> 14 位唯一后缀（乘一个与 10^14 互质的质数，避免出现连续编号，
+            // 同时保证 1..3000 范围内不重复；同一区域前缀内唯一，区域前缀之间也互不相同）
+            String creditCode = "91" + region[0].substring(0, 4)
+                    + String.format("%014d", (i * 7919L) % 100_000_000_000_000L);
+            String name = prefixes[random.nextInt(prefixes.length)]
+                    + suffixes[random.nextInt(suffixes.length)]
+                    + String.format("%04d", i);
+            batch.add(new Object[]{
+                    (long) i, "ENT" + String.format("%06d", i), name, creditCode,
+                    region[0], region[1],
+                    INDUSTRIES[random.nextInt(INDUSTRIES.length)],
+                    ENT_LEVELS[random.nextInt(ENT_LEVELS.length)],
+                    "联系人" + i, "139" + String.format("%08d", random.nextInt(100_000_000)), 1
+            });
+            enterprises.add(new EnterpriseRow(i, name, region[0], region[1]));
+        }
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO enterprise (id, ent_code, ent_name, credit_code, region_code, region_name,
+                                        industry, ent_level, contact_name, contact_phone, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, batch);
+        log.info("已生成企业 {} 个", enterprises.size());
+        return enterprises;
+    }
+
+    private List<ProjectRow> seedProjects(Random random, List<EnterpriseRow> enterprises) {
+        // 按区域分组企业，保证项目与其业主企业同区域
+        Map<String, List<EnterpriseRow>> byRegion = groupByRegion(enterprises, EnterpriseRow::regionCode);
+
+        List<ProjectRow> projects = new ArrayList<>(PROJECT_COUNT);
+        List<Object[]> batch = new ArrayList<>(PROJECT_COUNT);
+        for (int i = 1; i <= PROJECT_COUNT; i++) {
+            String[] region = pickRegion(random);
+            List<EnterpriseRow> pool = byRegion.getOrDefault(region[0], enterprises);
+            EnterpriseRow owner = pool.get(random.nextInt(pool.size()));
+
+            BigDecimal amount = randomAmount(random, 500_000, 200_000_000);
+            LocalDate tenderDate = randomDate(random);
+            String type = PROJECT_TYPES[random.nextInt(PROJECT_TYPES.length)];
+            String status = pickProjectStatus(random, tenderDate);
+            String name = region[1] + type + "工程项目" + String.format("%04d", i);
+
+            batch.add(new Object[]{
+                    (long) i, "PRJ" + String.format("%06d", i), name, owner.id(),
+                    region[0], region[1], amount, type, status, Date.valueOf(tenderDate)
+            });
+            projects.add(new ProjectRow(i, name, owner.id(), region[0], region[1], amount));
+        }
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO project (id, project_code, project_name, enterprise_id, region_code, region_name,
+                                     project_amount, project_type, status, tender_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, batch);
+        log.info("已生成项目 {} 个", projects.size());
+        return projects;
+    }
+
+    private static String pickProjectStatus(Random random, LocalDate tenderDate) {
+        long monthsAgo = java.time.temporal.ChronoUnit.MONTHS.between(tenderDate, DATA_END);
+        if (monthsAgo > 18) {
+            return "FINISHED";
+        }
+        if (monthsAgo > 6) {
+            return random.nextInt(100) < 70 ? "BUILDING" : "FINISHED";
+        }
+        return random.nextInt(100) < 60 ? "AWARDED" : "BIDDING";
+    }
+
+    // ==================================================================
+    // 订单
+    // ==================================================================
+
+    private void seedTenderOrders(Random random, List<OrgRow> orgs, List<InsuranceRow> types,
+                                  List<EnterpriseRow> enterprises, List<ProjectRow> projects) {
+        List<InsuranceRow> tenderTypes = types.stream()
+                .filter(t -> "TENDER".equals(t.category())).toList();
+        Map<String, List<EnterpriseRow>> entByRegion = groupByRegion(enterprises, EnterpriseRow::regionCode);
+        Map<String, List<ProjectRow>> prjByRegion = groupByRegion(projects, ProjectRow::regionCode);
+
+        DaySampler sampler = new DaySampler(random, orgs);
+        List<Object[]> batch = new ArrayList<>(BATCH_SIZE);
+        long id = 0;
+
+        for (int i = 0; i < TENDER_ORDER_COUNT; i++) {
+            int orgIdx = sampler.pickOrg();
+            OrgRow org = orgs.get(orgIdx);
+            LocalDate applyDate = sampler.pickDate(orgIdx);
+
+            List<EnterpriseRow> entPool = entByRegion.getOrDefault(org.regionCode(), enterprises);
+            List<ProjectRow> prjPool = prjByRegion.getOrDefault(org.regionCode(), projects);
+            EnterpriseRow enterprise = entPool.get(random.nextInt(entPool.size()));
+            ProjectRow project = prjPool.get(random.nextInt(prjPool.size()));
+
+            InsuranceRow type = pickInsurance(random, tenderTypes, org.regionCode());
+            BigDecimal guaranteeAmount = scaleToRange(project.amount(), random, "0.04", "0.14", 100_000);
+            BigDecimal rate = jitterRate(random, type.rate());
+            BigDecimal premium = guaranteeAmount.multiply(rate).setScale(2, RoundingMode.HALF_UP);
+
+            LocalDate effective = applyDate.plusDays(1 + random.nextInt(3));
+            LocalDate expire = effective.plusMonths(3 + random.nextInt(10));
+            String status = pickOrderStatus(random, expire);
+
+            id++;
+            batch.add(new Object[]{
+                    id, "TB" + applyDate.toString().replace("-", "") + String.format("%07d", i),
+                    project.id(), enterprise.id(), type.id(), org.id(),
+                    org.regionCode(), org.regionName(), guaranteeAmount, premium, rate, status,
+                    Date.valueOf(applyDate), Date.valueOf(effective), Date.valueOf(expire)
+            });
+            if (batch.size() >= BATCH_SIZE) {
+                flushTenderOrders(batch);
+                batch = new ArrayList<>(BATCH_SIZE);
+            }
+        }
+        if (!batch.isEmpty()) {
+            flushTenderOrders(batch);
+        }
+        log.info("已生成投标订单 {} 条", TENDER_ORDER_COUNT);
+    }
+
+    private void flushTenderOrders(List<Object[]> batch) {
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO tender_order (id, order_no, project_id, enterprise_id, insurance_type_id, org_id,
+                                          region_code, region_name, guarantee_amount, premium_amount, premium_rate,
+                                          status, apply_date, effective_date, expire_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, batch);
+    }
+
+    private void seedPerformanceOrders(Random random, List<OrgRow> orgs, List<InsuranceRow> types,
+                                       List<EnterpriseRow> enterprises, List<ProjectRow> projects) {
+        List<InsuranceRow> perfTypes = types.stream()
+                .filter(t -> "PERFORMANCE".equals(t.category())).toList();
+        Map<String, List<EnterpriseRow>> entByRegion = groupByRegion(enterprises, EnterpriseRow::regionCode);
+        Map<String, List<ProjectRow>> prjByRegion = groupByRegion(projects, ProjectRow::regionCode);
+
+        DaySampler sampler = new DaySampler(random, orgs);
+        List<Object[]> batch = new ArrayList<>(BATCH_SIZE);
+        long id = 0;
+
+        for (int i = 0; i < PERFORMANCE_ORDER_COUNT; i++) {
+            int orgIdx = sampler.pickOrg();
+            OrgRow org = orgs.get(orgIdx);
+            LocalDate applyDate = sampler.pickDate(orgIdx);
+
+            List<EnterpriseRow> entPool = entByRegion.getOrDefault(org.regionCode(), enterprises);
+            List<ProjectRow> prjPool = prjByRegion.getOrDefault(org.regionCode(), projects);
+            EnterpriseRow enterprise = entPool.get(random.nextInt(entPool.size()));
+            ProjectRow project = prjPool.get(random.nextInt(prjPool.size()));
+
+            InsuranceRow type = pickInsurance(random, perfTypes, org.regionCode());
+            // 履约保函金额普遍高于投标保函
+            BigDecimal guaranteeAmount = scaleToRange(project.amount(), random, "0.08", "0.25", 200_000);
+            BigDecimal rate = jitterRate(random, type.rate());
+            BigDecimal premium = guaranteeAmount.multiply(rate).setScale(2, RoundingMode.HALF_UP);
+
+            LocalDate effective = applyDate.plusDays(2 + random.nextInt(5));
+            LocalDate expire = effective.plusMonths(6 + random.nextInt(18));
+            String status = pickOrderStatus(random, expire);
+
+            id++;
+            batch.add(new Object[]{
+                    id, "PB" + applyDate.toString().replace("-", "") + String.format("%07d", i),
+                    "HT" + applyDate.toString().replace("-", "") + String.format("%07d", i),
+                    project.id(), enterprise.id(), type.id(), org.id(),
+                    org.regionCode(), org.regionName(), guaranteeAmount, premium, rate, status,
+                    Date.valueOf(applyDate), Date.valueOf(effective), Date.valueOf(expire)
+            });
+            if (batch.size() >= BATCH_SIZE) {
+                flushPerformanceOrders(batch);
+                batch = new ArrayList<>(BATCH_SIZE);
+            }
+        }
+        if (!batch.isEmpty()) {
+            flushPerformanceOrders(batch);
+        }
+        log.info("已生成履约订单 {} 条", PERFORMANCE_ORDER_COUNT);
+    }
+
+    private void flushPerformanceOrders(List<Object[]> batch) {
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO performance_order (id, order_no, contract_no, project_id, enterprise_id,
+                                               insurance_type_id, org_id, region_code, region_name,
+                                               guarantee_amount, premium_amount, premium_rate,
+                                               status, apply_date, effective_date, expire_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, batch);
+    }
+
+    // ==================================================================
+    // 采样工具
+    // ==================================================================
+
+    /**
+     * 按「机构权重 × 月份季节性 × 机构 Q3 系数」对日期进行加权采样。
+     *
+     * <p>为每个机构预计算一条按天累积的权重数组，采样时二分查找，
+     * 使 15 万条订单也能精确服从设定的业务规律。</p>
+     */
+    private final class DaySampler {
+
+        private final Random random;
+        private final int orgCount;
+        private final List<LocalDate> days = new ArrayList<>();
+        private final double[][] cumulative;
+        private final double[] orgTotals;
+        private final double grandTotal;
+        private final int[] orgCumulative;
+
+        DaySampler(Random random, List<OrgRow> orgs) {
+            this.random = random;
+            this.orgCount = orgs.size();
+
+            LocalDate cursor = DATA_START;
+            while (!cursor.isAfter(DATA_END)) {
+                days.add(cursor);
+                cursor = cursor.plusDays(1);
+            }
+
+            this.cumulative = new double[orgCount][days.size()];
+            this.orgTotals = new double[orgCount];
+            for (int o = 0; o < orgCount; o++) {
+                double sum = 0;
+                for (int d = 0; d < days.size(); d++) {
+                    sum += dayWeight(o, days.get(d));
+                    cumulative[o][d] = sum;
+                }
+                orgTotals[o] = sum;
+            }
+
+            // 机构抽样权重：区域权重 / 该区域机构数
+            double total = 0;
+            double[] regionWeight = new double[REGIONS.length];
+            for (int r = 0; r < REGIONS.length; r++) {
+                regionWeight[r] = Double.parseDouble(REGIONS[r][2]) / Integer.parseInt(REGIONS[r][3]);
+            }
+            this.orgCumulative = new int[orgCount];
+            int idx = 0;
+            for (int r = 0; r < REGIONS.length; r++) {
+                int count = Integer.parseInt(REGIONS[r][3]);
+                for (int i = 0; i < count; i++) {
+                    total += regionWeight[r];
+                    orgCumulative[idx++] = (int) Math.round(total * 1000);
+                }
+            }
+            this.grandTotal = total * 1000;
+        }
+
+        private double dayWeight(int orgIdx, LocalDate day) {
+            double w = MONTH_FACTOR[day.getMonthValue() - 1];
+            // 2026 Q3 起用机构专属系数，形成“部分机构增长、部分机构下降”
+            if (day.getYear() == 2026 && day.getMonthValue() >= 7) {
+                w *= ORG_Q3_FACTOR[orgIdx % ORG_Q3_FACTOR.length];
+            } else if (day.getYear() == 2026 && day.getMonthValue() <= 6) {
+                w *= 1.0 + (ORG_Q3_FACTOR[orgIdx % ORG_Q3_FACTOR.length] - 1.0) * 0.35;
+            }
+            return w;
+        }
+
+        int pickOrg() {
+            double r = random.nextDouble() * grandTotal;
+            for (int i = 0; i < orgCumulative.length; i++) {
+                if (r < orgCumulative[i]) {
+                    return i;
+                }
+            }
+            return orgCount - 1;
+        }
+
+        LocalDate pickDate(int orgIdx) {
+            double r = random.nextDouble() * orgTotals[orgIdx];
+            double[] cum = cumulative[orgIdx];
+            int lo = 0;
+            int hi = cum.length - 1;
+            while (lo < hi) {
+                int mid = (lo + hi) >>> 1;
+                if (r < cum[mid]) {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            return days.get(lo);
+        }
+    }
+
+    private static String[] pickRegion(Random random) {
+        int roll = random.nextInt(100);
+        int acc = 0;
+        for (String[] region : REGIONS) {
+            acc += Integer.parseInt(region[2]);
+            if (roll < acc) {
+                return region;
+            }
+        }
+        return REGIONS[0];
+    }
+
+    /**
+     * 险种结构与区域相关：浙江以投标保函为主，江苏履约保函比例更高。
+     */
+    private static InsuranceRow pickInsurance(Random random, List<InsuranceRow> candidates, String regionCode) {
+        int roll = random.nextInt(100);
+        int index;
+        if ("320000".equals(regionCode)) {
+            // 江苏：更偏向第二/第三类
+            index = roll < 45 ? 1 : (roll < 80 ? 0 : 2);
+        } else if ("330000".equals(regionCode)) {
+            // 浙江：明显偏向标准与电子保函
+            index = roll < 55 ? 0 : (roll < 88 ? 1 : 2);
+        } else {
+            index = roll < 40 ? 0 : (roll < 75 ? 1 : 2);
+        }
+        return candidates.get(Math.min(index, candidates.size() - 1));
+    }
+
+    private static BigDecimal jitterRate(Random random, BigDecimal baseRate) {
+        double factor = 0.85 + random.nextDouble() * 0.35;
+        return baseRate.multiply(BigDecimal.valueOf(factor)).setScale(6, RoundingMode.HALF_UP);
+    }
+
+    private static String pickOrderStatus(Random random, LocalDate expireDate) {
+        if (expireDate.isBefore(DATA_END)) {
+            int roll = random.nextInt(100);
+            if (roll < 70) {
+                return "EXPIRED";
+            }
+            if (roll < 90) {
+                return "RELEASED";
+            }
+            return "EFFECTIVE";
+        }
+        int roll = random.nextInt(100);
+        if (roll < 68) {
+            return "EFFECTIVE";
+        }
+        if (roll < 85) {
+            return "UNDER_REVIEW";
+        }
+        if (roll < 93) {
+            return "DRAFT";
+        }
+        return "RELEASED";
+    }
+
+    /** 让金额落在 [min, max] 区间并按 step 取整。 */
+    private static BigDecimal randomAmount(Random random, long min, long max) {
+        long span = max - min;
+        // 平方分布让大额项目更少，更贴近真实
+        double factor = Math.pow(random.nextDouble(), 2);
+        long value = min + (long) (span * factor);
+        return BigDecimal.valueOf(value / 10_000 * 10_000).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private static BigDecimal scaleToRange(BigDecimal base, Random random,
+                                           String minFactor, String maxFactor, long minAmount) {
+        BigDecimal lo = new BigDecimal(minFactor);
+        BigDecimal hi = new BigDecimal(maxFactor);
+        BigDecimal factor = lo.add(hi.subtract(lo).multiply(BigDecimal.valueOf(random.nextDouble())));
+        BigDecimal value = base.multiply(factor);
+        if (value.compareTo(BigDecimal.valueOf(minAmount)) < 0) {
+            value = BigDecimal.valueOf(minAmount);
+        }
+        return value.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private static LocalDate randomDate(Random random) {
+        long span = java.time.temporal.ChronoUnit.DAYS.between(DATA_START, DATA_END);
+        return DATA_START.plusDays((long) (random.nextDouble() * span));
+    }
+
+    private static <T> Map<String, List<T>> groupByRegion(List<T> items,
+                                                          java.util.function.Function<T, String> keyFn) {
+        Map<String, List<T>> map = new LinkedHashMap<>();
+        for (T item : items) {
+            map.computeIfAbsent(keyFn.apply(item), k -> new ArrayList<>()).add(item);
+        }
+        return map;
+    }
+}
