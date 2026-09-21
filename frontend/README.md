@@ -22,7 +22,7 @@ cd frontend
 # 1. 安装依赖
 npm install
 
-# 2. 启动开发服务器（http://localhost:5173）
+# 2. 启动开发服务器（http://localhost:5273）
 npm run dev
 
 # 3. 生产构建（先做 TypeScript 类型检查，再打包到 dist/）
@@ -32,9 +32,18 @@ npm run build
 npm run preview
 ```
 
-开发服务器监听 **5173** 端口，并把 `/api` 反向代理到 `http://localhost:8080`
-（见 `vite.config.ts` 的 `server.proxy`，`changeOrigin: true`）。
-因此本地开发**无需配置 CORS**，只要后端已在 8080 端口启动即可。
+开发服务器监听 **5273** 端口，并把 `/api` 反向代理到后端（默认 `http://localhost:8081`，
+见 `vite.config.ts` 的 `server.proxy`，`changeOrigin: true`）。
+因此本地开发**无需配置 CORS**，只要后端已启动即可。
+
+> 不用 Vite 默认的 5173，是因为部分 Windows 机器保留了动态端口段 5121–5220，
+> 5173 在其中会导致绑定失败（`EACCES: permission denied`）。
+> 查看本机保留段：`netsh int ipv4 show excludedportrange protocol=tcp`
+>
+> 后端换端口时无需改代码：
+> ```powershell
+> $env:BACKEND_PORT=8082; npm run dev
+> ```
 
 ### 演示账号
 
@@ -65,7 +74,7 @@ npm run preview
 ```
 frontend/
 ├─ index.html
-├─ vite.config.ts            # 端口 5173 + /api 代理
+├─ vite.config.ts            # 端口 5273 + /api 代理（BACKEND_PORT 默认 8081）
 ├─ tsconfig.json             # 应用侧 TS 配置（strict）
 ├─ tsconfig.node.json        # 构建脚本侧 TS 配置
 ├─ .env.development          # VITE_API_BASE_URL=/api

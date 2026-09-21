@@ -161,20 +161,27 @@ npm run build          # 产出 frontend/dist
 ```bash
 cd frontend
 npm install
-npm run dev            # http://localhost:5173
+npm run dev            # http://localhost:5273
 ```
 
-访问 <http://localhost:5173>。
+访问 <http://localhost:5273>。
 
-> ⚠️ **改过后端端口时必须同步改代理**：`frontend/vite.config.ts` 里的
-> `server.proxy['/api'].target` 默认是 `http://localhost:8080`。
-> 若后端跑在 8081，要改成 `http://localhost:8081`，否则前端会去连 8080（连不上或被别的进程占用）。
+> ⚠️ **为什么不是 Vite 默认的 5173**：部分 Windows 机器（启用 Hyper-V / WSL2 / Docker Desktop 后）
+> 会保留动态端口段 5121–5220，5173 落在其中，绑定会直接失败并报
+> `EACCES: permission denied`。本仓库改用 **5273**（不在任何保留段内）。
+> 查看本机保留段：`netsh int ipv4 show excludedportrange protocol=tcp`
+>
+> ⚠️ **后端端口通过环境变量对齐**：代理目标默认 `http://localhost:8081`，
+> 由 `vite.config.ts` 里的 `BACKEND_PORT` 决定。后端换端口时无需改代码：
+> ```powershell
+> $env:BACKEND_PORT=8082; npm run dev
+> ```
 
 **两种方式的区别**
 
 | | 方式 A（后端承载） | 方式 B（Vite dev） |
 |---|---|---|
-| 访问地址 | 后端端口，如 `http://localhost:8080` | `http://localhost:5173` |
+| 访问地址 | 后端端口，如 `http://localhost:8081` | `http://localhost:5273` |
 | 前端改动 | 需重新 `npm run build` | 热更新，即时生效 |
 | 跨域 | 同源，无跨域 | 由 Vite 代理转发 |
 | 适合 | 演示、验收、单端口部署 | 前端开发 |
@@ -183,13 +190,16 @@ npm run dev            # http://localhost:5173
 
 1. **拼写**：是 `localhost`，不是 `loclhost` / `localhos`（域名解析失败会直接"无法访问"）。
 2. **端口**：确认后端实际监听的端口 —— `Get-NetTCPConnection -State Listen | Where-Object LocalPort -in 8080,8081`。
-   注意 `application.yml` 的 `server.port` 只影响后端；方式 B 的前端在 5173。
+   注意 `application.yml` 的 `server.port` 只影响后端；方式 B 的前端在 5273。
 3. **后端是否活着**：`http://localhost:<port>/actuator/health` 应返回 `{"status":"UP"}`。
    该地址不需要登录，最适合判断"服务起来了没"。
 4. **是不是只打开了 API**：业务接口都在 `/api/**`，直接访问
    `http://localhost:8080/api/orders/tender` 只会得到 401/JSON —— 这是正常的，它不是一个网页。
-   想看到界面，请按 §3.5 的方式 A（后端承载 dist）或方式 B（Vite 5173）。
-5. **前端能开但没数据**：方式 B 下检查 `frontend/vite.config.ts` 的代理 target 是否与后端端口一致。
+   想看到界面，请按 §3.5 的方式 A（后端承载 dist）或方式 B（Vite 5273）。
+5. **前端能开但没数据**：方式 B 下确认 Vite 的代理目标与后端端口一致（默认 8081，见 §3.5）。
+6. **`EACCES: permission denied` 绑不上端口**：该端口落在 Windows 保留段里了。
+   用 `netsh int ipv4 show excludedportrange protocol=tcp` 查看保留段，换一个不在其中的端口。
+   本仓库前端已避开 5173，改用 5273。
 
 ---
 
@@ -398,7 +408,7 @@ record TimeRange(LocalDate startDate, LocalDate endDate, String description)
 
 **前置**：配置好 `DEEPSEEK_API_KEY`，后端与前端均已启动。
 
-1. 浏览器打开 <http://localhost:5173>。
+1. 浏览器打开 <http://localhost:5273>。
 2. 用 `admin` / `Admin@123` 登录。
 3. 左侧菜单进入 **投标订单**，确认列表有真实数据（可分页浏览）。
 4. 点击右下角悬浮按钮，打开 **业务分析助手（AI Copilot）**。

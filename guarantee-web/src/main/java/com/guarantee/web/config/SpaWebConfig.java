@@ -21,7 +21,7 @@ import java.util.Optional;
  * <p>前端使用 hash 路由（{@code /#/dashboard}），所有深链接都落在 {@code /} 上，
  * 因此服务端只需把 {@code /} 转发到 {@code index.html}，不需要 history fallback。</p>
  *
- * <p>开发时仍然推荐 {@code npm run dev}（5173，带 HMR），两种方式可以并存。
+ * <p>开发时仍然推荐 {@code npm run dev}（5273，带 HMR），两种方式可以并存。
  * 找不到产物目录时不影响启动，只是首页会返回 404。</p>
  */
 @Configuration(proxyBeanMethods = false)
