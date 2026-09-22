@@ -586,7 +586,7 @@ onMounted(() => {
             />
           </el-select>
           <div class="form-hint text-muted">
-            可选任意部门作为上级；后端会拒绝"挂到自己的下级之下"。
+            可选任意部门作为上级；下拉中已排除该部门自身及其下级部门，避免形成环。
           </div>
         </el-form-item>
         <el-form-item label="排序号" prop="sortNo">

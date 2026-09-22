@@ -214,6 +214,54 @@ class LogicalDeleteServiceIntegrationTest {
     }
 
     // ==================================================================
+    // 部门树防环：上级不能选自己的下级
+    // ==================================================================
+
+    @Test
+    @DisplayName("防环：把部门挂到自己的下级之下被拒绝，且提示点名两个部门（不再是无信息的『后端会拒绝』）")
+    void updateParentRejectsOwnDescendant() {
+        DataScope admin = adminScope();
+
+        DepartmentDto.CreateRequest parentReq = new DepartmentDto.CreateRequest();
+        parentReq.setDeptCode(P + "cycp");
+        parentReq.setDeptName("防环-父部门");
+        DepartmentVO parent = departmentService.create(parentReq, admin);
+
+        DepartmentDto.CreateRequest childReq = new DepartmentDto.CreateRequest();
+        childReq.setDeptCode(P + "cycc");
+        childReq.setDeptName("防环-子部门");
+        childReq.setParentId(parent.getId());
+        DepartmentVO child = departmentService.create(childReq, admin);
+
+        // 把父部门挂到它自己的子部门之下 —— 会形成环，必须拒绝
+        DepartmentDto.UpdateRequest cycle = new DepartmentDto.UpdateRequest();
+        cycle.setParentId(child.getId());
+        assertThatThrownBy(() -> departmentService.update(parent.getId(), cycle, admin))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("防环-父部门")
+                .hasMessageContaining("防环-子部门")
+                .hasMessageContaining("下级部门")
+                .hasMessageContaining("形成环");
+
+        // 把自己设为自己 —— 另外一条文案，同样要说清
+        DepartmentDto.UpdateRequest self = new DepartmentDto.UpdateRequest();
+        self.setParentId(parent.getId());
+        assertThatThrownBy(() -> departmentService.update(parent.getId(), self, admin))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("防环-父部门")
+                .hasMessageContaining("不能把自己设为上级部门");
+
+        // 树没有被写坏：父部门仍挂在顶级，子部门仍是它的下级
+        assertThat(departmentService.getById(parent.getId(), admin).getParentId()).isZero();
+        assertThat(departmentService.getById(child.getId(), admin).getParentId()).isEqualTo(parent.getId());
+
+        // 合法变更仍然放行：子部门改挂到顶级
+        DepartmentDto.UpdateRequest ok = new DepartmentDto.UpdateRequest();
+        ok.setParentId(0L);
+        assertThat(departmentService.update(child.getId(), ok, admin).getParentId()).isZero();
+    }
+
+    // ==================================================================
     // LD-T5：关联表 UPSERT（[A,B] → [B,C] → [A,B]）
     // ==================================================================
 

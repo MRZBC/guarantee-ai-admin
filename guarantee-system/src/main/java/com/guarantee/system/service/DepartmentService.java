@@ -212,10 +212,17 @@ public class DepartmentService {
     public SysDepartment validateUpdate(Long id, DepartmentDto.UpdateRequest request, DataScope scope) {
         SysDepartment existing = requireVisible(id, scope);
         if (request.getParentId() != null && request.getParentId() != 0L) {
+            SysDepartment target = requireVisible(request.getParentId(), scope);
             if (request.getParentId().equals(id)) {
-                throw BizException.badRequest("上级部门不能是自己");
+                throw BizException.badRequest("「" + existing.getDeptName() + "」不能把自己设为上级部门，请另选");
             }
-            requireVisible(request.getParentId(), scope);
+            // 防环（与 OrgService 同款）：新上级不能落在自己或自己的下级里。
+            // 前端下拉已排除这些选项，此校验用于兜住 API / AI 提案等旁路调用 ——
+            // 部门树一旦成环，前端组树的递归会无限展开。
+            if (sysDepartmentMapper.selectSelfAndDescendantIds(id).contains(request.getParentId())) {
+                throw BizException.badRequest("「" + target.getDeptName() + "」是「" + existing.getDeptName()
+                        + "」的下级部门，不能反过来把它设为上级（会形成环），请另选一个上级部门");
+            }
         }
         return existing;
     }

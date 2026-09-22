@@ -86,4 +86,12 @@ public interface SysDepartmentMapper {
 
     /** 删除前置检查（实施期补充）：未删除的下级部门数。 */
     long countChildDept(@Param("deptId") Long deptId);
+
+    /**
+     * 给定部门，返回**它自身 + 全部下级部门** id（用于"上级不能挂到自己的下级之下"的防环校验）。
+     *
+     * <p>递归 CTE 显式限制 {@code depth < 10}，避免脏 {@code parent_id} 已形成环时无限递归，
+     * 与 {@code SysOrgMapper.selectVisibleOrgIds} 同款保护。</p>
+     */
+    List<Long> selectSelfAndDescendantIds(@Param("deptId") Long deptId);
 }

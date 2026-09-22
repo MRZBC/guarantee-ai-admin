@@ -194,6 +194,23 @@
         SELECT COUNT(*) FROM sys_department WHERE parent_id = #{deptId} AND is_deleted = 0
     </select>
 
+    <!--
+      防环校验：给定部门，返回它自身 + 全部下级部门 id。
+      递归 CTE 显式限制 depth < 10，避免脏 parent_id 已形成环时无限递归
+      （与 SysOrgMapper.selectVisibleOrgIds 同款保护）。
+    -->
+    <select id="selectSelfAndDescendantIds" resultType="java.lang.Long">
+        WITH RECURSIVE dept_tree (id, depth) AS (
+            SELECT id, 1 FROM sys_department WHERE id = #{deptId} AND is_deleted = 0
+            UNION ALL
+            SELECT d.id, t.depth + 1
+            FROM sys_department d
+            INNER JOIN dept_tree t ON d.parent_id = t.id AND d.is_deleted = 0
+            WHERE t.depth &lt; 10
+        )
+        SELECT DISTINCT id FROM dept_tree
+    </select>
+
     <select id="countUserByDept" resultType="long">
         SELECT COUNT(*) FROM sys_user WHERE dept_id = #{deptId} AND is_deleted = 0
     </select>
