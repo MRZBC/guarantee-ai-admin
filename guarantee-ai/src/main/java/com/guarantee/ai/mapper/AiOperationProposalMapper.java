@@ -34,6 +34,20 @@ public interface AiOperationProposalMapper {
                                                       @Param("action") String action);
 
     /**
+     * 当前用户在指定会话下的待确认提案（SYS-Q-06b）。
+     *
+     * <p>两个消费方：只读工具 {@code queryMyProposals}（让模型有据可依地引用提案编号）
+     * 与回复结束时的兜底校验（声称有提案却没有 PENDING 时追加纠正）。
+     * <b>刻意不过滤 {@code expires_at}</b>：过期但未清理的 PENDING 仍要能被看见，
+     * 否则"提案确实生成过、只是过期了"会被误判成"从未生成"。</p>
+     *
+     * @param conversationId 为 null 时退化为该用户的全部待确认提案（防御性分支）
+     */
+    List<AiOperationProposal> selectPendingByConversation(@Param("userId") Long userId,
+                                                          @Param("conversationId") Long conversationId,
+                                                          @Param("limit") int limit);
+
+    /**
      * 抢占执行权：仅当状态仍为 PENDING 时置为 EXECUTING。
      *
      * @return affectedRows，必须为 1 才允许继续执行

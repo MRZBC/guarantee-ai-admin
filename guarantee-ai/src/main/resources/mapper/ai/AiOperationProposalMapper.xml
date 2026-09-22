@@ -70,6 +70,28 @@
     </select>
 
     <!--
+      当前用户 + 当前会话的待确认提案（SYS-Q-06b：queryMyProposals 的数据源）。
+
+      ⚠️ 这里**刻意不过滤 expires_at**：调用方需要能看到"已过期但尚未被定时任务扫掉"的
+      PENDING 提案，才能如实回答"提案在，但已经过期"；若在这里过滤掉，
+      模型会得到"没有提案"而回复与事实相反的内容（SYS-Q-11 的空结果语义）。
+
+      conversationId 为 null 时退化为"该用户全部待确认提案"：调用方（工具 / 兜底校验）
+      都从会话上下文拿得到会话号，这个分支只用于防御性场景，不改变主路径语义。
+    -->
+    <select id="selectPendingByConversation" resultType="com.guarantee.ai.entity.AiOperationProposal">
+        SELECT <include refid="cols"/>
+        FROM ai_operation_proposal
+        WHERE user_id = #{userId}
+          AND status = 'PENDING'
+        <if test="conversationId != null">
+            AND conversation_id = #{conversationId}
+        </if>
+        ORDER BY id DESC
+        LIMIT #{limit}
+    </select>
+
+    <!--
       抢占执行权（SYS-C-03 / SYS-NF-06）：
       条件更新保证"同一提案只有一个请求能从 PENDING 走到 EXECUTING"，
       affectedRows=1 才继续，否则说明已被他人（或另一次点击）抢占。

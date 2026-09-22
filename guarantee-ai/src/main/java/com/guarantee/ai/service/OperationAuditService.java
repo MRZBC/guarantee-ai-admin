@@ -48,10 +48,17 @@ public class OperationAuditService {
     public static final int DEFAULT_LIMIT = 50;
     public static final int MAX_LIMIT = 200;
 
-    /** 仅 ADMIN 可见的目标类型（无机构归属，SYS-A-10）。 */
+    /** 仅 ADMIN 可见的目标类型（权限主数据，SYS-A-10）。 */
     private static final List<String> ADMIN_ONLY_TARGET_TYPES = List.of("ROLE", "PERMISSION");
 
-    /** 非 ADMIN 可见的目标类型（有机构归属）。 */
+    /**
+     * 非 ADMIN 可见的目标类型。
+     *
+     * <p>常量名保留历史的 {@code ORG_SCOPED}，但语义已变（PLAN-移除用户与部门的机构归属 §8 Q3）：
+     * 用户、部门都不再挂机构，这组白名单**不再代表"有机构归属"**，
+     * 而是"非超级管理员可以查看的操作审计目标类型"。ROLE/PERMISSION 类
+     * （权限主数据）仍然仅超级管理员可见，该限制继续有效。</p>
+     */
     private static final List<String> ORG_SCOPED_TARGET_TYPES = List.of("USER", "ORG", "DEPT");
 
     private final AiOperationAuditMapper auditMapper;
@@ -114,7 +121,6 @@ public class OperationAuditService {
         audit.setOperatorUserId(operator.userId());
         audit.setOperatorUsername(operator.username());
         audit.setOperatorRealName(operator.realName());
-        audit.setOperatorOrgId(operator.orgId());
         audit.setSource(entry.source());
         audit.setAction(entry.action());
         audit.setTargetType(entry.targetType());
@@ -161,8 +167,14 @@ public class OperationAuditService {
         return audit.getId();
     }
 
-    /** 操作者上下文（助手线程无 CurrentUser，需显式传入）。 */
-    public record OperatorContext(Long userId, String username, String realName, Long orgId) {
+    /**
+     * 操作者上下文（助手线程无 CurrentUser，需显式传入）。
+     *
+     * <p><b>为什么没有 orgId</b>：机构是外部的出函机构、服务于订单，
+     * 不是人的归属维度；用户与部门都不再挂机构，"操作人机构"因此没有数据来源。
+     * 审计的 {@code operator_org_id} 列已随之删除（ddl 见 {@code V5__drop_operator_org_id.sql}）。</p>
+     */
+    public record OperatorContext(Long userId, String username, String realName) {
     }
 
     // ==================================================================
@@ -176,32 +188,33 @@ public class OperationAuditService {
     /**
      * 分页查询审计。
      *
-     * @param admin 是否 ADMIN（决定 ROLE/PERMISSION 类可见性与机构过滤）
-     * @param scope 数据范围（非 ADMIN 时按 {@code operator_org_id} 过滤）
+     * @param admin 是否 ADMIN（决定 ROLE/PERMISSION 类可见性）
+     * @param scope 操作者数据范围。**当前实现不再使用它**：机构已从人/部门上移除，
+     *              审计既没有机构可收敛，也没有别的分级维度；保留入参是为了让
+     *              阶段二（以权限码重建分级范围）有一个明确的落点，
+     *              而不是每个调用方都要再改一次签名。
      */
     @Transactional(readOnly = true)
     public AuditPage query(OperationAuditQuery query, boolean admin, DataScope scope) {
         validateRange(query.getStartDate(), query.getEndDate());
 
         if (admin) {
-            query.setRestrictByOrg(false);
-            query.setVisibleOrgIds(null);
             query.setAllowedTargetTypes(null);
         } else {
-            // SYS-A-10：非 ADMIN 只能看有机构归属的目标类型；
-            // 若显式点名 ROLE/PERMISSION，直接拒绝而不是返回残缺结果
+            // SYS-A-10：非 ADMIN 只能看 USER/ORG/DEPT 类；
+            // 若显式点名 ROLE/PERMISSION，直接拒绝而不是返回残缺结果。
+            //
+            // 注意这里**不再有任何机构收敛代码**：历史实现置 restrictByOrg=true +
+            // visibleOrgIds=null，而 Mapper 的 <when visibleOrgIds 非空> 不成立时
+            // 会走 <otherwise> 注入 `AND 1 = 0`，导致非 ADMIN 查询审计恒为空——
+            // 编译期完全看不出来的静默失效。V5 删列时已把该分支与查询对象字段一并删除，
+            // 所以这条路径不可能再回来。
             String requested = query.getTargetType();
             if (requested != null && ADMIN_ONLY_TARGET_TYPES.contains(requested.toUpperCase())) {
                 throw new BizException(com.guarantee.common.api.ResultCode.FORBIDDEN,
-                        "你没有查看 " + requested + " 类操作审计的权限（该类记录无机构归属，仅超级管理员可见）");
+                        "你没有查看 " + requested + " 类操作审计的权限（该类记录仅超级管理员可见）");
             }
             query.setAllowedTargetTypes(ORG_SCOPED_TARGET_TYPES);
-            // 阶段一（O3）：用户与部门都不再挂机构，数据范围恒为全量，因此**不能再按
-            // operator_org_id 收敛**。若此处仍置 restrictByOrg=true，而 visibleOrgIds
-            // 因"范围不受限"恒为 null，SQL 会走 <otherwise> 注入 `AND 1 = 0`，
-            // 导致非 ADMIN 查询操作审计**恒为空**——这是编译期查不出的静默失效。
-            query.setRestrictByOrg(false);
-            query.setVisibleOrgIds(null);
         }
 
         long total = auditMapper.countByQuery(query);

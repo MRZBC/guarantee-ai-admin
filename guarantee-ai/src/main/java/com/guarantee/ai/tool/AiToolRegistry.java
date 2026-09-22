@@ -52,6 +52,7 @@ public class AiToolRegistry {
                           InsuranceTypeQueryTool insuranceTypeQueryTool,
                           OperationAuditQueryTool operationAuditQueryTool,
                           MyToolCallsQueryTool myToolCallsQueryTool,
+                          MyProposalsQueryTool myProposalsQueryTool,
                           com.guarantee.ai.tool.write.OrgProposalTool orgProposalTool,
                           com.guarantee.ai.tool.write.DepartmentProposalTool departmentProposalTool,
                           com.guarantee.ai.tool.write.UserProposalTool userProposalTool,
@@ -72,6 +73,10 @@ public class AiToolRegistry {
         readTools.add(new ToolDescriptor(operationAuditQueryTool, Permissions.AUDIT_VIEW));
         // 自查工具：不依赖 system:audit:view，是 D-1a 的替代能力
         readTools.add(new ToolDescriptor(myToolCallsQueryTool, Permissions.AI_SYSTEM_QUERY));
+        // 自查工具：本会话的待确认提案。存在的意义是让"有没有待确认提案"从"靠猜"变成"可查"，
+        // 从而消除"正文引用一个库里不存在的提案编号"这类编造（SYS-Q-06b）。
+        // 与 queryMyToolCalls 同权限码，不新增权限码、不改权限矩阵。
+        readTools.add(new ToolDescriptor(myProposalsQueryTool, Permissions.AI_SYSTEM_QUERY));
 
         // ---------------- WRITE 工具（只产出提案，绝不落库，SYS-W-08） ----------------
         // 除各自的域权限外，统一要求 ai:system:write 能力开关（5.5.2 的"与"关系）

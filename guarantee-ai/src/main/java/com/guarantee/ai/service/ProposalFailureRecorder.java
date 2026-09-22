@@ -59,7 +59,7 @@ public class ProposalFailureRecorder {
                             proposal.getTargetId(), proposal.getTargetName(), null, null,
                             "FAILED", message, Set.of()),
                     new OperationAuditService.OperatorContext(context.userId(), context.username(),
-                            context.realName(), context.orgId()),
+                            context.realName()),
                     proposal.getId(), proposal.getConversationId(), proposal.getTraceId());
 
             conversationService.audit(proposal.getConversationId(), context.userId(), "OPERATION_FAILED",

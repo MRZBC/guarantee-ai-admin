@@ -85,6 +85,7 @@ public class AiChatService {
     private final TimeSemanticParser timeSemanticParser;
     private final AiToolRegistry toolRegistry;
     private final ProposalEventPublisher proposalEventPublisher;
+    private final ProposalClaimGuard proposalClaimGuard;
     private final ObjectMapper objectMapper;
     private final String modelName;
 
@@ -95,6 +96,7 @@ public class AiChatService {
                          TimeSemanticParser timeSemanticParser,
                          AiToolRegistry toolRegistry,
                          ProposalEventPublisher proposalEventPublisher,
+                         ProposalClaimGuard proposalClaimGuard,
                          ObjectMapper objectMapper,
                          @Value("${spring.ai.openai.chat.model:unknown}") String modelName) {
         this.chatModel = chatModel;
@@ -104,6 +106,7 @@ public class AiChatService {
         this.timeSemanticParser = timeSemanticParser;
         this.toolRegistry = toolRegistry;
         this.proposalEventPublisher = proposalEventPublisher;
+        this.proposalClaimGuard = proposalClaimGuard;
         this.objectMapper = objectMapper;
         this.modelName = modelName;
     }
@@ -186,9 +189,24 @@ public class AiChatService {
             if (failed.get()) {
                 return Flux.empty();
             }
+            // 收尾校验：正文声称"已生成/存在待确认提案"而会话内没有 PENDING 提案时，
+            // 把纠正文案**追加进本条助手消息**并同步推给前端。
+            // 刻意不调用 conversationService.appendMessage（即 ProposalService
+            // .appendResultMessage 的机制）：那会额外落一条 ASSISTANT 消息，
+            // 用户会看到"编造的原话"与"纠正"分成两个气泡，纠正反而像是无关的一句。
+            // 这里只有一条消息、一次落库，不存在消息重复。
+            Flux<ServerSentEvent<String>> correction = Flux.empty();
+            Optional<String> correctionText = proposalClaimGuard.correctionFor(
+                    userId, conversationId, answer.toString());
+            if (correctionText.isPresent()) {
+                String text = correctionText.get();
+                answer.append(text);
+                correction = Flux.just(event("delta", new ChatStreamEvents.Delta(text)));
+            }
             Long messageId = persistAssistant(persisted, conversationId, userId, answer.toString());
             conversationService.audit(conversationId, userId, "CHAT", "助手回答已完成");
-            return Flux.just(event("done", new ChatStreamEvents.Done(conversationId, messageId)));
+            return correction.concatWith(Flux.just(
+                    event("done", new ChatStreamEvents.Done(conversationId, messageId))));
         })).doFinally(signal -> proposalEventPublisher.unregister(conversationId));
     }
 

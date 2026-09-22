@@ -411,7 +411,6 @@ CREATE TABLE IF NOT EXISTS ai_operation_audit (
     operator_user_id   BIGINT       NULL,
     operator_username  VARCHAR(64)  NULL,
     operator_real_name VARCHAR(64)  NULL,
-    operator_org_id    BIGINT       NULL COMMENT '操作人机构，供数据范围过滤',
     source             VARCHAR(16)  NOT NULL COMMENT 'AI（助手确认）/ WEB（页面直连）',
     action             VARCHAR(32)  NOT NULL,
     target_type        VARCHAR(32)  NOT NULL,

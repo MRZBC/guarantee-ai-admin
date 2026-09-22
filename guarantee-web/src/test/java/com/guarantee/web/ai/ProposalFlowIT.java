@@ -102,7 +102,7 @@ class ProposalFlowIT {
         assertThat(beforeStatus).isEqualTo(1);
 
         ProposalPayload payload = proposalService.create(new ProposalService.ProposalDraft(
-                null, adminId, "admin", "超级管理员", 1L,
+                null, adminId, "admin", "超级管理员",
                 "proposeInsuranceTypeChange", "DISABLE", "INSURANCE_TYPE",
                 insuranceTypeId(insuranceName), insuranceName,
                 com.guarantee.ai.service.ProposalRequest.builder()
@@ -250,9 +250,9 @@ class ProposalFlowIT {
         ProposalPayload created = createDisableInsuranceProposal(adminId, typeId, "投标保函（小额）");
 
         // 模拟"权限已变更"：确认时提供的权限集不含提案所需权限。
-        // 机构已从用户上移除，执行上下文里的 orgId 与 AiController 一致地传 null。
+        // 机构已从用户上移除，ProposalExecutionContext 里也不再有任何机构分量。
         ProposalExecutionContext withoutPermission = new ProposalExecutionContext(
-                adminId, "admin", "超级管理员", null,
+                adminId, "admin", "超级管理员",
                 List.of(Roles.ADMIN), List.of(Permissions.AI_CHAT, Permissions.INSURANCE_VIEW),
                 dataScopeService.resolve(adminId, List.of(Roles.ADMIN)), "trace-it-4");
 
@@ -276,7 +276,7 @@ class ProposalFlowIT {
 
         long analystId = userId("analyst");
         ProposalExecutionContext analyst = new ProposalExecutionContext(
-                analystId, "analyst", "数据分析师", null,
+                analystId, "analyst", "数据分析师",
                 List.of(Roles.ANALYST), List.of(Permissions.AI_CHAT, Permissions.INSURANCE_VIEW),
                 dataScopeService.resolve(analystId, List.of(Roles.ANALYST)), "trace-it-5");
 
@@ -293,12 +293,12 @@ class ProposalFlowIT {
     // ==================================================================
 
     @Test
-    @DisplayName("TEST-16：ANALYST 的可用工具不含 queryOperationAudit，但含 queryMyToolCalls；ADMIN 反之")
+    @DisplayName("TEST-16：ANALYST 的可用工具不含 queryOperationAudit，但含两个自查工具；ADMIN 反之")
     void toolRegistrationShouldBeTrimmedByPermission() {
         List<String> analystPerms = userService.listPermissionCodesByUserId(userId("analyst"));
         List<String> analystTools = toolRegistry.availableToolNames(analystPerms);
         assertThat(analystTools).doesNotContain("queryOperationAudit");
-        assertThat(analystTools).contains("queryMyToolCalls");
+        assertThat(analystTools).contains("queryMyToolCalls", "queryMyProposals");
         assertThat(analystTools).as("ANALYST 不得有任何写工具（SYS-P-12）")
                 .noneMatch(name -> name.startsWith("propose"));
         assertThat(analystPerms).as("ANALYST 不应持有 system:audit:view（D-1a）")
@@ -306,13 +306,23 @@ class ProposalFlowIT {
 
         List<String> adminPerms = userService.listPermissionCodesByUserId(userId("admin"));
         List<String> adminTools = toolRegistry.availableToolNames(adminPerms);
-        assertThat(adminTools).contains("queryOperationAudit", "queryMyToolCalls");
+        assertThat(adminTools).contains("queryOperationAudit", "queryMyToolCalls", "queryMyProposals");
         assertThat(adminTools).contains("proposeUserChange", "proposeOrgChange", "proposeRoleChange");
 
+        // 演示数据里的 user0005 是 OPERATOR：有 ai:system:query（因此两个自查工具都注册）
+        // 但没有 ai:system:write（因此拿不到任何写工具）。
         List<String> viewerPerms = userService.listPermissionCodesByUserId(userId("user0005"));
         List<String> viewerTools = toolRegistry.availableToolNames(viewerPerms);
-        assertThat(viewerTools).as("VIEWER 拿不到任何 propos* 写工具")
+        assertThat(viewerTools).as("未开通 ai:system:write 的账号拿不到任何 propose* 写工具")
                 .noneMatch(name -> name.startsWith("propose"));
+        // 自查工具的注册只取决于 ai:system:query，跟随权限快照而不是角色名。
+        // 写成等价断言而不是写死期望值：演示数据的角色构成变了也不会误报。
+        assertThat(viewerTools.contains("queryMyProposals"))
+                .as("queryMyProposals 的注册必须与 ai:system:query 严格一致")
+                .isEqualTo(viewerPerms.contains(Permissions.AI_SYSTEM_QUERY));
+        assertThat(viewerTools.contains("queryMyToolCalls"))
+                .as("queryMyToolCalls 的注册必须与 ai:system:query 严格一致")
+                .isEqualTo(viewerPerms.contains(Permissions.AI_SYSTEM_QUERY));
     }
 
     @Test
@@ -554,7 +564,7 @@ class ProposalFlowIT {
 
     private ProposalPayload createDisableInsuranceProposal(long adminId, long typeId, String typeName) {
         return proposalService.create(new ProposalService.ProposalDraft(
-                null, adminId, "admin", "超级管理员", 1L,
+                null, adminId, "admin", "超级管理员",
                 "proposeInsuranceTypeChange", "DISABLE", "INSURANCE_TYPE", typeId, typeName,
                 com.guarantee.ai.service.ProposalRequest.builder()
                         .id(typeId).targetName(typeName).userText("停用 " + typeName).build(),
@@ -568,8 +578,8 @@ class ProposalFlowIT {
 
     private ProposalExecutionContext adminContext(String traceId) {
         long adminId = userId("admin");
-        // orgId 传 null：机构已从用户与部门上移除，AiController 也是这么构造的
-        return new ProposalExecutionContext(adminId, "admin", "超级管理员", null,
+        // 不含机构分量：机构已从用户与部门上移除（ProposalExecutionContext 也不再携带）
+        return new ProposalExecutionContext(adminId, "admin", "超级管理员",
                 List.of(Roles.ADMIN), userService.listPermissionCodesByUserId(adminId),
                 dataScopeService.resolve(adminId, List.of(Roles.ADMIN)), traceId);
     }

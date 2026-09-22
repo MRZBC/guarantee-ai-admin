@@ -51,6 +51,7 @@ class AiToolRegistryTest {
                 new OperationAuditQueryTool(mock(com.guarantee.ai.service.OperationAuditService.class),
                         mock(AiDataScopeResolver.class)),
                 new MyToolCallsQueryTool(mock(com.guarantee.ai.service.AiConversationService.class)),
+                new MyProposalsQueryTool(mock(ProposalService.class)),
                 new OrgProposalTool(mock(ProposalService.class), mock(AiDataScopeResolver.class),
                         mock(OrgService.class)),
                 new DepartmentProposalTool(mock(ProposalService.class), mock(AiDataScopeResolver.class),
@@ -91,27 +92,27 @@ class AiToolRegistryTest {
             Permissions.INSURANCE_VIEW, Permissions.PERMISSION_VIEW);
 
     @Test
-    @DisplayName("ADMIN：系统管理查询、全局审计、全部写工具都已注册")
+    @DisplayName("ADMIN：系统管理查询、全局审计、自查工具、全部写工具都已注册")
     void adminShouldGetEverything() {
         List<String> names = registry.availableToolNames(ADMIN_PERMISSIONS);
 
         assertThat(names).contains(
                 "queryOrderSummary", "queryOrg", "queryDepartment", "queryUser", "queryRole",
-                "queryInsuranceType", "queryOperationAudit", "queryMyToolCalls");
+                "queryInsuranceType", "queryOperationAudit", "queryMyToolCalls", "queryMyProposals");
         assertThat(names).contains(
                 "proposeOrgChange", "proposeDepartmentChange", "proposeUserChange",
                 "proposeRoleChange", "proposeInsuranceTypeChange");
     }
 
     @Test
-    @DisplayName("ANALYST：不含 queryOperationAudit，但含 queryMyToolCalls（D-1a / TEST-16）")
+    @DisplayName("ANALYST：不含 queryOperationAudit，但含 queryMyToolCalls / queryMyProposals（D-1a / TEST-16）")
     void analystShouldSeeSelfCheckButNotGlobalAudit() {
         List<String> names = registry.availableToolNames(ANALYST_PERMISSIONS);
 
         assertThat(names).as("ANALYST 的可用工具集中不能出现全局操作审计")
                 .doesNotContain("queryOperationAudit");
-        assertThat(names).as("ANALYST 应能自查自己的工具调用记录")
-                .contains("queryMyToolCalls");
+        assertThat(names).as("ANALYST 应能自查自己的工具调用记录与自己的待确认提案")
+                .contains("queryMyToolCalls", "queryMyProposals");
         assertThat(names).as("只读角色不得看到任何写工具")
                 .noneMatch(name -> name.startsWith("propose"));
         assertThat(names).contains("queryOrg", "queryRole", "queryUser");
@@ -126,11 +127,11 @@ class AiToolRegistryTest {
     }
 
     @Test
-    @DisplayName("VIEWER：没有 ai:system:query，因此不含自查工具，也不含任何写工具")
+    @DisplayName("VIEWER：没有 ai:system:query，因此不含两个自查工具，也不含任何写工具")
     void viewerShouldGetViewToolsOnly() {
         List<String> names = registry.availableToolNames(VIEWER_PERMISSIONS);
 
-        assertThat(names).doesNotContain("queryOperationAudit", "queryMyToolCalls");
+        assertThat(names).doesNotContain("queryOperationAudit", "queryMyToolCalls", "queryMyProposals");
         assertThat(names).doesNotContain("proposeOrgChange", "proposeUserChange");
         assertThat(names).as("VIEWER 仍可查询业务域与有 :view 的系统域").contains("queryOrderSummary", "queryOrg");
     }

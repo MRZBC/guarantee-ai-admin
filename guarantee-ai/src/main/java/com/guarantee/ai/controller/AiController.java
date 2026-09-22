@@ -213,7 +213,7 @@ public class AiController {
         CurrentUser.Principal principal = requirePrincipal();
         DataScope scope = dataScopeService.resolve(principal.userId(), principal.roles());
         return new ProposalExecutionContext(principal.userId(), principal.username(), principal.realName(),
-                null, principal.roles(), principal.permissions(), scope,
+                principal.roles(), principal.permissions(), scope,
                 TraceContext.currentTraceId());
     }
 

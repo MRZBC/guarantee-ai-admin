@@ -41,8 +41,15 @@ class OperationAuditServiceTest {
         service = new OperationAuditService(auditMapper, new ObjectMapper());
     }
 
+    /**
+     * 操作者上下文只有身份三要素。
+     *
+     * <p>机构维度的第 4 个参数已删除（PLAN-移除用户与部门的机构归属 §8 Q3）：
+     * 用户与部门都不再挂机构，审计的 {@code operator_org_id} 列随之删除，
+     * 因此这里也不再有一个恒传 null 的位置参数。</p>
+     */
     private static final OperationAuditService.OperatorContext OPERATOR =
-            new OperationAuditService.OperatorContext(7L, "admin", "超级管理员", 1L);
+            new OperationAuditService.OperatorContext(7L, "admin", "超级管理员");
 
     // ==================================================================
     // 写入前脱敏（D-4 / SYS-A-02a / SYS-A-02b / TEST-15）
@@ -83,7 +90,7 @@ class OperationAuditServiceTest {
 
         // 用 ADMIN 的身份写入
         OperationAuditService.OperatorContext admin =
-                new OperationAuditService.OperatorContext(1L, "admin", "超级管理员", 1L);
+                new OperationAuditService.OperatorContext(1L, "admin", "超级管理员");
         service.record(entry, admin, null, null, "trace-2");
 
         ArgumentCaptor<AiOperationAudit> captor = ArgumentCaptor.forClass(AiOperationAudit.class);
@@ -199,33 +206,34 @@ class OperationAuditServiceTest {
     }
 
     @Test
-    @DisplayName("非 ADMIN 查询审计：阶段一 O3 下不再按机构收敛，但仍然限制目标类型（SYS-A-10）")
+    @DisplayName("非 ADMIN 查询审计：机构维度已删除，可见性只由目标类型白名单收窄（SYS-A-10）")
     void nonAdminUserAuditIsTargetTypeScoped() {
         OperationAuditQuery query = new OperationAuditQuery();
         query.setStartDate(LocalDateTime.now().minusDays(1));
         query.setEndDate(LocalDateTime.now());
         when(auditMapper.countByQuery(any())).thenReturn(0L);
 
-        // 阶段一 O3：resolve() 恒返回全量范围
         DataScope scope = DataScope.all(1L, 1);
         service.query(query, false, scope);
 
-        // 静默失效的回归点：O3 下 scope.unrestricted() 恒为 true → visibleOrgIds 恒为 null。
-        // 若此处仍置 restrictByOrg=true，Mapper 的 <when visibleOrgIds 非空> 不成立就会走
-        // <otherwise> 注入 `AND 1 = 0`，导致非 ADMIN 查询操作审计**恒为 0 条**——
-        // 编译期完全看不出来，只能靠这条断言守住。
         assertThat(scope.unrestricted()).as("阶段一 O3：数据范围恒为全量").isTrue();
-        assertThat(query.isRestrictByOrg()).as("全量范围下不得再按 operator_org_id 收敛").isFalse();
-        assertThat(query.getVisibleOrgIds()).as("机构收敛关闭后不得残留可见机构列表").isNull();
-
-        // 非 ADMIN 仍然有效的限制：只能看有机构归属的目标类型
-        // （显式点名 ROLE/PERMISSION 时的 FORBIDDEN 由 nonAdminShouldBeRejectedForRoleAudit 覆盖）
-        assertThat(query.getAllowedTargetTypes()).as("非 ADMIN 只能看有机构归属的目标类型")
+        assertThat(query.getAllowedTargetTypes()).as("非 ADMIN 只能看用户/机构/部门三类目标")
                 .containsExactlyInAnyOrder("USER", "ORG", "DEPT");
+
+        // V5 已删除 ai_operation_audit.operator_org_id（PLAN §8 Q3），查询对象上的
+        // visibleOrgIds / restrictByOrg 也一并删除：它们唯一的作用就是驱动
+        // `AND operator_org_id IN (...)` 与那个注定静默失效的 `<otherwise>AND 1 = 0`。
+        // 这里用反射守住"不得重新引入"，因为一旦有人把字段加回来，就说明有人打算
+        // 重新按机构收敛审计——而在机构不再是人的归属维度之后，那必然是错的。
+        List<String> queryFields = java.util.Arrays.stream(OperationAuditQuery.class.getDeclaredFields())
+                .map(java.lang.reflect.Field::getName).toList();
+        assertThat(queryFields)
+                .as("机构收敛字段不得回到审计查询对象上（V5 已删列）")
+                .doesNotContain("visibleOrgIds", "restrictByOrg");
     }
 
     @Test
-    @DisplayName("ADMIN 查询不受机构限制，也不限制目标类型")
+    @DisplayName("ADMIN 查询不限制目标类型")
     void adminQueryIsUnrestricted() {
         OperationAuditQuery query = new OperationAuditQuery();
         query.setStartDate(LocalDateTime.now().minusDays(1));
@@ -234,9 +242,21 @@ class OperationAuditServiceTest {
 
         service.query(query, true, DataScope.all(1L, 1));
 
-        assertThat(query.isRestrictByOrg()).isFalse();
-        assertThat(query.getVisibleOrgIds()).isNull();
         assertThat(query.getAllowedTargetTypes()).isNull();
+    }
+
+    @Test
+    @DisplayName("审计实体不再有 operatorOrgId：写入的映射里不得出现机构（V5 已删列）")
+    void auditEntityMustNotCarryOperatorOrg() {
+        List<String> entityFields = java.util.Arrays.stream(AiOperationAudit.class.getDeclaredFields())
+                .map(java.lang.reflect.Field::getName).toList();
+        assertThat(entityFields).as("operator_org_id 已删除，实体不得再映射它")
+                .doesNotContain("operatorOrgId");
+
+        // 写入路径也一并守住：OperatorContext 不得有第 4 个（机构）分量
+        assertThat(OperationAuditService.OperatorContext.class.getRecordComponents())
+                .as("OperatorContext 只保留身份三要素")
+                .hasSize(3);
     }
 
     // ==================================================================

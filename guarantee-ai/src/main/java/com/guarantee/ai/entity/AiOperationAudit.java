@@ -16,6 +16,12 @@ import java.time.LocalDateTime;
  *
  * <p><b>保留期（D-5）</b>：本表按月 RANGE 分区，在线 24 个月 + 归档 36 个月；
  * 主键是复合的 {@code (id, operated_at)}——MySQL 要求分区键出现在每个唯一键中。</p>
+ *
+ * <p><b>为什么没有 {@code operator_org_id}</b>（PLAN-移除用户与部门的机构归属 §8 Q3）：
+ * 机构是**外部的出函机构，服务于订单**，不是人的归属维度——用户与部门都不再挂机构，
+ * "操作人机构"因此没有任何数据来源（阶段一该列已恒为 {@code null}）。
+ * 留一列恒空的"机构"只会在读审计的人心里造出一个并不存在的数据范围概念，
+ * 故随本次改动一并删除（DDL 见 {@code V5__drop_operator_org_id.sql}）。</p>
  */
 @Data
 public class AiOperationAudit {
@@ -26,8 +32,6 @@ public class AiOperationAudit {
     private Long operatorUserId;
     private String operatorUsername;
     private String operatorRealName;
-    /** 操作人机构，供数据范围过滤（SYS-A-10）。 */
-    private Long operatorOrgId;
     /** AI（助手确认）/ WEB（页面直连）。 */
     private String source;
     private String action;

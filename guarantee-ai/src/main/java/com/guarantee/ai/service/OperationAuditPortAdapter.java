@@ -67,10 +67,10 @@ public class OperationAuditPortAdapter implements OperationAuditPort {
                 entry.errorMessage(),
                 entry.changedFields() == null ? java.util.Set.of() : entry.changedFields());
 
-        // 机构不再是人/部门的归属属性（机构服务于订单）：审计的 operator_org_id 暂落空，
-        // 该列去留见 PLAN-移除用户与部门的机构归属 §8 Q3
+        // 机构不再是人/部门的归属属性（机构服务于订单）：审计里不再有"操作人机构"这个字段，
+        // 对应的 operator_org_id 列已删除（ddl 见 V5__drop_operator_org_id.sql）
         OperationAuditService.OperatorContext operator = new OperationAuditService.OperatorContext(
-                principal.userId(), principal.username(), principal.realName(), null);
+                principal.userId(), principal.username(), principal.realName());
 
         Long auditId = auditService.record(auditEntry, operator, null, null,
                 TraceContext.currentTraceId());

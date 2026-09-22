@@ -96,7 +96,6 @@ public class ProposalService {
             Long userId,
             String username,
             String realName,
-            Long orgId,
             String toolName,
             String action,
             String targetType,
@@ -166,7 +165,7 @@ public class ProposalService {
         auditService.record(
                 OperationAuditService.AuditEntry.of("AI", "PROPOSAL_CREATED", draft.targetType(),
                         draft.targetId(), draft.targetName(), null, null, "SUCCESS"),
-                operator(draft.userId(), draft.username(), draft.realName(), draft.orgId()),
+                operator(draft.userId(), draft.username(), draft.realName()),
                 entity.getId(), draft.conversationId(), draft.traceId());
         conversationService.audit(draft.conversationId(), draft.userId(), "PROPOSAL_CREATED",
                 "proposalNo=" + entity.getProposalNo() + " tool=" + draft.toolName()
@@ -193,6 +192,29 @@ public class ProposalService {
         return proposalMapper.selectByUserId(userId, status, effective).stream()
                 .map(entity -> toPayload(entity, readPreview(entity), null))
                 .toList();
+    }
+
+    /**
+     * 当前用户在指定会话下的**待确认提案**（SYS-Q-06b）。
+     *
+     * <p><b>为什么必须存在这个只读入口</b>：模型此前没有任何手段知道"到底有没有待确认提案"，
+     * 于是只能猜——真机证据显示它会照抄上一轮真实提案的编号并改尾数，
+     * 同时正文写"数据来源：proposeInsuranceTypeChange(...)"而该轮一次写工具调用都没有。
+     * 把它做成 Service 上的唯一读入口，是为了让工具与兜底校验走**同一条数据路径**，
+     * 不会出现"工具说有、校验说没有"的自相矛盾。</p>
+     *
+     * <p>刻意不过滤 {@code expires_at}：过期但尚未被清扫的 PENDING 也要返回，
+     * 调用方据此如实说明"提案已过期"，而不是谎称没有提案。</p>
+     *
+     * @param conversationId 为 null 时退化为该用户的全部待确认提案
+     */
+    @Transactional(readOnly = true)
+    public List<AiOperationProposal> listPendingInConversation(Long userId, Long conversationId, int limit) {
+        if (userId == null) {
+            return List.of();
+        }
+        int effective = limit <= 0 ? LIST_LIMIT : Math.min(limit, LIST_LIMIT);
+        return proposalMapper.selectPendingByConversation(userId, conversationId, effective);
     }
 
     /** 提案详情（SYS-C-14：刷新页面后恢复确认卡）。 */
@@ -335,7 +357,7 @@ public class ProposalService {
                 new OperationAuditService.AuditEntry("AI", proposal.getAction(), proposal.getTargetType(),
                         proposal.getTargetId(), proposal.getTargetName(), null, null,
                         "REJECTED", reason, Set.of()),
-                operator(userId, null, null, null), proposalId, proposal.getConversationId(),
+                operator(userId, null, null), proposalId, proposal.getConversationId(),
                 proposal.getTraceId());
         proposalMapper.updateResult(proposalId, "REJECTED",
                 reason == null || reason.isBlank() ? "用户拒绝了该变更" : "用户拒绝：" + reason,
@@ -409,7 +431,7 @@ public class ProposalService {
                 new OperationAuditService.AuditEntry("AI", proposal.getAction(), proposal.getTargetType(),
                         proposal.getTargetId(), proposal.getTargetName(), null, null, "EXPIRED",
                         "提案超时未确认（" + VALID_MINUTES + " 分钟）", Set.of()),
-                operator(proposal.getUserId(), null, null, null), proposal.getId(),
+                operator(proposal.getUserId(), null, null), proposal.getId(),
                 proposal.getConversationId(), proposal.getTraceId());
         proposalMapper.updateResult(proposal.getId(), "EXPIRED",
                 "提案已过期（有效期 " + VALID_MINUTES + " 分钟）", null, LocalDateTime.now(), auditId);
@@ -503,13 +525,19 @@ public class ProposalService {
                 proposal.getTargetName(), result.before(), result.after(),
                 result.success() ? "SUCCESS" : "FAILED", result.errorMessage(), changed);
         return auditService.record(entry,
-                operator(context.userId(), context.username(), context.realName(), context.orgId()),
+                operator(context.userId(), context.username(), context.realName()),
                 proposal.getId(), proposal.getConversationId(), proposal.getTraceId());
     }
 
+    /**
+     * 构造审计的操作者上下文。
+     *
+     * <p>只有身份三要素，没有机构：机构服务于订单、不是人的归属维度，
+     * 审计的 {@code operator_org_id} 列已随 V5 删除。</p>
+     */
     private static OperationAuditService.OperatorContext operator(Long userId, String username,
-                                                                  String realName, Long orgId) {
-        return new OperationAuditService.OperatorContext(userId, username, realName, orgId);
+                                                                  String realName) {
+        return new OperationAuditService.OperatorContext(userId, username, realName);
     }
 
     /** 提案请求落库前把敏感值替换为占位符（SYS-A-09）。 */

@@ -50,6 +50,11 @@
 >    → `GET /api/system/roles?orgId=N` 会抛 `Unknown column 'u3.org_id'`。**已删**。
 > 2. `OperationAuditService.query()` 非 ADMIN 分支 `restrictByOrg=true` + `visibleOrgIds` 恒 `null`
 >    → mapper 走 `<otherwise>` 注入 `AND 1 = 0`，**非 ADMIN 查询操作审计恒为空**。**已改为 `false/null`**。
+>    后续（§8 Q3 决策落地）已把 `ai_operation_audit.operator_org_id` 整列删除
+>    （`V5__drop_operator_org_id.sql`），该过渡分支与 `OperationAuditQuery` 的
+>    `restrictByOrg`/`visibleOrgIds` 字段、`OperatorContext.orgId`、`ProposalExecutionContext.orgId`
+>    一并**整体删除**——机构不再是人的归属维度后，这几处没有任何数据来源，
+>    留一个恒为 false / null 的开关只会让后来人以为还能按机构收敛。
 > 3. `prompts/business-assistant.st` 仍在告诉模型"数据范围按机构收敛：省级用户只见本省"、
 >    "部门归属某个机构（`org_id`）"、"用户：所属机构与部门"——**均已成为假话**。**已改写**。
 
@@ -380,7 +385,7 @@ deptId = null;
 | **中** | 前端 `Departments.vue` 30 处 | 单文件改动最大，且涉及树结构（机构根节点 → 纯部门树） |
 | **中** | 历史脚本引用已删列 | §4.6；漏改会在下次有人执行时炸 |
 | **低** | 逻辑删除拦截器污染 JOIN | 部门不再 JOIN 机构后，此风险随之消失（v2 中的该风险项**本次被消除**） |
-| **低** | 审计快照 | `ai_operation_audit.operator_org_id` 需定去留（§8 Q3） |
+| **低** | 审计快照 | ~~`ai_operation_audit.operator_org_id` 需定去留（§8 Q3）~~ **已定：删列**（见 C8 与 `V5__drop_operator_org_id.sql`） |
 
 ---
 
@@ -397,11 +402,11 @@ deptId = null;
 | C5 | `clearDept` / AI 的「（清空）部门」能力整体移除 |
 | C6 | 数据范围采用 **O3（显式全量）**：`DataScopeService` 中 `orgId == null` 的语义由「仅可见自己」改为「全量」。理由：与当前实际行为等价（今天所有人挂总部 = 全量），阶段一不改变任何人的可见数据 |
 | C7 | 实施**拆两阶段**：阶段一 = 概念清理 + O3 行为等价（本次范围）；阶段二 = 授权模型（O1 权限码 / O2 换锚点），另行排期 |
+| C8 | **Q3 已决策（用户决定）**：`ai_operation_audit.operator_org_id` **删除**。机构服务于订单、不是人的归属维度，"操作人机构"没有任何数据来源（阶段一该列已恒为 null）；留一列恒空的"机构"会让读审计的人以为存在一个可用的机构数据范围。落地：实体 / Mapper XML / `OperationAuditQuery`（`restrictByOrg`、`visibleOrgIds`）/ `OperationAuditService`（`OperatorContext.orgId`）/ `OperationAuditPortAdapter` / `ProposalService.ProposalDraft.orgId` / `ProposalExecutionContext.orgId` / `AiController` / `db/schema.sql` 全部去掉该列与相关参数，DDL 见 `guarantee-web/src/main/resources/db/migration/V5__drop_operator_org_id.sql`。**前置校验（fail-fast）**：① 审计表必须存在；② 最新一条审计行的 `operator_org_id` 必须为 `NULL`（否则说明旧版后端仍在写机构值，应先重启）；③ 历史非 NULL 值需显式置 `@v5_ack_history_loss := 1` 才允许丢弃（本库实测 601 行有历史值，全部由旧构建写入）。幂等：重复执行全部跳过 |
 
 **待确认**
 
 | # | 问题 | 我的建议 |
 |---|---|---|
-| **Q3** | `ai_operation_audit.operator_org_id` 去留？ | 这是审计快照。若审计里也不该出现机构，删列；否则保留（写死 `null` 或去掉赋值） |
 | **Q4** | `Orgs.vue` 的「部门数」「用户数」列怎么处理？ | 语义失效，建议直接去掉这两列（机构页只保留机构自身属性 + 订单关联） |
 | **Q5** | 历史上"分级数据范围"的测试用例是否直接删除？ | `DataScopeIntegrationTest` 的分级用例已无法成立，建议删除并在文档里记录"分级范围已废弃"的原因 |

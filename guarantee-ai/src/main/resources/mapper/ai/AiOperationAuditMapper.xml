@@ -4,7 +4,7 @@
 <mapper namespace="com.guarantee.ai.mapper.AiOperationAuditMapper">
 
     <sql id="cols">
-        id, operated_at, operator_user_id, operator_username, operator_real_name, operator_org_id,
+        id, operated_at, operator_user_id, operator_username, operator_real_name,
         source, action, target_type, target_id, target_name, before_value, after_value,
         changed_fields, truncated, result, error_message, proposal_id, conversation_id, trace_id
     </sql>
@@ -52,34 +52,22 @@
                 </foreach>
             </if>
             <!--
-              机构范围（SYS-A-10）：仅对 USER/ORG/DEPT 类目标成立。
-              ROLE/PERMISSION/INSURANCE_TYPE 类记录没有机构归属，无法用 org_id 收敛，
-              因此由 Service 层直接禁止非 ADMIN 查询这些类型（而不是在这里"过滤成空"，
-              否则结果残缺且会误导）。
+              这里**没有**机构范围条件：机构不再是人/部门的归属维度（V5 已删除
+              operator_org_id 列），非 ADMIN 的可见性只由上面的目标类型白名单收窄。
+              历史实现曾按 operator_org_id IN (...) 收敛，并在列表为空时注入 `AND 1 = 0`；
+              那是一段注定静默失效的过渡代码（O3 下可见机构列表恒为 null，
+              结果是非 ADMIN 查询审计恒为空），已随列一起删除。
             -->
-            <if test="q.restrictByOrg">
-                <choose>
-                    <when test="q.visibleOrgIds != null and q.visibleOrgIds.size() > 0">
-                        AND operator_org_id IN
-                        <foreach collection="q.visibleOrgIds" item="orgId" open="(" separator="," close=")">
-                            #{orgId}
-                        </foreach>
-                    </when>
-                    <otherwise>
-                        AND 1 = 0
-                    </otherwise>
-                </choose>
-            </if>
         </where>
     </sql>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO ai_operation_audit
-            (operated_at, operator_user_id, operator_username, operator_real_name, operator_org_id,
+            (operated_at, operator_user_id, operator_username, operator_real_name,
              source, action, target_type, target_id, target_name, before_value, after_value,
              changed_fields, truncated, result, error_message, proposal_id, conversation_id, trace_id)
         VALUES
-            (#{operatedAt}, #{operatorUserId}, #{operatorUsername}, #{operatorRealName}, #{operatorOrgId},
+            (#{operatedAt}, #{operatorUserId}, #{operatorUsername}, #{operatorRealName},
              #{source}, #{action}, #{targetType}, #{targetId}, #{targetName}, #{beforeValue}, #{afterValue},
              #{changedFields}, #{truncated}, #{result}, #{errorMessage}, #{proposalId}, #{conversationId}, #{traceId})
     </insert>
