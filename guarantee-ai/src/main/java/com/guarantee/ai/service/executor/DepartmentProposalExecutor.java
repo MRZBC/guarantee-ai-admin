@@ -4,6 +4,7 @@ import com.guarantee.ai.entity.AiOperationProposal;
 import com.guarantee.ai.service.ProposalExecutionContext;
 import com.guarantee.ai.service.ProposalExecutionResult;
 import com.guarantee.ai.service.ProposalExecutor;
+import com.guarantee.ai.service.ProposalPreview;
 import com.guarantee.ai.service.ProposalRequest;
 import com.guarantee.system.dto.DepartmentDto;
 import com.guarantee.system.entity.SysDepartment;
@@ -90,7 +91,8 @@ public class DepartmentProposalExecutor implements ProposalExecutor {
         String word = target == 1 ? "启用" : "停用";
         return ProposalExecutionResult.ok(
                 "部门「" + updated.getDeptName() + "」已" + word, before, after,
-                List.of(), List.of("影响面：" + departmentService.stopImpact(existing)));
+                List.of(), List.of("影响面："
+                        + ProposalPreview.formatImpact(departmentService.stopImpact(existing))));
     }
 
     /**

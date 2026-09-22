@@ -48,7 +48,9 @@ public class DepartmentProposalTool extends BaseProposalTool {
                       删除=从默认列表移除、需要显式恢复才会重新出现。
                     重要规则：
                     - deptCode 不可修改（改编码请停用后新建）。
-                    - 停用时若部门下仍有启用用户，系统会拒绝。
+                    - 停用时若部门下仍有**下级部门**或**启用中的用户**，系统会拒绝
+                      （该项不能有子项、也不能有关联的正常用户）；此时改用停用同样不行，
+                      应建议"先处理下级部门 / 关联用户"。
                     - 删除比停用**更严格**：部门下存在未删除的用户或未删除的下级部门时会被拒绝，
                       失败信息会带具体数量。遇此情况请如实转述，并建议"先处理引用的数据，或改用停用"。
                     - 删除属**危险动作**，确认卡上有二次确认；删除**不改变启用/停用状态**，
@@ -123,16 +125,20 @@ public class DepartmentProposalTool extends BaseProposalTool {
                 .build();
 
         try {
-            ProposalPreview preview = buildPreview(normalized, targetId, request, scope);
+            PreviewResult built = buildPreview(normalized, targetId, request, scope);
+            // 模型只传 id 时 targetName 一直是 null，必须用 buildPreview 已加载的实体名回填，
+            // 否则落库的 target_name 为 NULL，确认卡上就丢了目标名
+            String resolvedTargetName = resolveTargetName(targetName, built.targetName());
             Long proposalTargetId = "CREATE".equals(normalized) ? null : targetId;
             return submit(toolContext, draft(toolContext, "proposeDepartmentChange", normalized,
-                    "DEPT", proposalTargetId, targetName, request, preview, required, userText, null));
+                    "DEPT", proposalTargetId, resolvedTargetName, request, built.preview(), required,
+                    userText, null));
         } catch (BizException ex) {
             return WriteToolResult.failed("无法生成提案：" + ex.getMessage());
         }
     }
 
-    private ProposalPreview buildPreview(String action, Long targetId, ProposalRequest request,
+    private PreviewResult buildPreview(String action, Long targetId, ProposalRequest request,
                                          com.guarantee.system.scope.DataScope scope) {
         if ("CREATE".equals(action)) {
             DepartmentDto.CreateRequest dto = new DepartmentDto.CreateRequest();
@@ -146,11 +152,15 @@ public class DepartmentProposalTool extends BaseProposalTool {
                     ProposalPreview.ChangeItem.created("deptName", "部门名称", request.deptName()),
                     ProposalPreview.ChangeItem.created("parentId", "上级部门",
                             String.valueOf(dto.getParentId() == null ? 0L : dto.getParentId())));
-            return ProposalPreview.of("新增部门：" + request.deptName(),
-                    changes, List.of(), List.of(), false);
+            // CREATE 没有既有实体可回填，名字仍取模型传入的 deptName（语义不变）
+            return new PreviewResult(ProposalPreview.of("新增部门：" + request.deptName(),
+                    changes, List.of(), List.of(), false), null);
         }
 
         SysDepartment existing = departmentService.requireVisible(targetId, scope);
+        // 目标名回填：模型常只传 id 不传名字，这里直接用上面已加载的实体取名（不再查库），
+        // 否则 target_name 落 NULL，确认卡上「— 目标名」这一整段会消失
+        String existingName = existing == null ? null : existing.getDeptName();
         if ("UPDATE".equals(action)) {
             DepartmentDto.UpdateRequest dto = new DepartmentDto.UpdateRequest();
             dto.setDeptName(request.deptName());
@@ -164,8 +174,8 @@ public class DepartmentProposalTool extends BaseProposalTool {
             if (changes.isEmpty()) {
                 throw new BizException("没有任何字段发生变化，无需提交提案");
             }
-            return ProposalPreview.of("修改部门：" + existing.getDeptName(), changes,
-                    List.of(), List.of(), false);
+            return new PreviewResult(ProposalPreview.of("修改部门：" + existing.getDeptName(), changes,
+                    List.of(), List.of(), false), existingName);
         }
 
         // DELETE（逻辑删除，LD-01 / 设计 §7.4）：被引用即拒绝，比停用更严格（§6.2）
@@ -178,12 +188,13 @@ public class DepartmentProposalTool extends BaseProposalTool {
             List<ProposalPreview.ChangeItem> changes = List.of(new ProposalPreview.ChangeItem(
                     "isDeleted", "是否已删除", "否", "是"));
             List<String> impact = new ArrayList<>();
-            impact.add("影响面：" + departmentService.deleteImpact(existing));
-            return ProposalPreview.of("删除部门：" + existing.getDeptName(), changes, impact,
+            impact.add("影响面：" + ProposalPreview.formatImpact(departmentService.deleteImpact(existing)));
+            return new PreviewResult(ProposalPreview.of("删除部门：" + existing.getDeptName(), changes,
+                    impact,
                     List.of("删除后该部门**默认不再出现在列表中**，可通过「显示已删除」恢复",
                             "删除**不改变启用/停用状态**，恢复后回到删除前的状态",
                             "删除属危险动作，需二次确认"),
-                    true);
+                    true), existingName);
         }
 
         int targetStatus = "ENABLE".equals(action) ? 1 : 0;
@@ -195,11 +206,12 @@ public class DepartmentProposalTool extends BaseProposalTool {
         }
         List<ProposalPreview.ChangeItem> changes = List.of(new ProposalPreview.ChangeItem(
                 "status", "状态", statusName(existing.getStatus()), statusName(targetStatus)));
-        return ProposalPreview.of((targetStatus == 0 ? "停用部门：" : "启用部门：") + existing.getDeptName(),
+        return new PreviewResult(ProposalPreview.of(
+                (targetStatus == 0 ? "停用部门：" : "启用部门：") + existing.getDeptName(),
                 changes,
-                List.of("影响面：" + departmentService.stopImpact(existing)),
+                List.of("影响面：" + ProposalPreview.formatImpact(departmentService.stopImpact(existing))),
                 targetStatus == 0 ? List.of("停用后该部门不再出现在用户归属的可选项中") : List.of(),
-                targetStatus == 0);
+                targetStatus == 0), existingName);
     }
 
     private static Set<String> requiredPermissions(String action) {

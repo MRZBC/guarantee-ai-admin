@@ -133,17 +133,20 @@ public class InsuranceTypeProposalTool extends BaseProposalTool {
                 .build();
 
         try {
-            ProposalPreview preview = buildPreview(normalized, targetId, request);
+            PreviewResult built = buildPreview(normalized, targetId, request);
+            // 模型只传 id 时 targetName 一直是 null，必须用 buildPreview 已加载的实体名回填，
+            // 否则落库的 target_name 为 NULL，确认卡上就丢了目标名
+            String resolvedTargetName = resolveTargetName(targetName, built.targetName());
             Long proposalTargetId = "CREATE".equals(normalized) ? null : targetId;
             return submit(toolContext, draft(toolContext, "proposeInsuranceTypeChange", normalized,
-                    "INSURANCE_TYPE", proposalTargetId, targetName, request, preview, required,
-                    userText, null));
+                    "INSURANCE_TYPE", proposalTargetId, resolvedTargetName, request, built.preview(),
+                    required, userText, null));
         } catch (BizException ex) {
             return WriteToolResult.failed("无法生成提案：" + ex.getMessage());
         }
     }
 
-    private ProposalPreview buildPreview(String action, Long targetId, ProposalRequest request) {
+    private PreviewResult buildPreview(String action, Long targetId, ProposalRequest request) {
         if ("CREATE".equals(action)) {
             InsuranceTypeDto.CreateRequest dto = new InsuranceTypeDto.CreateRequest();
             dto.setTypeCode(request.typeCode());
@@ -164,11 +167,15 @@ public class InsuranceTypeProposalTool extends BaseProposalTool {
                             plain(request.minAmount())),
                     ProposalPreview.ChangeItem.created("maxAmount", "最大保额",
                             plain(request.maxAmount())));
-            return ProposalPreview.of("新增险种：" + request.typeName(), changes,
-                    List.of(), List.of("费率将影响后续新订单的保费计算，请核对口径"), false);
+            // CREATE 没有既有实体可回填，名字仍取模型传入的 typeName（语义不变）
+            return new PreviewResult(ProposalPreview.of("新增险种：" + request.typeName(), changes,
+                    List.of(), List.of("费率将影响后续新订单的保费计算，请核对口径"), false), null);
         }
 
         InsuranceType existing = insuranceTypeService.getEntityById(targetId);
+        // 目标名回填：模型常只传 id 不传名字，这里直接用上面已加载的实体取名（不再查库），
+        // 否则 target_name 落 NULL，确认卡上「— 目标名」这一整段会消失
+        String existingName = existing == null ? null : existing.getTypeName();
         if ("UPDATE".equals(action)) {
             InsuranceTypeDto.UpdateRequest dto = new InsuranceTypeDto.UpdateRequest();
             dto.setTypeName(request.typeName());
@@ -202,8 +209,8 @@ public class InsuranceTypeProposalTool extends BaseProposalTool {
             if (request.baseRate() != null) {
                 warnings.add("费率变更只影响变更之后的新订单，历史订单保费不变");
             }
-            return ProposalPreview.of("修改险种：" + existing.getTypeName(), changes,
-                    List.of(), warnings, false);
+            return new PreviewResult(ProposalPreview.of("修改险种：" + existing.getTypeName(), changes,
+                    List.of(), warnings, false), existingName);
         }
 
         // DELETE（逻辑删除，LD-01 / 设计 §7.4）
@@ -217,23 +224,27 @@ public class InsuranceTypeProposalTool extends BaseProposalTool {
             List<ProposalPreview.ChangeItem> changes = List.of(new ProposalPreview.ChangeItem(
                     "isDeleted", "是否已删除", "否", "是"));
             List<String> impact = new ArrayList<>();
-            impact.add("影响面：" + insuranceTypeService.deleteImpact(existing));
-            return ProposalPreview.of("删除险种：" + existing.getTypeName(), changes, impact,
+            impact.add("影响面："
+                    + ProposalPreview.formatImpact(insuranceTypeService.deleteImpact(existing)));
+            return new PreviewResult(ProposalPreview.of("删除险种：" + existing.getTypeName(), changes,
+                    impact,
                     List.of("删除后该险种**默认不再出现在列表中**，可通过「显示已删除」恢复",
                             "删除**不改变启用/停用状态**，恢复后回到删除前的状态",
                             "与停用不同：被订单引用时删除会被拒绝",
                             "删除属危险动作，需二次确认"),
-                    true);
+                    true), existingName);
         }
 
         int targetStatus = "ENABLE".equals(action) ? 1 : 0;
         List<ProposalPreview.ChangeItem> changes = List.of(new ProposalPreview.ChangeItem(
                 "status", "状态", statusName(existing.getStatus()), statusName(targetStatus)));
-        List<String> impact = List.of("影响面：" + insuranceTypeService.stopImpact(existing));
-        return ProposalPreview.of((targetStatus == 0 ? "停用险种：" : "启用险种：") + existing.getTypeName(),
+        List<String> impact = List.of("影响面："
+                + ProposalPreview.formatImpact(insuranceTypeService.stopImpact(existing)));
+        return new PreviewResult(ProposalPreview.of(
+                (targetStatus == 0 ? "停用险种：" : "启用险种：") + existing.getTypeName(),
                 changes, impact,
                 targetStatus == 0 ? List.of("停用后该险种不再出现在新订单的可选列表中") : List.of(),
-                targetStatus == 0);
+                targetStatus == 0), existingName);
     }
 
     private static String percent(BigDecimal rate) {

@@ -165,7 +165,8 @@ public class RoleProposalTool extends BaseProposalTool {
             roleService.validateAssignPermissions(request.roleCode(), targetCodes);
             List<ProposalPreview.ChangeItem> changes = List.of(new ProposalPreview.ChangeItem(
                     "permCodes", "权限", String.join(", ", currentCodes), String.join(", ", targetCodes)));
-            List<String> impact = List.of("影响面：" + roleService.assignPermissionsImpact(target, targetCodes));
+            List<String> impact = List.of("影响面："
+                    + ProposalPreview.formatImpact(roleService.assignPermissionsImpact(target, targetCodes)));
             List<String> warnings = new ArrayList<>();
             warnings.add("授权会立即改变该角色下所有用户的权限");
             if (targetCodes.contains(Permissions.AUDIT_VIEW)) {
@@ -187,7 +188,7 @@ public class RoleProposalTool extends BaseProposalTool {
             List<ProposalPreview.ChangeItem> changes = List.of(new ProposalPreview.ChangeItem(
                     "isDeleted", "是否已删除", "否", "是"));
             List<String> impact = new ArrayList<>();
-            impact.add("影响面：" + roleService.deleteImpact(target));
+            impact.add("影响面：" + ProposalPreview.formatImpact(roleService.deleteImpact(target)));
             return ProposalPreview.of("删除角色：" + target.getRoleName(), changes, impact,
                     List.of("删除后该角色**默认不再出现在列表中**，可通过「显示已删除」恢复",
                             "删除**不改变启用/停用状态**，恢复后回到删除前的状态",

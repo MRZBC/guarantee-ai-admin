@@ -70,12 +70,16 @@ public class ProposalEventPublisher {
         }
         Sinks.Many<ChatStreamEvents.Proposal> sink = proposalSinks.get(conversationId);
         if (sink == null) {
-            log.debug("会话 {} 没有活跃的提案通道，提案 {} 仅落库", conversationId, payload.proposalId());
+            // 必须是 warn：这条日志是"模型正文说已生成提案、但用户看不到确认卡"的唯一线索。
+            // debug 级别默认不输出，出问题时会被完全淹没（真机排查踩过）。
+            log.warn("会话 {} 没有活跃的提案通道，提案 {} 仅落库，本轮前端不会出现确认卡"
+                    + "（依赖进入会话 / 本轮结束后的待确认列表兜底）", conversationId, payload.proposalId());
             return false;
         }
         Sinks.EmitResult result = sink.tryEmitNext(payload);
         if (result.isFailure()) {
-            log.debug("推送提案事件失败（{}），提案 {} 仅落库", result, payload.proposalId());
+            log.warn("推送提案事件失败（{}），提案 {} 仅落库，本轮前端不会出现确认卡",
+                    result, payload.proposalId());
             return false;
         }
         return true;

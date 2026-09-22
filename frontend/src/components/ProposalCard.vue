@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import type { ProposalPayload, ProposalStatus } from '@/types/ai'
 
 /**
@@ -125,16 +126,31 @@ function stopTimer(): void {
   }
 }
 
-function handleConfirm(): void {
+async function handleConfirm(): Promise<void> {
   if (buttonsDisabled.value) return
   if (isDangerous.value) {
-    // 危险动作二次确认（SYS-C-12 / 5.3.3 风险提示）
-    const ok = window.confirm(
-      `这是危险操作：${props.proposal.actionName} ${props.proposal.targetTypeName}` +
-        `${props.proposal.targetName ? `「${props.proposal.targetName}」` : ''}。\n` +
-        `影响面：${props.proposal.impact.join('；') || '未提供'}\n\n确认执行吗？`
-    )
-    if (!ok) return
+    // 危险动作二次确认（SYS-C-12 / 5.3.3 风险提示）。
+    //
+    // 必须用 Element Plus 弹窗，与「系统配置」各页面手动操作的确认框保持同一样式；
+    // window.confirm 是浏览器原生框——标题会显示成域名（如 "localhost:5273 显示"）、
+    // 按钮文案跟随系统语言（"确定/取消"），与站内风格完全割裂。
+    //
+    // 注意：impact 各项**已由后端带上「影响面：」前缀**（卡片正文就是直接渲染它们），
+    // 所以这里不能再拼一次，否则会出现「影响面：影响面：...」。
+    const impactText = props.proposal.impact.join('；') || '影响面：未提供'
+    try {
+      await ElMessageBox.confirm(
+        `这是危险操作：${props.proposal.actionName} ${props.proposal.targetTypeName}` +
+          `${props.proposal.targetName ? `「${props.proposal.targetName}」` : ''}。` +
+          `${impactText}。确认执行吗？`,
+        // 标题与「系统配置」手动操作的确认框同构：`${动作}${对象}`，如「停用险种」「分配权限角色」
+        `${props.proposal.actionName ?? ''}${props.proposal.targetTypeName ?? ''}` || '确认执行',
+        { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' }
+      )
+    } catch {
+      // 用户取消：保持卡片待确认状态，不发执行事件
+      return
+    }
   }
   executing.value = true
   emit('confirm', props.proposal.proposalId)

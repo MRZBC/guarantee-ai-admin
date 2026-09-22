@@ -88,6 +88,33 @@ public abstract class BaseProposalTool {
     public record TargetCandidate(Long id, String code, String name, String extra) {
     }
 
+    /**
+     * 预览构建结果：除预览本身，还顺路带回「目标展示名」。
+     *
+     * <p><b>为什么名字要跟预览一起返回</b>：{@code buildPreview} 本来就按目标 id 加载了实体
+     * （UPDATE / DELETE / 停用启用的原值都取自它）。让实体名从同一个方法里带出来，
+     * 既避免了"为了取名字再查一次库"，又让调用方一定能把实体名回填进
+     * {@code ai_operation_proposal.target_name}。</p>
+     */
+    protected record PreviewResult(ProposalPreview preview, String targetName) {
+    }
+
+    /**
+     * 目标展示名回填：目标 id 已确定、但调用方给的名字为空/空白时，用实体名兜底。
+     *
+     * <p><b>为什么必须回填</b>：模型常常只传 {@code id}、不传名字，此时原来的
+     * {@code targetName} 会一路保持 {@code null} 落库（真机数据确认过：同一目标的
+     * ENABLE 有名字、DISABLE 为 NULL），而确认卡用
+     * {@code v-if="proposal.targetName"} 渲染目标名，null 时整段不显示——
+     * 用户只看到"停用"却看不到停用的是谁。</p>
+     *
+     * <p>实体名也取不到时（理论上不该发生）保持原样（可能是 {@code null}）：
+     * 不抛新异常、不编造名字，卡片对 null 是容错的。</p>
+     */
+    protected static String resolveTargetName(String provided, String fromEntity) {
+        return provided == null || provided.isBlank() ? fromEntity : provided;
+    }
+
     /** 当前调用的数据范围。 */
     protected DataScope scope(ToolContext context) {
         return scopeResolver.resolve(context);

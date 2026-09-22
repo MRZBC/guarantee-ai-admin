@@ -172,20 +172,26 @@ public class UserProposalTool extends BaseProposalTool {
         }
 
         try {
-            ProposalPreview preview = buildPreview(normalized, targetId, request, scope,
+            PreviewResult built = buildPreview(normalized, targetId, request, scope,
                     AiPermissionGuard.userId(toolContext));
+            // 模型只传 id 时 targetName 一直是 null，必须用 buildPreview 已加载的实体名（username）回填，
+            // 否则落库的 target_name 为 NULL，确认卡上就丢了目标名
+            String resolvedTargetName = resolveTargetName(targetName, built.targetName());
             return submit(toolContext, draft(toolContext, "proposeUserChange", normalized,
-                    "USER", targetId, targetName, request, preview, effectiveRequired, userText,
-                    secrets.isEmpty() ? null : secrets));
+                    "USER", targetId, resolvedTargetName, request, built.preview(), effectiveRequired,
+                    userText, secrets.isEmpty() ? null : secrets));
         } catch (BizException ex) {
             return WriteToolResult.failed("无法生成提案：" + ex.getMessage());
         }
     }
 
-    private ProposalPreview buildPreview(String action, Long targetId, ProposalRequest request,
+    private PreviewResult buildPreview(String action, Long targetId, ProposalRequest request,
                                          com.guarantee.system.scope.DataScope scope,
                                          Long operatorUserId) {
         SysUser existing = userService.requireVisible(targetId, scope);
+        // 目标名回填：模型常只传 id 不传名字，这里直接用上面已加载的实体取名（不再查库）；
+        // 用户的名字字段是 username，不填就落 NULL，确认卡上「— 目标名」这一整段会消失
+        String existingName = existing == null ? null : existing.getUsername();
 
         if ("UPDATE".equals(action)) {
             UserDto.UpdateRequest dto = new UserDto.UpdateRequest();
@@ -215,8 +221,8 @@ public class UserProposalTool extends BaseProposalTool {
             if (request.phone() != null || request.email() != null) {
                 warnings.add("手机号/邮箱属于敏感字段：审计只记录\"是否变更\"，不记录具体值（D-4）");
             }
-            return ProposalPreview.of("修改用户资料：" + existing.getUsername(), changes,
-                    List.of(), warnings, false);
+            return new PreviewResult(ProposalPreview.of("修改用户资料：" + existing.getUsername(), changes,
+                    List.of(), warnings, false), existingName);
         }
 
         if ("ASSIGN_ROLES".equals(action)) {
@@ -228,8 +234,9 @@ public class UserProposalTool extends BaseProposalTool {
             Map<String, Object> impact = userService.assignRolesImpact(existing, targetRoles);
             List<String> warnings = new ArrayList<>();
             warnings.add("角色分配会立即改变该用户的权限");
-            return ProposalPreview.of("角色分配：" + existing.getUsername(), changes,
-                    List.of("影响面：" + impact), warnings, true);
+            return new PreviewResult(ProposalPreview.of("角色分配：" + existing.getUsername(), changes,
+                    List.of("影响面：" + ProposalPreview.formatImpact(impact)), warnings, true),
+                    existingName);
         }
 
         // DELETE（逻辑删除，LD-01 / 设计 §7.4）
@@ -243,14 +250,15 @@ public class UserProposalTool extends BaseProposalTool {
                     "isDeleted", "是否已删除", "否", "是"));
             Map<String, Object> impactMap = userService.deleteImpact(existing);
             List<String> impact = new ArrayList<>();
-            impact.add("该用户当前持有角色：" + impactMap.get("持有角色"));
+            impact.add("该用户当前持有角色：" + ProposalPreview.formatImpactValue(impactMap.get("持有角色")));
             impact.add("删除后该用户**无法登录**，且登录失败提示与密码错误完全一致（防账号枚举）");
             impact.add("该用户持有的 JWT 将被**立即撤销**，需重新登录");
-            return ProposalPreview.of("删除用户：" + existing.getUsername(), changes, impact,
+            return new PreviewResult(ProposalPreview.of("删除用户：" + existing.getUsername(), changes,
+                    impact,
                     List.of("删除后该用户**默认不再出现在列表中**，可通过「显示已删除」恢复",
                             "删除**不改变启用/停用状态**，恢复后回到删除前的状态",
                             "删除属危险动作，需二次确认"),
-                    true);
+                    true), existingName);
         }
 
         // DISABLE / ENABLE
@@ -260,14 +268,15 @@ public class UserProposalTool extends BaseProposalTool {
                 "status", "状态", statusName(existing.getStatus()), statusName(targetStatus)));
         List<String> impact = new ArrayList<>();
         Map<String, Object> impactMap = userService.stopImpact(existing);
-        impact.add("该用户当前持有角色：" + impactMap.get("持有角色"));
+        impact.add("该用户当前持有角色：" + ProposalPreview.formatImpactValue(impactMap.get("持有角色")));
         if (targetStatus == 0) {
             impact.add("该用户未完结的 AI 会话将失效；其持有的 JWT 将被撤销，需重新登录");
         }
-        return ProposalPreview.of((targetStatus == 0 ? "停用用户：" : "启用用户：") + existing.getUsername(),
+        return new PreviewResult(ProposalPreview.of(
+                (targetStatus == 0 ? "停用用户：" : "启用用户：") + existing.getUsername(),
                 changes, impact,
                 targetStatus == 0 ? List.of("停用会立即中断该用户的访问能力，请二次确认") : List.of(),
-                targetStatus == 0);
+                targetStatus == 0), existingName);
     }
 
     /** D-4：确认卡上展示的旧值同样掩码，避免界面成为明文泄漏路径。 */

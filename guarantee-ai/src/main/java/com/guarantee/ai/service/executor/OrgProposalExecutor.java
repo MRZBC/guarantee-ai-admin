@@ -4,6 +4,7 @@ import com.guarantee.ai.entity.AiOperationProposal;
 import com.guarantee.ai.service.ProposalExecutionContext;
 import com.guarantee.ai.service.ProposalExecutionResult;
 import com.guarantee.ai.service.ProposalExecutor;
+import com.guarantee.ai.service.ProposalPreview;
 import com.guarantee.ai.service.ProposalRequest;
 import com.guarantee.system.dto.OrgDto;
 import com.guarantee.system.entity.SysOrg;
@@ -106,7 +107,7 @@ public class OrgProposalExecutor implements ProposalExecutor {
         return ProposalExecutionResult.ok(
                 "机构「" + updated.getOrgName() + "」已" + word, before, after,
                 List.of(),
-                List.of("影响面：" + impact));
+                List.of("影响面：" + ProposalPreview.formatImpact(impact)));
     }
 
     /**

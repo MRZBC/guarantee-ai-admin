@@ -135,17 +135,20 @@ public class OrgProposalTool extends BaseProposalTool {
                 .build();
 
         try {
-            ProposalPreview preview = buildPreview(normalized, targetId, targetName, request, scope,
-                    toolContext);
+            PreviewResult built = buildPreview(normalized, targetId, request, scope, toolContext);
+            // 模型只传 id 时 targetName 一直是 null，必须用 buildPreview 已加载的实体名回填，
+            // 否则落库的 target_name 为 NULL，确认卡上就丢了目标名
+            String resolvedTargetName = resolveTargetName(targetName, built.targetName());
             Long proposalTargetId = "CREATE".equals(normalized) ? null : targetId;
             return submit(toolContext, draft(toolContext, "proposeOrgChange", normalized,
-                    "ORG", proposalTargetId, targetName, request, preview, required, userText, null));
+                    "ORG", proposalTargetId, resolvedTargetName, request, built.preview(), required,
+                    userText, null));
         } catch (com.guarantee.common.exception.BizException ex) {
             return WriteToolResult.failed("无法生成提案：" + ex.getMessage());
         }
     }
 
-    private ProposalPreview buildPreview(String action, Long targetId, String targetName,
+    private PreviewResult buildPreview(String action, Long targetId,
                                          ProposalRequest request,
                                          com.guarantee.system.scope.DataScope scope,
                                          ToolContext context) {
@@ -167,12 +170,16 @@ public class OrgProposalTool extends BaseProposalTool {
                             OrgService.levelName(request.orgLevel())),
                     ProposalPreview.ChangeItem.created("parentId", "上级机构",
                             String.valueOf(dto.getParentId())));
-            return ProposalPreview.of("新增机构：" + request.orgName(), changes,
+            // CREATE 没有既有实体可回填，名字仍取模型传入的 orgName（语义不变）
+            return new PreviewResult(ProposalPreview.of("新增机构：" + request.orgName(), changes,
                     List.of("新增机构会改变数据范围边界，请确认层级与上级机构正确"),
-                    List.of(), false);
+                    List.of(), false), null);
         }
 
         SysOrg existing = orgService.getEntityById(targetId);
+        // 目标名回填：模型常只传 id 不传名字，这里直接用上面已加载的实体取名（不再查库），
+        // 否则 target_name 落 NULL，确认卡上「— 目标名」这一整段会消失
+        String existingName = existing == null ? null : existing.getOrgName();
         if ("UPDATE".equals(action)) {
             OrgDto.UpdateRequest dto = new OrgDto.UpdateRequest();
             dto.setOrgName(request.orgName());
@@ -190,8 +197,8 @@ public class OrgProposalTool extends BaseProposalTool {
             if (changes.isEmpty()) {
                 throw new com.guarantee.common.exception.BizException("没有任何字段发生变化，无需提交提案");
             }
-            return ProposalPreview.of("修改机构：" + existing.getOrgName(), changes,
-                    List.of(), List.of(), false);
+            return new PreviewResult(ProposalPreview.of("修改机构：" + existing.getOrgName(), changes,
+                    List.of(), List.of(), false), existingName);
         }
 
         // DELETE（逻辑删除，LD-01 / 设计 §7.4）
@@ -207,12 +214,13 @@ public class OrgProposalTool extends BaseProposalTool {
             List<ProposalPreview.ChangeItem> changes = List.of(new ProposalPreview.ChangeItem(
                     "isDeleted", "是否已删除", "否", "是"));
             List<String> impact = new ArrayList<>();
-            impact.add("影响面：" + orgService.deleteImpact(existing));
-            return ProposalPreview.of("删除机构：" + existing.getOrgName(), changes, impact,
+            impact.add("影响面：" + ProposalPreview.formatImpact(orgService.deleteImpact(existing)));
+            return new PreviewResult(ProposalPreview.of("删除机构：" + existing.getOrgName(), changes,
+                    impact,
                     List.of("删除后该机构**默认不再出现在列表中**，可通过「显示已删除」恢复",
                             "删除**不改变启用/停用状态**，恢复后回到删除前的状态",
                             "删除属危险动作，需二次确认"),
-                    true);
+                    true), existingName);
         }
 
         // DISABLE / ENABLE
@@ -227,11 +235,12 @@ public class OrgProposalTool extends BaseProposalTool {
         List<ProposalPreview.ChangeItem> changes = List.of(new ProposalPreview.ChangeItem(
                 "status", "状态", statusName(existing.getStatus()), statusName(targetStatus)));
         List<String> impact = new ArrayList<>();
-        impact.add("影响面：" + orgService.stopImpact(existing));
-        return ProposalPreview.of((targetStatus == 0 ? "停用机构：" : "启用机构：") + existing.getOrgName(),
+        impact.add("影响面：" + ProposalPreview.formatImpact(orgService.stopImpact(existing)));
+        return new PreviewResult(ProposalPreview.of(
+                (targetStatus == 0 ? "停用机构：" : "启用机构：") + existing.getOrgName(),
                 changes, impact,
                 targetStatus == 0 ? List.of("停用后该机构下的用户将无法通过该机构登录业务，请确认影响面") : List.of(),
-                targetStatus == 0);
+                targetStatus == 0), existingName);
     }
 
     private static Set<String> requiredPermissions(String action) {
