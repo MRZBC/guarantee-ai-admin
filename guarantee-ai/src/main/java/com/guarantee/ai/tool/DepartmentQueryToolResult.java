@@ -5,14 +5,12 @@ import java.util.List;
 /**
  * {@code queryDepartment} 的工具返回值（SYS-Q-02 / SYS-Q-07）。
  *
- * <p>{@code ambiguousOrgs} 是机构名歧义的显式出口：{@code orgName} 模糊匹配到多个机构时
- * **不允许猜测**，必须把候选交给模型向用户确认（SYS-Q-02 歧义处理）。</p>
+ * <p>部门是内部组织单元，服务于「人」；它不携带机构归属（机构是外部出函机构，服务于订单），
+ * 因此出参只保留部门自身属性与 {@code userCount}。</p>
  */
 public record DepartmentQueryToolResult(
         long total,
         List<DeptItem> items,
-        List<OrgCandidate> ambiguousOrgs,
-        String ambiguousHint,
         ToolResultMeta meta) {
 
     /** 单条部门。 */
@@ -20,8 +18,6 @@ public record DepartmentQueryToolResult(
             Long id,
             String deptCode,
             String deptName,
-            Long orgId,
-            String orgName,
             Long parentId,
             Integer status,
             String statusName,
@@ -32,11 +28,7 @@ public record DepartmentQueryToolResult(
             String deletedAt) {
     }
 
-    /** 机构候选（歧义澄清用）。 */
-    public record OrgCandidate(Long id, String orgCode, String orgName, String regionName, Integer orgLevel, String orgLevelName) {
-    }
-
     public static DepartmentQueryToolResult denied(String reason) {
-        return new DepartmentQueryToolResult(0L, List.of(), List.of(), null, ToolResultMeta.denied(reason));
+        return new DepartmentQueryToolResult(0L, List.of(), ToolResultMeta.denied(reason));
     }
 }

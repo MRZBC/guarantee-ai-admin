@@ -26,8 +26,6 @@ public record UserQueryToolResult(
             Long id,
             String username,
             String realName,
-            Long orgId,
-            String orgName,
             Long deptId,
             String deptName,
             List<String> roleCodes,

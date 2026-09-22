@@ -35,7 +35,7 @@ public interface SysUserMapper {
     /** 仅登录链路使用：包含 password 散列。 */
     SysUser selectByUsername(@Param("username") String username);
 
-    /** 写操作/危险保护使用：按主键读取实体（含 status 与 org_id）。 */
+    /** 写操作/危险保护使用：按主键读取实体（含 status）。 */
     SysUser selectEntityById(@Param("id") Long id);
 
     // ---------------- 逻辑删除（LD-02 / LD-04） ----------------
@@ -73,9 +73,6 @@ public interface SysUserMapper {
     int updateLastLoginAt(@Param("id") Long id);
 
     int updateProfile(SysUser entity);
-
-    /** 把 dept_id 显式置空（模型要求清空部门）。 */
-    int clearDept(@Param("id") Long id);
 
     /** 条件更新状态（T-08）。 */
     int updateStatus(@Param("id") Long id,

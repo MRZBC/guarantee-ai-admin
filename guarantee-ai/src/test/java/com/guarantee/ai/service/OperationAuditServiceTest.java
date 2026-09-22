@@ -199,18 +199,27 @@ class OperationAuditServiceTest {
     }
 
     @Test
-    @DisplayName("非 ADMIN 查询 USER 类审计时按机构范围收窄（SYS-A-10）")
-    void nonAdminUserAuditIsOrgScoped() {
+    @DisplayName("非 ADMIN 查询审计：阶段一 O3 下不再按机构收敛，但仍然限制目标类型（SYS-A-10）")
+    void nonAdminUserAuditIsTargetTypeScoped() {
         OperationAuditQuery query = new OperationAuditQuery();
         query.setStartDate(LocalDateTime.now().minusDays(1));
         query.setEndDate(LocalDateTime.now());
         when(auditMapper.countByQuery(any())).thenReturn(0L);
 
-        DataScope scope = DataScope.of(2L, 2, List.of(2L, 3L), "本省范围：浙江省");
+        // 阶段一 O3：resolve() 恒返回全量范围
+        DataScope scope = DataScope.all(1L, 1);
         service.query(query, false, scope);
 
-        assertThat(query.isRestrictByOrg()).as("非 ADMIN 必须按 operator_org_id 过滤").isTrue();
-        assertThat(query.getVisibleOrgIds()).containsExactly(2L, 3L);
+        // 静默失效的回归点：O3 下 scope.unrestricted() 恒为 true → visibleOrgIds 恒为 null。
+        // 若此处仍置 restrictByOrg=true，Mapper 的 <when visibleOrgIds 非空> 不成立就会走
+        // <otherwise> 注入 `AND 1 = 0`，导致非 ADMIN 查询操作审计**恒为 0 条**——
+        // 编译期完全看不出来，只能靠这条断言守住。
+        assertThat(scope.unrestricted()).as("阶段一 O3：数据范围恒为全量").isTrue();
+        assertThat(query.isRestrictByOrg()).as("全量范围下不得再按 operator_org_id 收敛").isFalse();
+        assertThat(query.getVisibleOrgIds()).as("机构收敛关闭后不得残留可见机构列表").isNull();
+
+        // 非 ADMIN 仍然有效的限制：只能看有机构归属的目标类型
+        // （显式点名 ROLE/PERMISSION 时的 FORBIDDEN 由 nonAdminShouldBeRejectedForRoleAudit 覆盖）
         assertThat(query.getAllowedTargetTypes()).as("非 ADMIN 只能看有机构归属的目标类型")
                 .containsExactlyInAnyOrder("USER", "ORG", "DEPT");
     }

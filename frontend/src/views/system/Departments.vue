@@ -6,7 +6,6 @@ import {
   createDepartment,
   deleteDepartment,
   listDepartmentTree,
-  listOrgOptions,
   updateDepartment
 } from '@/api/system'
 import { useUserStore } from '@/stores/user'
@@ -15,30 +14,23 @@ import { isEnabled, statusLabel, statusParam, STATUS_OPTIONS } from '@/utils/sta
 import type {
   DepartmentItem,
   DepartmentTreeNode,
-  DepartmentTreeQuery,
-  OrgOption
+  DepartmentTreeQuery
 } from '@/types/system'
 
 /**
  * 部门树节点（页面视图模型）。
  *
- * 直接复用接口契约 `DepartmentTreeNode`，仅在"节点键"上收窄：
- * 接口的 `id` 是**实体 id**，而页面还需要一个跨实体唯一的 `key` 供 `el-table` 的
- * `row-key` 使用——机构 id 与部门 id 来自两张表、必然撞号（都有 id=1），
- * 共用 `id` 会让两个节点被当成同一个，展开态错乱。
- *
- * 另有三个**视图派生字段**不属于接口：`label`（展示名）、`key`、`children` 已在契约里。
+ * 直接复用接口契约 `DepartmentTreeNode`，仅在"节点键"与可空性上收窄：
+ * 接口的 `id` 是**实体 id**；页面还需要一个 `key` 供 `el-table` 的 `row-key` 使用。
  */
 interface DepartmentNode extends DepartmentTreeNode {
   key: string
   label: string
   /**
-   * 以下三个 id 在页面上收窄为**非空**：接口契约里它们是可空 `Long`（保守类型），
-   * 但部门必定属于某机构（`org_id NOT NULL`）、`parent_id` 后端返回 0 而非 null，
-   * 页面组装时已统一归一化（`?? 0`），因此这里收窄可避免满篇 `!` 断言。
+   * `parentId` 在页面上收窄为**非空**：后端返回 0 而非 null 表示顶级，
+   * 页面组装时已统一归一化（`?? 0`），收窄可避免满篇 `!` 断言。
    */
   id: number
-  orgId: number
   parentId: number
   /**
    * 收窄子节点类型：接口契约里是 `DepartmentTreeNode[]`，页面里必须是已经带上
@@ -47,19 +39,17 @@ interface DepartmentNode extends DepartmentTreeNode {
   children: DepartmentNode[]
 }
 
-/* ---------------- 树组装（Q1 方案 A：机构为顶级概览节点） ---------------- */
+/* ---------------- 页面状态与权限 ---------------- */
 
 const userStore = useUserStore()
 
 const loading = ref(false)
 /** 全量部门（扁平，来自 /tree 接口）——**不能**用分页接口，否则树会静默缺节点 */
 const flatRows = ref<DepartmentItem[]>([])
-const orgOptions = ref<OrgOption[]>([])
 const expandedKeys = ref<string[]>([])
 const filterHint = ref('')
 
 const query = reactive<DepartmentTreeQuery>({
-  orgId: null,
   deptName: '',
   status: null
 })
@@ -73,15 +63,12 @@ const canDelete = computed(() => userStore.permissions.includes('system:dept:del
 /* ---------------- 树组装（只由部门自身的 parent_id 构成） ---------------- */
 
 /**
- * 由扁平部门列表组装**部门树**。
+ * 由扁平部门列表组装**纯部门树**。
  *
- * <p><b>纪律：机构（出函机构）不是部门树的一个层级。</b>两者是不同的实体：
- * 机构是业务主体（`sys_org`，自带 `org_level` 三级层级），部门是公司内部组织（`sys_department`，
- * 靠 `parent_id` 成树）；`org_id` 只是部门的一个**归属属性**。
- * 把机构塞进部门树的层级里会同时造成两个错误：
- * ① 机构在树上的位置是虚的（它不是任何部门的父节点，纯属人造成因）；
- * ② 部门真实的父子层级被压成平级（本项目数据是"每机构 1 个顶级 + 3 个挂其下"）。
- * 因此机构只以两种方式出现在本页：**筛选条件**（`orgId`）与**「所属机构」列 / 根节点上的机构标签**。</p>
+ * <p>构造纪律：这一棵树**只有部门**，不存在任何机构节点、机构分组或机构标签。
+ * 机构（出函机构，`sys_org`）与部门（公司内部组织，`sys_department`）是两个不同实体，
+ * 且重构后用户与部门都**不再有机构归属属性**（`sys_department.org_id` 已删除），
+ * 因此列表/树只按部门自己的 `parent_id` 成树。</p>
  *
  * <p>过滤时按名称/状态计算命中集合，再把命中节点的祖先链补进来，避免游离节点。</p>
  */
@@ -92,11 +79,9 @@ const treeData = computed<DepartmentNode[]>(() => {
       key: `dept-${row.id}`,
       nodeKind: 'DEPT',
       id: row.id,
-      orgId: row.orgId ?? 0,
       label: row.deptName,
       deptName: row.deptName,
       deptCode: row.deptCode,
-      orgName: row.orgName,
       // 归一化：后端 0 表示顶级；null 只可能是异常数据，一并按顶级处理
       parentId: row.parentId ?? 0,
       status: row.status,
@@ -154,10 +139,6 @@ const treeData = computed<DepartmentNode[]>(() => {
     nodes.forEach((node) => sortNodes(node.children))
   }
 
-  // 归属机构顺序：沿用机构下拉的顺序，便于「全部机构」视图下按机构成块阅读
-  const orderOfOrg = new Map<number, number>()
-  orgOptions.value.forEach((org, index) => orderOfOrg.set(org.id, index))
-
   const roots: DepartmentNode[] = []
   for (const row of flatRows.value) {
     const node = byId.get(row.id)
@@ -172,17 +153,6 @@ const treeData = computed<DepartmentNode[]>(() => {
     }
   }
   sortNodes(roots)
-
-  // 根节点排序：先按归属机构（成块），再按 sortNo / id
-  roots.sort((a, b) => {
-    const oa = orderOfOrg.get(a.orgId) ?? 9999
-    const ob = orderOfOrg.get(b.orgId) ?? 9999
-    if (oa !== ob) return oa - ob
-    const sa = a.sortNo ?? 0
-    const sb = b.sortNo ?? 0
-    if (sa !== sb) return sa - sb
-    return a.id - b.id
-  })
 
   // 层级路径：组树后推导，避免依赖"父行一定先于子行返回"
   const fillPath = (nodes: DepartmentNode[], prefix: string): void => {
@@ -206,8 +176,6 @@ const treeData = computed<DepartmentNode[]>(() => {
 })
 
 const totalDepartments = computed(() => flatRows.value.length)
-/** 当前视图涉及的机构数（机构是归属属性，这里的"M 个机构"只是概览，不代表树层级） */
-const totalOrgGroups = computed(() => new Set(flatRows.value.map((row) => row.orgId)).size)
 
 /** 默认展开所有有子节点的部门（本项目数据只有两级，等价于全展开） */
 function initExpanded(): void {
@@ -234,19 +202,10 @@ function handleExpandChange(row: DepartmentNode, expanded: DepartmentNode[] | bo
 
 /* ---------------- 数据加载 ---------------- */
 
-async function loadOrgOptions(): Promise<void> {
-  try {
-    orgOptions.value = (await listOrgOptions()) ?? []
-  } catch {
-    orgOptions.value = []
-  }
-}
-
 async function loadData(): Promise<void> {
   loading.value = true
   try {
     const list = await listDepartmentTree({
-      orgId: query.orgId ?? undefined,
       deptName: query.deptName || undefined,
       status: statusParam(query.status)
     })
@@ -264,21 +223,8 @@ function handleSearch(): void {
 }
 
 function handleReset(): void {
-  query.orgId = null
   query.deptName = ''
   query.status = null
-  expandedKeys.value = []
-  void loadData()
-}
-
-/**
- * 点击根节点上的机构标签 = 只看该机构（等价于选中筛选下拉）；再次点击取消。
- *
- * 机构是筛选维度而不是树层级，所以入口放在"标签/列"上，不放在行本身——
- * 行是部门，点行不应该有"筛选"这种副作用。
- */
-function handleOrgClick(orgId: number): void {
-  query.orgId = query.orgId === orgId ? null : orgId
   expandedKeys.value = []
   void loadData()
 }
@@ -293,14 +239,12 @@ const form = reactive<{
   id: number | null
   deptCode: string
   deptName: string
-  orgId: number | null
   parentId: number
   sortNo: number
 }>({
   id: null,
   deptCode: '',
   deptName: '',
-  orgId: null,
   parentId: 0,
   sortNo: 0
 })
@@ -317,23 +261,19 @@ const rules = computed<FormRules>(() => ({
       trigger: 'blur'
     }
   ],
-  deptName: [{ required: true, message: '请输入部门名称', trigger: 'blur' }],
-  orgId: [{ required: true, message: '请选择所属机构', trigger: 'change' }]
+  deptName: [{ required: true, message: '请输入部门名称', trigger: 'blur' }]
 }))
 
 /**
- * 可选上级部门：只列**同机构未删除**部门。
+ * 可选上级部门：树里**未删除**的部门。
  *
- * <p>两条约束都来自后端，前端先收窄避免用户提交后才被拒：
- * ① 上级部门必须与本部门属于同一机构（`DepartmentService.validateCreate/Update`）；
- * ② 不能选自己或自己的后代（否则在部门树上形成环）。</p>
+ * <p>重构后部门不再有机构归属，"上级必须同机构"这条约束随之消失；
+ * 仍保留的约束来自后端：不能选自己或自己的后代（否则在部门树上形成环）。</p>
  */
 const parentOptions = computed<DepartmentNode[]>(() => {
-  if (form.orgId === null) return []
   const result: DepartmentNode[] = []
   const walk = (nodes: DepartmentNode[]): void => {
     for (const node of nodes) {
-      if (node.orgId !== form.orgId) continue
       // 已删除部门不作为可选的上级（页面不展示已删除数据，但接口可能仍返回，保险起见过滤）
       if (node.isDeleted === 1) continue
       result.push(node)
@@ -377,7 +317,6 @@ function resetForm(): void {
   form.id = null
   form.deptCode = ''
   form.deptName = ''
-  form.orgId = query.orgId ?? null
   form.parentId = 0
   form.sortNo = 0
   formRef.value?.clearValidate()
@@ -386,19 +325,10 @@ function resetForm(): void {
 /**
  * 新增部门。
  *
- * @param orgId    已确定的所属机构（从机构行或部门行的"新增下级"进来时不为空）
  * @param parentId 上级部门；0 表示顶级
  */
-function openCreate(orgId?: number, parentId?: number): void {
+function openCreate(parentId?: number): void {
   resetForm()
-  const targetOrg = orgId ?? query.orgId
-  if (targetOrg === null || targetOrg === undefined) {
-    // 「全部机构」视图下无法推断归属，直接要求先选机构，避免提交后才被后端拒绝
-    ElMessage.warning('请先在「所属机构」中选定一个机构，再新增部门')
-    dialogVisible.value = true
-    return
-  }
-  form.orgId = targetOrg
   form.parentId = parentId ?? 0
   dialogVisible.value = true
 }
@@ -408,7 +338,6 @@ function openEdit(node: DepartmentNode): void {
   form.id = node.id
   form.deptCode = node.deptCode ?? ''
   form.deptName = node.label
-  form.orgId = node.orgId
   form.parentId = node.parentId ?? 0
   form.sortNo = node.sortNo ?? 0
   dialogVisible.value = true
@@ -418,15 +347,11 @@ async function handleSubmit(): Promise<void> {
   if (!formRef.value) return
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
-  if (form.orgId === null) {
-    ElMessage.error('请选择所属机构')
-    return
-  }
 
   submitting.value = true
   try {
     if (isEdit.value && form.id !== null) {
-      // deptCode 与 orgId 不可改（SYS-W-03）：换机构请停用后新建，因此不提交这两个字段
+      // deptCode 不可改（SYS-W-03），因此不提交该字段
       await updateDepartment(form.id, {
         deptName: form.deptName.trim(),
         parentId: form.parentId,
@@ -437,7 +362,6 @@ async function handleSubmit(): Promise<void> {
       await createDepartment({
         deptCode: form.deptCode.trim(),
         deptName: form.deptName.trim(),
-        orgId: form.orgId,
         parentId: form.parentId,
         sortNo: form.sortNo
       })
@@ -506,10 +430,8 @@ async function handleDelete(node: DepartmentNode): Promise<void> {
   }
 }
 
-onMounted(async () => {
-  // 先取机构下拉：树的机构分组顺序依赖它，先加载可避免首次渲染时机构顺序抖动
-  await loadOrgOptions()
-  await loadData()
+onMounted(() => {
+  void loadData()
 })
 </script>
 
@@ -518,18 +440,6 @@ onMounted(async () => {
     <el-card class="filter-card" shadow="never">
       <el-form :model="query" label-width="82px" @submit.prevent>
         <el-row :gutter="12">
-          <el-col :xs="24" :sm="12" :md="8" :lg="6">
-            <el-form-item label="所属机构">
-              <el-select v-model="query.orgId" placeholder="全部机构" clearable filterable>
-                <el-option
-                  v-for="org in orgOptions"
-                  :key="org.id"
-                  :label="org.orgName"
-                  :value="org.id"
-                />
-              </el-select>
-            </el-form-item>
-          </el-col>
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
             <el-form-item label="部门名称">
               <el-input
@@ -565,7 +475,7 @@ onMounted(async () => {
     <el-card class="table-card" shadow="never">
       <div class="table-toolbar">
         <span class="table-toolbar__title">
-          部门树 · 共 {{ totalDepartments }} 个部门 / 归属 {{ totalOrgGroups }} 个机构
+          部门树 · 共 {{ totalDepartments }} 个部门
         </span>
         <el-button v-if="canCreate" type="primary" icon="Plus" @click="openCreate()">
           新增部门
@@ -587,28 +497,10 @@ onMounted(async () => {
         <el-table-column label="部门名称" min-width="260" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ row.label }}</span>
-            <!--
-              机构是**归属属性**，不是树的层级：只在"顶级部门"（parent_id=0）这一行上挂一个机构标签，
-              说明"这棵部门树属于哪个出函机构"，点击即只看该机构。
-              子部门不再重复——它们的归属从父节点一眼可见，每行都挂纯属噪音。
-            -->
-            <el-tag
-              v-if="row.parentId === 0 && row.orgName"
-              type="info"
-              size="small"
-              effect="plain"
-              class="org-tag"
-              @click="handleOrgClick(row.orgId)"
-            >
-              {{ row.orgName }}
-            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="部门编码" width="140" show-overflow-tooltip>
           <template #default="{ row }">{{ row.deptCode || '--' }}</template>
-        </el-table-column>
-        <el-table-column label="所属机构" min-width="200" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.orgName || '--' }}</template>
         </el-table-column>
         <el-table-column label="层级路径" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">{{ row.path || '--' }}</template>
@@ -638,8 +530,7 @@ onMounted(async () => {
           fixed="right"
         >
           <template #default="{ row }">
-            <!-- 每一行都是部门；机构没有"行"，因此这里不存在机构分支 -->
-            <el-button v-if="canCreate" link type="primary" @click="openCreate(row.orgId, row.id)">
+            <el-button v-if="canCreate" link type="primary" @click="openCreate(row.id)">
               新增下级
             </el-button>
             <el-button v-if="canUpdate" link type="primary" @click="openEdit(row)">修改</el-button>
@@ -677,26 +568,6 @@ onMounted(async () => {
         <el-form-item label="部门名称" prop="deptName">
           <el-input v-model="form.deptName" placeholder="如 法务合规部" clearable />
         </el-form-item>
-        <el-form-item label="所属机构" prop="orgId">
-          <el-select
-            v-model="form.orgId"
-            placeholder="请选择所属机构"
-            filterable
-            :disabled="isEdit"
-            style="width: 100%"
-            @change="form.parentId = 0"
-          >
-            <el-option
-              v-for="org in orgOptions"
-              :key="org.id"
-              :label="org.orgName"
-              :value="org.id"
-            />
-          </el-select>
-          <div v-if="isEdit" class="form-hint text-muted">
-            所属机构创建后不可修改（换机构请停用后新建，SYS-W-03）
-          </div>
-        </el-form-item>
         <el-form-item label="上级部门" prop="parentId">
           <el-select
             v-model="form.parentId"
@@ -715,7 +586,7 @@ onMounted(async () => {
             />
           </el-select>
           <div class="form-hint text-muted">
-            只能选择同一机构内的部门；后端会拒绝跨机构与"挂到自己的下级之下"。
+            可选任意部门作为上级；后端会拒绝"挂到自己的下级之下"。
           </div>
         </el-form-item>
         <el-form-item label="排序号" prop="sortNo">
@@ -739,10 +610,6 @@ onMounted(async () => {
 
 .filter-hint {
   margin-bottom: 10px;
-}
-
-.org-tag {
-  margin-right: 6px;
 }
 
 .form-hint {

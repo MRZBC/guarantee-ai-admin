@@ -61,6 +61,15 @@ public class DataInitializer implements ApplicationRunner {
     /** 总部节点机构编码。 */
     private static final String HEADQUARTERS_CODE = "ORGHQ";
 
+    /**
+     * admin 归属的部门名（即 {@link #DEPT_SPEC} 里那个根节点，也是总部机构下的第一个部门）。
+     *
+     * <p>实库里 admin 的 {@code dept_name = '总部'}；用户必须属于一个部门
+     * （{@code sys_user.dept_id} 为 NOT NULL），因此初始化时按**名字**给 admin 选部门，
+     * 不硬编码部门 id。</p>
+     */
+    private static final String HEADQUARTERS_DEPT_NAME = "总部";
+
     /** 总部节点行政区划占位（仅占位，不参与区域统计）。 */
     private static final String HEADQUARTERS_REGION = "110000";
 
@@ -244,8 +253,8 @@ public class DataInitializer implements ApplicationRunner {
      * 部门树规格：{@code {部门名, 上级部门名（null = 顶级）}}。
      *
      * <p><b>每个机构都套用这同一棵树</b>（机构是出函机构、部门是公司内部部门，二者是不同的实体；
-     * 部门靠 {@code parent_id} 成树，{@code org_id} 只是归属属性）。本机构 11 个部门：
-     * 总部 → 5 个一级部门 → 其中业务部/技术部再分 5 个二级部门。</p>
+     * 部门靠 {@code parent_id} 成树，**不再有机构字段**——机构服务于订单，不是人的归属属性）。
+     * 本机构 11 个部门：总部 → 5 个一级部门 → 其中业务部/技术部再分 5 个二级部门。</p>
      *
      * <p>为什么用规格表驱动而不是原来的"按 slot 取名字"：原实现的父子关系靠
      * {@code parentId = orgIndex + 1} 这种 id 算术推导，一旦部门数或顺序变化就会指向错误父节点。
@@ -320,9 +329,10 @@ public class DataInitializer implements ApplicationRunner {
                 if (parentId == null) {
                     throw new IllegalStateException("部门规格表引用了未定义或不存在的上级部门: " + parentName);
                 }
-                batch.add(new Object[]{id, code, deptName, org.id(), parentId, 1, sortNo});
+                batch.add(new Object[]{id, code, deptName, parentId, 1, sortNo});
 
-                // 记录"该机构实际创建了哪些部门"，供 seedUsers 分配用户时查表
+                // 记录"该机构实际创建了哪些部门"（**按 DEPT_SPEC 顺序追加**），
+                // 供 seedUsers 分配用户时查表；顺序是 deptIdByName 按名字定位部门的前提。
                 orgDeptIds.computeIfAbsent(orgIndex, k -> new ArrayList<>()).add(id);
                 idByName.put(deptName, id);
                 id++;
@@ -330,8 +340,8 @@ public class DataInitializer implements ApplicationRunner {
             }
         }
         jdbcTemplate.batchUpdate("""
-                INSERT INTO sys_department (id, dept_code, dept_name, org_id, parent_id, status, sort_no)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO sys_department (id, dept_code, dept_name, parent_id, status, sort_no)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """, batch);
         log.info("已生成部门 {} 个（每机构 {} 个：总部 + 5 个一级部门 + 5 个二级部门）",
                 batch.size(), DEPTS_PER_ORG);
@@ -400,7 +410,6 @@ public class DataInitializer implements ApplicationRunner {
 
         for (int i = 1; i <= USER_COUNT; i++) {
             int orgIndex = i % orgs.size();
-            OrgRow org = orgs.get(orgIndex);
             // 从"该机构实际创建的部门"里取一个：用户必须挂在真实存在的部门上。
             // 不能用 id 算术推导——部门树由 DEPT_SPEC 驱动，部门数与顺序都可能变，
             // 推导出来的 id 一旦失配就会指向不存在的部门（列表里"所属部门"永远为空）。
@@ -413,31 +422,30 @@ public class DataInitializer implements ApplicationRunner {
                 username = "admin";
                 hash = adminHash;
                 roleId = adminRoleId;
-                // SYS-P-24：admin → 总部（全量数据范围），不挂部门
-                org = orgs.get(0);
-                deptId = null;
+                // SYS-P-24：admin 挂总部机构下的「总部」部门。
+                // 用户必须属于一个部门（sys_user.dept_id 为 NOT NULL），因此不再允许 deptId = null；
+                // 部门按**名字**定位（见 deptIdByName），不硬编码部门 id。
+                orgIndex = headquartersOrgIndex(orgs);
+                deptId = deptIdByName(orgIndex, HEADQUARTERS_DEPT_NAME);
             } else if (i == 2) {
                 username = "operator";
                 hash = operatorHash;
                 roleId = operatorRoleId;
-                // SYS-P-24：operator → 浙江省省级（org_id=2，省级数据范围）
-                org = orgs.get(1);
+                // SYS-P-24：operator 使用「浙江省省级机构」那一组部门（orgs 下标 1）
                 orgIndex = 1;
                 deptId = pickDeptId(orgIndex, i);
             } else if (i == 3) {
                 username = "analyst";
                 hash = analystHash;
                 roleId = analystRoleId;
-                // SYS-P-24：analyst → 浙江省第2保函运营机构（org_id=3，市级数据范围）
-                org = orgs.get(2);
+                // SYS-P-24：analyst 使用「浙江省第2保函运营机构」那一组部门（orgs 下标 2）
                 orgIndex = 2;
                 deptId = pickDeptId(orgIndex, i);
             } else if (i == 4) {
                 username = "user0004";
                 hash = defaultHash;
                 roleId = operatorRoleId;
-                // SYS-P-24：user0004 → 江苏省省级（org_id=8）
-                org = orgs.get(7);
+                // SYS-P-24：user0004 使用「江苏省省级机构」那一组部门（orgs 下标 7）
                 orgIndex = 7;
                 deptId = pickDeptId(orgIndex, i);
             } else {
@@ -454,30 +462,72 @@ public class DataInitializer implements ApplicationRunner {
                     + givenNames[random.nextInt(givenNames.length)]
                     + (random.nextInt(3) == 0 ? givenNames[random.nextInt(givenNames.length)] : "");
             batch.add(new Object[]{
-                    (long) i, username, hash, realName, org.id(), deptId,
+                    (long) i, username, hash, realName, deptId,
                     "138" + String.format("%08d", random.nextInt(100_000_000)),
                     username + "@guarantee.com", 1
             });
             userRoles.add(new Object[]{(long) i, roleId});
         }
         jdbcTemplate.batchUpdate("""
-                INSERT INTO sys_user (id, username, password, real_name, org_id, dept_id, phone, email, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO sys_user (id, username, password, real_name, dept_id, phone, email, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, batch);
         jdbcTemplate.batchUpdate("""
                 INSERT INTO sys_user_role (user_id, role_id) VALUES (?, ?)
                 """, userRoles);
-        log.info("已生成用户 {} 个（admin 总部 / operator 浙江省省级 / analyst 浙江市级 / user0004 江苏省省级 "
+        log.info("已生成用户 {} 个（admin 挂总部部门 / operator、analyst、user0004 挂指定演示部门 "
                 + "+ {} 个普通用户）", USER_COUNT, USER_COUNT - 4);
+    }
+
+    /**
+     * 取总部机构在 {@code orgs} 里的下标。
+     *
+     * <p>按机构编码（{@link #HEADQUARTERS_CODE}）查找，而不是硬编码 {@code 0}：
+     * 总部必须是机构的唯一根，位置一旦变化，admin 的部门就会挂到别的机构去。</p>
+     */
+    private static int headquartersOrgIndex(List<OrgRow> orgs) {
+        for (int i = 0; i < orgs.size(); i++) {
+            if (HEADQUARTERS_CODE.equals(orgs.get(i).code())) {
+                return i;
+            }
+        }
+        throw new IllegalStateException("机构列表中找不到总部节点: " + HEADQUARTERS_CODE);
+    }
+
+    /**
+     * 取某机构内指定**名称**的部门 id。
+     *
+     * <p>{@link #orgDeptIds} 是按 {@link #DEPT_SPEC} 顺序追加的，因此用部门名在规格表中的下标
+     * 即可定位同名部门；这样既不硬编码部门 id，也不依赖 id 算术。
+     * 名字不在规格表、或该机构没建出这个部门时**直接抛错**，而不是返回 null：
+     * {@code sys_user.dept_id} 已收紧为 NOT NULL，静默返回 null 只会在批量插入时才失败。</p>
+     */
+    private Long deptIdByName(int orgIndex, String deptName) {
+        int index = -1;
+        for (int i = 0; i < DEPT_SPEC.length; i++) {
+            if (DEPT_SPEC[i][0].equals(deptName)) {
+                index = i;
+                break;
+            }
+        }
+        if (index < 0) {
+            throw new IllegalStateException("部门规格表中不存在部门: " + deptName);
+        }
+        List<Long> deptIds = orgDeptIds.getOrDefault(orgIndex, List.of());
+        if (index >= deptIds.size()) {
+            throw new IllegalStateException("机构下标 " + orgIndex + " 下没有部门 " + deptName
+                    + "（该机构实际部门数 " + deptIds.size() + "）");
+        }
+        return deptIds.get(index);
     }
 
     /**
      * 取某机构的第 n 个部门 id（按用户序号稳定选择）。
      *
-     * <p>演示账号（operator / analyst / user0004）的机构被显式改写为特定机构，
-     * 以覆盖"省级 / 市级"数据范围场景；**改写机构后必须同步改写部门**，
-     * 否则会出现"用户属 A 机构、部门属 B 机构"这种跨机构悬挂——
-     * 页面上看不出毛病，但按机构统计部门/人数会静默错位（本仓库踩过一次）。</p>
+     * <p>演示账号（operator / analyst / user0004）被显式指定到不同机构的部门组，
+     * 以便演示数据里"不同归属的用户"分布可控；**指定了哪一组部门，就必须用同一组的下标去取
+     * deptId**，否则会拿到别的机构那一组部门——页面上看不出毛病，但按部门统计人数会静默错位
+     * （本仓库踩过一次）。</p>
      */
     private Long pickDeptId(int orgIndex, int userSeq) {
         List<Long> deptIds = orgDeptIds.getOrDefault(orgIndex, List.of());

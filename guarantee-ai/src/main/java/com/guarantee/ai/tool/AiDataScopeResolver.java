@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
  * {@link AiPermissionGuard} 从 {@code ToolContext} 取出身份后，交给
  * {@code guarantee-system} 的 {@link DataScopeService} 判定。</p>
  *
- * <p>AI 层**不重复实现**层级判定逻辑，只负责把 {@code orgId + roles} 传下去——
+ * <p>AI 层**不重复实现**范围判定逻辑，只负责把身份与角色传下去——
  * 这样页面与助手两条渠道的范围口径天然一致（SYS-P-10）。</p>
  */
 @Component
@@ -28,7 +28,6 @@ public class AiDataScopeResolver {
     public DataScope resolve(ToolContext context) {
         return dataScopeService.resolve(
                 AiPermissionGuard.userId(context),
-                AiPermissionGuard.orgId(context),
                 AiPermissionGuard.roles(context));
     }
 

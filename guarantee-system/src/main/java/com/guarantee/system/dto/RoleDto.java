@@ -37,14 +37,6 @@ public final class RoleDto {
         /** 单条明细查询用。 */
         private Long id;
 
-        /**
-         * 机构过滤：限定"该机构下有用户持有的角色"。
-         *
-         * <p>角色本身不是机构强相关实体，但 SYS-A-10 要求 ROLE 类数据在审计与画像查询中
-         * 能按机构收敛，因此保留该维度。</p>
-         */
-        private Long orgId;
-
         /** 数据范围（服务端强制注入，SYS-P-08）。 */
         private QueryScope scope = QueryScope.unrestricted();
 

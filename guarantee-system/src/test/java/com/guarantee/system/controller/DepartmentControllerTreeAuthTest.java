@@ -51,4 +51,24 @@ class DepartmentControllerTreeAuthTest {
         // 编译期常量：DEPT_DELETE 是"显示已删除"所需的额外权限
         assertThat(Permissions.DEPT_DELETE).isEqualTo("system:dept:delete");
     }
+
+    @Test
+    @DisplayName("部门不再有机构归属：查询条件与出参都没有 orgId / orgName（机构服务于订单）")
+    void departmentModelHasNoOrgFields() {
+        assertThat(java.util.Arrays.stream(com.guarantee.system.dto.DepartmentDto.Query.class.getDeclaredFields())
+                .map(java.lang.reflect.Field::getName))
+                .as("部门查询条件不得再有机构字段：机构筛选与机构根节点已随机构归属一并移除")
+                .doesNotContain("orgId", "orgName");
+
+        assertThat(java.util.Arrays.stream(com.guarantee.system.dto.DepartmentDto.CreateRequest.class
+                        .getDeclaredFields())
+                .map(java.lang.reflect.Field::getName))
+                .as("新建部门不再需要 orgId（部门树是纯部门树，没有机构根节点）")
+                .doesNotContain("orgId");
+
+        assertThat(java.util.Arrays.stream(com.guarantee.system.vo.DepartmentVO.class.getDeclaredFields())
+                .map(java.lang.reflect.Field::getName))
+                .as("部门出参不得再有机构字段（原「所属机构」列依赖它）")
+                .doesNotContain("orgId", "orgName");
+    }
 }

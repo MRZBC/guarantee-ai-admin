@@ -4,9 +4,7 @@ import com.guarantee.common.api.PageResult;
 import com.guarantee.common.exception.BizException;
 import com.guarantee.system.dto.DepartmentDto;
 import com.guarantee.system.entity.SysDepartment;
-import com.guarantee.system.entity.SysOrg;
 import com.guarantee.system.mapper.SysDepartmentMapper;
-import com.guarantee.system.mapper.SysOrgMapper;
 import com.guarantee.system.scope.DataScope;
 import com.guarantee.system.scope.DataScopeService;
 import com.guarantee.system.scope.QueryScope;
@@ -23,10 +21,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 部门配置服务。orgName 由 Mapper 关联 sys_org 直接返回。
+ * 部门配置服务。部门是**内部组织单元**，只服务于人：阶段一 O3 起部门不再挂机构
+ * （{@code sys_department.org_id} 已删除），因此 {@code orgName} 也不再由 Mapper 关联返回。
  *
- * <p>写操作规则（SYS-W-03）：{@code deptCode} / {@code orgId} 不可改；
- * 停用前置检查部门下的用户数。</p>
+ * <p>写操作规则（SYS-W-03）：{@code deptCode} 不可改；仍校验父子关系（父部门必须存在、
+ * 不能把自己设为父），但**不再有机构边界**。停用前置检查部门下的用户数。</p>
  */
 @Service
 public class DepartmentService {
@@ -36,17 +35,13 @@ public class DepartmentService {
     public static final int CANDIDATE_LIMIT = 20;
 
     private final SysDepartmentMapper sysDepartmentMapper;
-    /** 恢复部门时校验所属机构未被删除（LD-04a）。 */
-    private final SysOrgMapper sysOrgMapper;
     private final DataScopeService dataScopeService;
     private final WebAuditor webAuditor;
 
     public DepartmentService(SysDepartmentMapper sysDepartmentMapper,
-                             SysOrgMapper sysOrgMapper,
                              DataScopeService dataScopeService,
                              WebAuditor webAuditor) {
         this.sysDepartmentMapper = sysDepartmentMapper;
-        this.sysOrgMapper = sysOrgMapper;
         this.dataScopeService = dataScopeService;
         this.webAuditor = webAuditor;
     }
@@ -102,10 +97,10 @@ public class DepartmentService {
         return vo;
     }
 
-    /** 下拉框使用：仅启用部门，orgId 为空时返回全部。 */
+    /** 下拉框使用：仅启用部门（阶段一 O3 起不再按机构过滤）。 */
     @Transactional(readOnly = true)
-    public List<DepartmentOptionVO> listOptions(Long orgId) {
-        return sysDepartmentMapper.selectEnabledOptions(orgId);
+    public List<DepartmentOptionVO> listOptions() {
+        return sysDepartmentMapper.selectEnabledOptions();
     }
 
     /** 部门下的启用用户数（SYS-Q-02 出参 userCount）。 */
@@ -114,10 +109,10 @@ public class DepartmentService {
         return sysDepartmentMapper.countEnabledUserByDept(deptId);
     }
 
-    /** 写操作目标解析（SYS-W-10）：按名称/编码模糊匹配，带数据范围过滤。 */
+    /** 写操作目标解析（SYS-W-10）：按名称/编码模糊匹配。 */
     @Transactional(readOnly = true)
-    public List<SysDepartment> findCandidates(String keyword, Long orgId, DataScope scope, int limit) {
-        return sysDepartmentMapper.selectCandidates(keyword, orgId, scope, limit);
+    public List<SysDepartment> findCandidates(String keyword, DataScope scope, int limit) {
+        return sysDepartmentMapper.selectCandidates(keyword, scope, limit);
     }
 
     // ==================================================================
@@ -130,18 +125,16 @@ public class DepartmentService {
         SysDepartment entity = new SysDepartment();
         entity.setDeptCode(request.getDeptCode().trim());
         entity.setDeptName(request.getDeptName().trim());
-        entity.setOrgId(request.getOrgId());
         entity.setParentId(request.getParentId() == null ? 0L : request.getParentId());
         entity.setStatus(1);
         entity.setSortNo(request.getSortNo() == null ? 0 : request.getSortNo());
         sysDepartmentMapper.insert(entity);
-        log.info("新增部门成功 id={} code={} orgId={}", entity.getId(), entity.getDeptCode(), entity.getOrgId());
+        log.info("新增部门成功 id={} code={}", entity.getId(), entity.getDeptCode());
 
         // 页面直连审计（SYS-A-07 / AC-22）
         Map<String, Object> after = new LinkedHashMap<>();
         after.put("deptCode", entity.getDeptCode());
         after.put("deptName", entity.getDeptName());
-        after.put("orgId", entity.getOrgId());
         after.put("parentId", entity.getParentId());
         after.put("status", entity.getStatus());
         webAuditor.success("CREATE", "DEPT", entity.getId(), entity.getDeptName(), null, after);
@@ -207,14 +200,11 @@ public class DepartmentService {
         if (sysDepartmentMapper.selectEntityByCode(code) != null) {
             throw new BizException("部门编码已存在: " + code);
         }
-        // orgId 必须存在且在数据范围内（SYS-W-03）
-        dataScopeService.requireVisibleOrg(scope, request.getOrgId());
+        // 阶段一 O3：部门不再挂机构，新增时没有"机构必须存在"这一前置校验；
+        // 父子关系仍要校验（父部门必须存在），只是不再有"同机构"边界。
         Long parentId = request.getParentId();
         if (parentId != null && parentId != 0L) {
-            SysDepartment parent = requireVisible(parentId, scope);
-            if (!parent.getOrgId().equals(request.getOrgId())) {
-                throw BizException.badRequest("上级部门必须与本部门属于同一机构");
-            }
+            requireVisible(parentId, scope);
         }
         return null;
     }
@@ -225,10 +215,7 @@ public class DepartmentService {
             if (request.getParentId().equals(id)) {
                 throw BizException.badRequest("上级部门不能是自己");
             }
-            SysDepartment parent = requireVisible(request.getParentId(), scope);
-            if (!parent.getOrgId().equals(existing.getOrgId())) {
-                throw BizException.badRequest("上级部门必须与本部门属于同一机构");
-            }
+            requireVisible(request.getParentId(), scope);
         }
         return existing;
     }
@@ -240,10 +227,16 @@ public class DepartmentService {
         return impact;
     }
 
+    /**
+     * 部门可见性校验（SYS-P-14）。
+     *
+     * <p>阶段一 O3：部门已不再挂机构，数据范围恒为全量，因此这里只做**存在性**判定；
+     * 不存在时返回与"不存在"一致的文案（SYS-P-09）。</p>
+     */
     @Transactional(readOnly = true)
     public SysDepartment requireVisible(Long id, DataScope scope) {
         SysDepartment entity = sysDepartmentMapper.selectEntityById(id);
-        if (entity == null || !scope.contains(entity.getOrgId())) {
+        if (entity == null) {
             throw BizException.notFound(DataScopeService.OUT_OF_SCOPE_MESSAGE);
         }
         return entity;
@@ -307,7 +300,9 @@ public class DepartmentService {
     }
 
     /**
-     * 部门恢复（LD-04a）：所属机构与上级部门都必须处于未删除状态。
+     * 部门恢复（LD-04a）：上级部门必须处于未删除状态。
+     *
+     * <p>阶段一 O3：部门不再挂机构，原先"所属机构未删除"的检查已无对象，故移除。</p>
      */
     @Transactional
     public DepartmentVO restore(Long id, Long operatorUserId) {
@@ -317,13 +312,6 @@ public class DepartmentService {
         }
         if (!Integer.valueOf(1).equals(existing.getIsDeleted())) {
             throw new BizException("部门未被删除，无需恢复");
-        }
-        SysOrg org = sysOrgMapper.selectEntityByIdIncludingDeleted(existing.getOrgId());
-        if (org == null) {
-            throw new BizException("所属机构不存在，无法恢复");
-        }
-        if (Integer.valueOf(1).equals(org.getIsDeleted())) {
-            throw new BizException("请先恢复其所属机构：" + org.getOrgName());
         }
         Long parentId = existing.getParentId();
         if (parentId != null && parentId != 0L) {

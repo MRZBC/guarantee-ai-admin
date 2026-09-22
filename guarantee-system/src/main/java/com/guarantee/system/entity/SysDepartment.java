@@ -15,8 +15,6 @@ public class SysDepartment {
     private String deptCode;
     /** 部门名称 */
     private String deptName;
-    /** 所属机构 */
-    private Long orgId;
     /** 上级部门，0为顶级 */
     private Long parentId;
     /** 状态 1启用 0停用 */

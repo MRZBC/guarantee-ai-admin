@@ -29,13 +29,11 @@ import java.util.Set;
 public class DepartmentProposalTool extends BaseProposalTool {
 
     private final DepartmentService departmentService;
-    private final OrgService orgService;
 
     public DepartmentProposalTool(ProposalService proposalService, AiDataScopeResolver scopeResolver,
-                                  DepartmentService departmentService, OrgService orgService) {
+                                  DepartmentService departmentService) {
         super(proposalService, scopeResolver);
         this.departmentService = departmentService;
-        this.orgService = orgService;
     }
 
     @Tool(name = "proposeDepartmentChange",
@@ -43,22 +41,23 @@ public class DepartmentProposalTool extends BaseProposalTool {
                     提交一个【部门变更提案】。本工具**不会立即修改数据**，只生成待确认提案，
                     用户点击「确认执行」后才生效。
                     支持的动作：
-                    - CREATE：新增部门（必填 deptCode / deptName / orgId；parentId 选填，0 表示顶级）
+                    - CREATE：新增部门（必填 deptCode / deptName；parentId 选填，0 表示顶级）
                     - UPDATE：修改部门（必填 id，可改 deptName / parentId / sortNo）
                     - DISABLE / ENABLE：部门停用/启用（必填 id）
                     - DELETE：删除部门（必填 id）。**与停用完全不同**：停用=暂停业务、可随时启用；
                       删除=从默认列表移除、需要显式恢复才会重新出现。
                     重要规则：
-                    - deptCode 与 orgId 不可修改（换机构请停用后新建）。
+                    - deptCode 不可修改（改编码请停用后新建）。
                     - 停用时若部门下仍有启用用户，系统会拒绝。
                     - 删除比停用**更严格**：部门下存在未删除的用户或未删除的下级部门时会被拒绝，
                       失败信息会带具体数量。遇此情况请如实转述，并建议"先处理引用的数据，或改用停用"。
                     - 删除属**危险动作**，确认卡上有二次确认；删除**不改变启用/停用状态**，
-                      恢复后回到删除前的状态。删除后可恢复（「显示已删除」），恢复前要求其所属机构已恢复。
+                      恢复后回到删除前的状态。删除后可恢复（「显示已删除」）。
                     - 用户说"停用/暂停/禁用"时用 DISABLE，**不要**用 DELETE；用户说"删掉"时
                       必须先与用户确认是"删除"还是"停用"。
                     - 若部门名命中多个目标，返回值会给出 ambiguousTargets 候选，必须先向用户确认。
-                    示例：给浙江省第1保函运营机构新增「法务合规部」→ action=CREATE, orgId=2（机构 id 先用 queryOrg 查）。""")
+                    示例：在总部下新增「法务合规部」→ action=CREATE, deptCode=DEPT0025,
+                    deptName=法务合规部（parentId 不传表示顶级）。""")
     public WriteToolResult proposeDepartmentChange(
             @ToolParam(description = "动作：CREATE / UPDATE / DISABLE / ENABLE / DELETE。例如 DISABLE。"
                     + "DELETE=逻辑删除（从默认列表移除、可恢复），与 DISABLE=停用（暂停业务）语义不同",
@@ -71,8 +70,6 @@ public class DepartmentProposalTool extends BaseProposalTool {
             String deptName,
             @ToolParam(description = "部门编码，仅 CREATE 必填。例如 DEPT0025", required = false)
             String deptCode,
-            @ToolParam(description = "所属机构 ID，仅 CREATE 必填。例如 2", required = false)
-            Long orgId,
             @ToolParam(description = "上级部门 ID，0 表示顶级。不传表示顶级", required = false)
             Long parentId,
             @ToolParam(description = "排序号", required = false)
@@ -97,7 +94,7 @@ public class DepartmentProposalTool extends BaseProposalTool {
 
         if (targetId == null && deptName != null && !deptName.isBlank() && !"CREATE".equals(normalized)) {
             List<SysDepartment> candidates = departmentService.findCandidates(
-                    deptName, orgId, scope, DepartmentService.CANDIDATE_LIMIT);
+                    deptName, scope, DepartmentService.CANDIDATE_LIMIT);
             if (candidates.isEmpty()) {
                 return WriteToolResult.failed("没有找到名称包含「" + deptName + "」的部门"
                         + "（也可能不在你的数据范围内）。请先用 queryDepartment 查询。");
@@ -106,7 +103,7 @@ public class DepartmentProposalTool extends BaseProposalTool {
                 List<TargetCandidate> list = new ArrayList<>();
                 for (SysDepartment candidate : candidates) {
                     list.add(new TargetCandidate(candidate.getId(), candidate.getDeptCode(),
-                            candidate.getDeptName(), "机构 ID=" + candidate.getOrgId()));
+                            candidate.getDeptName(), "上级部门 ID=" + candidate.getParentId()));
                 }
                 return WriteToolResult.ambiguous(list,
                         "部门名称命中多个目标，请把候选列给用户确认后再调用本工具，不要自行选择");
@@ -121,7 +118,7 @@ public class DepartmentProposalTool extends BaseProposalTool {
 
         ProposalRequest request = ProposalRequest.builder()
                 .id(targetId).targetName(targetName).userText(userText)
-                .deptCode(deptCode).deptName(deptName).orgId(orgId)
+                .deptCode(deptCode).deptName(deptName)
                 .parentId(parentId).sortNo(sortNo)
                 .build();
 
@@ -141,18 +138,15 @@ public class DepartmentProposalTool extends BaseProposalTool {
             DepartmentDto.CreateRequest dto = new DepartmentDto.CreateRequest();
             dto.setDeptCode(request.deptCode());
             dto.setDeptName(request.deptName());
-            dto.setOrgId(request.orgId());
             dto.setParentId(request.parentId());
             dto.setSortNo(request.sortNo());
             departmentService.validateCreate(dto, scope);
-            String orgName = orgService.getById(request.orgId(), scope).getOrgName();
             List<ProposalPreview.ChangeItem> changes = List.of(
                     ProposalPreview.ChangeItem.created("deptCode", "部门编码", request.deptCode()),
                     ProposalPreview.ChangeItem.created("deptName", "部门名称", request.deptName()),
-                    ProposalPreview.ChangeItem.created("orgId", "所属机构", orgName),
                     ProposalPreview.ChangeItem.created("parentId", "上级部门",
                             String.valueOf(dto.getParentId() == null ? 0L : dto.getParentId())));
-            return ProposalPreview.of("新增部门：" + request.deptName() + "（" + orgName + "）",
+            return ProposalPreview.of("新增部门：" + request.deptName(),
                     changes, List.of(), List.of(), false);
         }
 

@@ -67,7 +67,8 @@ class LogicalDeleteWebIT {
 
     @BeforeEach
     void setUpPrincipal() {
-        CurrentUser.set(new CurrentUser.Principal(adminId(), "admin", "超级管理员", headquartersId(),
+        // 机构已从用户上移除：Principal 不再携带 orgId
+        CurrentUser.set(new CurrentUser.Principal(adminId(), "admin", "超级管理员",
                 List.of(Roles.ADMIN), userService.listPermissionCodesByUserId(adminId())));
     }
 
@@ -95,8 +96,8 @@ class LogicalDeleteWebIT {
     void deletedUserLoginIsIndistinguishableFromWrongPassword() {
         String username = P + "login";
         String rawPassword = "Test@123456";
-        jdbcTemplate.update("INSERT INTO sys_user (username, password, real_name, org_id, status) "
-                + "VALUES (?, ?, '夹具', ?, 1)", username, passwordEncoder.encode(rawPassword), headquartersId());
+        jdbcTemplate.update("INSERT INTO sys_user (username, password, real_name, dept_id, status) "
+                + "VALUES (?, ?, '夹具', ?, 1)", username, passwordEncoder.encode(rawPassword), deptId());
         long userId = jdbcTemplate.queryForObject(
                 "SELECT id FROM sys_user WHERE username = ?", Long.class, username);
 
@@ -253,11 +254,17 @@ class LogicalDeleteWebIT {
     }
 
     private DataScope adminScope() {
-        return dataScopeService.resolve(adminId(), headquartersId(), List.of(Roles.ADMIN));
+        return dataScopeService.resolve(adminId(), List.of(Roles.ADMIN));
     }
 
     private long adminId() {
         return jdbcTemplate.queryForObject("SELECT id FROM sys_user WHERE username = 'admin'", Long.class);
+    }
+
+    /** 一个真实存在的部门 id（用户夹具用；{@code dept_id} 已是 NOT NULL）。 */
+    private long deptId() {
+        return jdbcTemplate.queryForObject(
+                "SELECT id FROM sys_department WHERE is_deleted = 0 ORDER BY id LIMIT 1", Long.class);
     }
 
     private long headquartersId() {

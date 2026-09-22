@@ -23,7 +23,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -66,11 +65,11 @@ public class DepartmentController {
         return Result.ok(departmentService.tree(query, currentScope()));
     }
 
-    /** 下拉框使用：仅启用部门，orgId 可选，不分页。 */
+    /** 下拉框使用：仅启用部门，不分页（阶段一 O3 起部门已无机构维度，故无 orgId 过滤参数）。 */
     @GetMapping("/options")
     @PreAuthorize("hasAuthority('" + Permissions.DEPT_VIEW + "')")
-    public Result<List<DepartmentOptionVO>> options(@RequestParam(required = false) Long orgId) {
-        return Result.ok(departmentService.listOptions(orgId));
+    public Result<List<DepartmentOptionVO>> options() {
+        return Result.ok(departmentService.listOptions());
     }
 
     @GetMapping("/{id}")
@@ -104,7 +103,7 @@ public class DepartmentController {
         if (principal == null) {
             return DataScope.of(null, null, List.of(), "未登录（无可见范围）");
         }
-        return dataScopeService.resolve(principal.userId(), principal.orgId(), principal.roles());
+        return dataScopeService.resolve(principal.userId(), principal.roles());
     }
     /**
      * 逻辑删除（设计 §7.1）。删除不是物理删除：记录仍在库中，可在「显示已删除」中恢复。

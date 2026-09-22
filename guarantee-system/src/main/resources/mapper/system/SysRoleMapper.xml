@@ -45,18 +45,11 @@
                 AND r.id = #{q.id}
             </if>
             <!--
-              角色归属机构（SYS-A-10）：ROLE 类审计与角色列表的机构范围收敛。
-              角色不是机构强相关的实体，因此只在"限定到某个机构"时过滤；
-              未指定 orgId 时不按机构收窄，由 Service 层决定是否要求 ADMIN（SYS-Q-04）。
+              阶段一（O3）：用户与部门都已不再挂机构，原「该机构下有用户持有的角色」
+              过滤（EXISTS ... u3.org_id = #{q.orgId}）已删除 —— sys_user.org_id 列已由
+              V4 迁移移除，继续保留会在运行期报 Unknown column 'u3.org_id'。
+              角色与机构的关联本身不再是本系统的维度（机构服务于订单）。
             -->
-            <if test="q.orgId != null">
-                AND EXISTS (
-                    SELECT 1 FROM sys_user_role ur3
-                    INNER JOIN sys_user u3 ON u3.id = ur3.user_id
-                    WHERE ur3.role_id = r.id AND u3.org_id = #{q.orgId}
-                      AND ur3.is_deleted = 0 AND u3.is_deleted = 0
-                )
-            </if>
         </where>
     </sql>
 

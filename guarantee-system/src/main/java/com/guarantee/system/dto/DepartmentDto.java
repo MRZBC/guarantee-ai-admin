@@ -30,12 +30,6 @@ public final class DepartmentDto {
     @Setter
     public static class Query extends PageQuery {
 
-        private Long orgId;
-
-        /** 机构名称模糊词，供 queryDepartment 工具在 orgId 不可靠时使用。 */
-        @Size(max = 64, message = "机构名称长度不能超过 64")
-        private String orgName;
-
         @Size(max = 64, message = "部门名称长度不能超过 64")
         private String deptName;
 
@@ -78,9 +72,6 @@ public final class DepartmentDto {
         @Size(max = 64, message = "部门名称长度不能超过 64")
         private String deptName;
 
-        @jakarta.validation.constraints.NotNull(message = "所属机构不能为空")
-        private Long orgId;
-
         /** 上级部门，0 表示顶级。 */
         private Long parentId;
 
@@ -90,8 +81,7 @@ public final class DepartmentDto {
     /**
      * 部门修改。
      *
-     * <p>{@code deptCode} 与 {@code orgId} 不可改（换机构请停用后新建），
-     * 因此本 DTO 刻意不提供这两个字段。</p>
+     * <p>{@code deptCode} 不可改（改编码请停用后新建），因此本 DTO 刻意不提供该字段。</p>
      */
     @Getter
     @Setter

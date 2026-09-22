@@ -1,4 +1,19 @@
 # =====================================================================
+#  ⛔ 历史留存 · 已执行完毕 · 勿再执行（DO NOT RUN AGAIN）
+#
+#  本运行器执行的 migrate-dept-tree.sql / migrate-dept-tree-apply.sql 引用了
+#  sys_user.org_id / sys_department.org_id 两列，它们**已被 V4 迁移删除**
+#  （guarantee-web/src/main/resources/db/migration/V4__drop_org_from_user_and_dept.sql），
+#  现在再跑必然在状态查询或阶段 2 报 "Unknown column 'org_id' in ..."；
+#  阶段 2 开头的 `UPDATE sys_user SET dept_id = NULL` 在 dept_id 已收紧为
+#  NOT NULL 之后也会直接失败。
+#
+#  它是一次性迁移运行器，已执行完毕并成为现状；保留此文件仅为记录当时的迁移口径，
+#  **不要重跑，也不要按它改逻辑**（改逻辑会掩盖历史）。
+#
+#  阶段一之后的结构校验改用：pwsh -File scripts/verify-no-org-on-user-dept.ps1
+# =====================================================================
+# =====================================================================
 #  部门树改造迁移执行器（两阶段）
 #
 #  目标结构（每个机构一棵，共 21 棵）：

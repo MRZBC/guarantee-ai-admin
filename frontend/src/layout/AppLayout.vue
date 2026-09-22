@@ -148,7 +148,7 @@ function handleUserCommand(command: string): void {
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item disabled>
-                  {{ userStore.user?.orgName || '未分配机构' }}
+                  {{ userStore.user?.deptName || '未分配部门' }}
                 </el-dropdown-item>
                 <el-dropdown-item divided command="logout">
                   <el-icon><SwitchButton /></el-icon>

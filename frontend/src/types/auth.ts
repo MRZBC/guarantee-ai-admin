@@ -7,8 +7,6 @@ export interface UserInfo {
   id: number
   username: string
   realName: string
-  orgId: number | null
-  orgName: string | null
   deptId: number | null
   deptName: string | null
   roles: string[]

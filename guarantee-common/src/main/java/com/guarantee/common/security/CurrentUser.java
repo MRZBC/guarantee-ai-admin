@@ -19,14 +19,16 @@ public final class CurrentUser {
     /**
      * 登录主体信息。
      *
+     * <p>刻意**不含机构**：机构（{@code sys_org}）是外部出函机构，服务于订单，
+     * 不是人的归属属性；用户只归属部门（{@code sys_user.dept_id}，NOT NULL）。</p>
+     *
      * @param userId      用户主键
      * @param username    登录账号
      * @param realName    姓名
-     * @param orgId       所属机构
      * @param roles       启用角色编码（来自 JWT claims）
      * @param permissions 启用权限编码（来自 JWT claims，多角色去重）
      */
-    public record Principal(Long userId, String username, String realName, Long orgId,
+    public record Principal(Long userId, String username, String realName,
                             List<String> roles, List<String> permissions) {
 
         public Principal {
@@ -69,11 +71,6 @@ public final class CurrentUser {
     public static String username() {
         Principal p = HOLDER.get();
         return p == null ? null : p.username();
-    }
-
-    public static Long orgId() {
-        Principal p = HOLDER.get();
-        return p == null ? null : p.orgId();
     }
 
     public static List<String> roles() {

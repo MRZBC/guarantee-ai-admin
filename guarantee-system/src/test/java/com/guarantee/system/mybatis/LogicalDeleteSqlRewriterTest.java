@@ -40,30 +40,31 @@ class LogicalDeleteSqlRewriterTest {
     @Test
     @DisplayName("LD-T14 无 WHERE 的查询：补一个 WHERE，且必须插在 JOIN 之后")
     void injectsWhereWhenMissing() {
+        // 用户不再挂机构（机构服务于订单），真实 SQL 里 sys_user 只 JOIN 部门
         String sql = "SELECT COUNT(*) FROM sys_user u "
-                + "LEFT JOIN sys_org o ON o.id = u.org_id "
                 + "LEFT JOIN sys_department d ON d.id = u.dept_id";
         String rewritten = LogicalDeleteSqlRewriter.rewrite(sql);
         assertThat(rewritten).contains("u.is_deleted = 0");
         // 关键回归：曾经把 "WHERE ... is_deleted = 0" 插到第一个 LEFT JOIN 之前，
         // 产生 "FROM sys_user u WHERE ... LEFT JOIN ..." 的语法错误
         int whereIndex = rewritten.indexOf(" WHERE ");
-        assertThat(whereIndex).isGreaterThan(rewritten.indexOf("LEFT JOIN sys_org"));
+        assertThat(whereIndex).isGreaterThan(rewritten.indexOf("LEFT JOIN sys_department"));
         assertThat(rewritten).doesNotContain("u WHERE");
     }
 
     @Test
     @DisplayName("LD-T14 JOIN 表注入到 ON 子句：保持 LEFT JOIN 的外连接语义")
     void injectsJoinConditionIntoOnClause() {
-        String sql = "SELECT u.id, o.org_name FROM sys_user u "
-                + "LEFT JOIN sys_org o ON o.id = u.org_id WHERE u.status = 1";
+        // 机构仍服务于订单：订单查询 JOIN sys_org 取机构名称（订单自带 org_id）
+        String sql = "SELECT o.id, org.org_name FROM tender_order o "
+                + "LEFT JOIN sys_org org ON org.id = o.org_id WHERE o.status = 'EFFECTIVE'";
         // 注入会在关键字前留一个空格，断言前统一把连续空白压成一个空格
         String rewritten = LogicalDeleteSqlRewriter.rewrite(sql).replaceAll("\\s+", " ");
         assertThat(rewritten)
-                .contains("ON o.id = u.org_id AND o.is_deleted = 0")
-                .contains("u.is_deleted = 0");
-        // 若把 o 的条件写进 WHERE，LEFT JOIN 会退化成 INNER JOIN（左表行被误过滤）
-        assertThat(rewritten).doesNotContain("WHERE u.status = 1 AND o.is_deleted");
+                .contains("ON org.id = o.org_id AND org.is_deleted = 0")
+                .contains("o.is_deleted = 0");
+        // 若把 org 的条件写进 WHERE，LEFT JOIN 会退化成 INNER JOIN（左表行被误过滤）
+        assertThat(rewritten).doesNotContain("WHERE o.status = 'EFFECTIVE' AND org.is_deleted");
     }
 
     @Test

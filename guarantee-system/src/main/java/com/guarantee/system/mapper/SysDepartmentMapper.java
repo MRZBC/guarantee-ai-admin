@@ -28,7 +28,7 @@ public interface SysDepartmentMapper {
      * 树形数据源（SYS-C-21 / SYS-C-24 口径）。
      *
      * <p>与 {@link #selectPage} 共用同一 {@code queryWhere} 片段，只是去掉分页、按
-     * {@code org_id + sort_no + id} 稳定排序，保证"树上看到的 = 列表能查到的"。
+     * {@code sort_no + id} 稳定排序，保证"树上看到的 = 列表能查到的"。
      * 返回**扁平**列表，嵌套结构由前端组装（与 {@code GET /api/system/orgs/tree} 一致）。</p>
      *
      * @param limit 条数上限，触顶时调用方负责告警
@@ -56,17 +56,16 @@ public interface SysDepartmentMapper {
     /** 恢复前的读取：包含已删除行（方法名后缀触发拦截器豁免）。 */
     SysDepartment selectEntityByIdIncludingDeleted(@Param("id") Long id);
 
-    /** 编码唯一性检查（全局唯一键，必须跨机构判定）。 */
+    /** 编码唯一性检查（全局唯一键，跨部门判定）。 */
     SysDepartment selectEntityByCode(@Param("deptCode") String deptCode);
 
-    /** 写操作目标解析：按名称/编码模糊匹配，带范围过滤（SYS-W-10）。 */
+    /** 写操作目标解析：按名称/编码模糊匹配（SYS-W-10）；阶段一 O3 起不再按机构过滤。 */
     List<SysDepartment> selectCandidates(@Param("keyword") String keyword,
-                                         @Param("orgId") Long orgId,
                                          @Param("scope") DataScope scope,
                                          @Param("limit") int limit);
 
-    /** 供下拉框使用：仅启用部门，orgId 为空时返回全部。 */
-    List<DepartmentOptionVO> selectEnabledOptions(@Param("orgId") Long orgId);
+    /** 供下拉框使用：仅启用部门（阶段一 O3 起无机构维度）。 */
+    List<DepartmentOptionVO> selectEnabledOptions();
 
     // ---------------- 写 ----------------
 

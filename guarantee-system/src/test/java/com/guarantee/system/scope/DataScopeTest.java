@@ -1,6 +1,7 @@
 package com.guarantee.system.scope;
 
 import com.guarantee.common.exception.BizException;
+import com.guarantee.common.security.Roles;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -11,6 +12,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 数据范围单元测试（TEST-03 / SYS-P-07 / SYS-P-09）。
+ *
+ * <p><b>本次重构后的语义</b>：机构已从用户与部门上移除，分级数据范围作为阶段一采用
+ * <b>O3「显式全量」</b>——{@link DataScopeService#resolve(Long, List)} 不再接收 {@code orgId}，
+ * 恒返回 {@code DataScope.all(...)}。{@link DataScope} 这个值对象本身的形状未变
+ * （仍保留 {@code of} / {@code singleOrg} 作为阶段二重建授权模型时的构造入口），
+ * 因此这里继续覆盖它的判定语义。</p>
+ *
+ * <p>原先"省级/市级用户只看本省/本市"的用例已随 {@code orgId} 输入源消失而删除，
+ * 原因见 {@code DataScopeIntegrationTest} 类注释与
+ * {@code docs/PLAN-移除用户与部门的机构归属.md} §2.3 / §8（C6、Q5）。</p>
  */
 class DataScopeTest {
 
@@ -26,7 +37,24 @@ class DataScopeTest {
     }
 
     @Test
-    @DisplayName("受限范围只包含列出的机构")
+    @DisplayName("O3 显式全量：任何角色（含只读角色）与空角色都解析为全量范围")
+    void resolveAlwaysReturnsUnrestricted() {
+        DataScopeService service = new DataScopeService(null);
+
+        for (String role : List.of(Roles.ADMIN, Roles.OPERATOR, Roles.ANALYST, Roles.VIEWER)) {
+            DataScope scope = service.resolve(42L, List.of(role));
+            assertThat(scope.unrestricted()).as("%s 也应是全量（阶段一 O3）", role).isTrue();
+            assertThat(scope.contains(999L)).as("%s 可见任意机构", role).isTrue();
+        }
+
+        // 机构不再是可见范围的输入：没有角色（或角色为空）同样是全量，
+        // 绝不能退回"仅可见自己"，否则非 ADMIN 账号会集体失效
+        assertThat(service.resolve(42L, List.of()).unrestricted()).as("空角色列表也是全量").isTrue();
+        assertThat(service.resolve(42L, null).unrestricted()).as("角色为 null 也是全量").isTrue();
+    }
+
+    @Test
+    @DisplayName("受限范围只包含列出的机构（阶段二重建授权模型时的构造语义）")
     void restrictedContainsOnlyListed() {
         DataScope scope = DataScope.of(2L, 2, List.of(2L, 3L, 4L, 5L, 6L, 7L), "本省范围：浙江省");
         assertThat(scope.contains(3L)).isTrue();
@@ -36,8 +64,8 @@ class DataScopeTest {
     }
 
     @Test
-    @DisplayName("市级范围只有一个可见机构（仅本市）")
-    void cityScopeIsSingleOrg() {
+    @DisplayName("单机构范围只包含该机构")
+    void singleOrgScopeContainsOnlyItself() {
         DataScope scope = DataScope.singleOrg(3L, 3, "机构缺失（仅可见本机构）");
         assertThat(scope.isSingleOrg()).isTrue();
         assertThat(scope.contains(3L)).isTrue();
@@ -45,9 +73,9 @@ class DataScopeTest {
     }
 
     @Test
-    @DisplayName("无机构归属时可见集合为空，不会误放开")
-    void missingOrgYieldsEmptyScope() {
-        DataScope scope = DataScope.singleOrg(null, null, "无机构归属（仅可见自己）");
+    @DisplayName("可见集合为空时不会误放开（fail-closed）")
+    void emptyOrgIdsNeverOpenUp() {
+        DataScope scope = DataScope.singleOrg(null, null, "无可见机构");
         assertThat(scope.contains(null)).isFalse();
         assertThat(scope.contains(1L)).isFalse();
     }

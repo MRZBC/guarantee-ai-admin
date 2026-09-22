@@ -47,10 +47,10 @@ public class UserQueryTool {
 
     @Tool(name = "queryUser",
             description = """
-                    查询用户账号：账号、姓名、所属机构与部门、已分配角色、状态、创建时间。
-                    当用户询问"有哪些用户""某机构/部门下有哪些人""某角色有哪些人""哪些用户很久没登录"时使用本工具。
+                    查询用户账号：账号、姓名、所属部门、已分配角色、状态、创建时间。
+                    当用户询问"有哪些用户""某部门下有哪些人""某角色有哪些人""哪些用户很久没登录"时使用本工具。
                     可用 lastLoginBefore 找出在此之前未登录过（含从未登录）的账号，例如"三个月没登录"。
-                    安全说明：手机号与邮箱在服务端已脱敏（形如 138****5678），部分账号角色只能看到账号/姓名/机构/部门/角色/状态。
+                    安全说明：手机号与邮箱在服务端已脱敏（形如 138****5678），部分账号角色只能看到账号/姓名/部门/角色/状态。
                     默认**不包含已删除用户**（逻辑删除：删除后默认不可见）。用户要看已删除数据
                     （「显示已删除」）时传 includeDeleted=true；该参数需要 system:user:delete 权限，
                     无权限时工具会返回明确的无权限说明，此时不得猜测或编造已删除数据。
@@ -60,8 +60,6 @@ public class UserQueryTool {
     public UserQueryToolResult queryUser(
             @ToolParam(description = "账号或姓名的模糊关键字，例如 user0123 或 张。不传表示不限", required = false)
             String keyword,
-            @ToolParam(description = "机构 ID。不传表示不限", required = false)
-            Long orgId,
             @ToolParam(description = "部门 ID。不传表示不限", required = false)
             Long deptId,
             @ToolParam(description = "角色编码，例如 ANALYST。不传表示不限", required = false)
@@ -97,7 +95,6 @@ public class UserQueryTool {
 
         UserDto.Query query = new UserDto.Query();
         query.setKeyword(keyword);
-        query.setOrgId(orgId);
         query.setDeptId(deptId);
         query.setRoleCode(roleCode);
         query.setStatus(status);
@@ -114,7 +111,7 @@ public class UserQueryTool {
         }
 
         boolean ambiguous = items.size() > 1 && keyword != null && !keyword.isBlank();
-        String dataSource = buildDataSource(keyword, orgId, deptId, roleCode, status, lastLoginBefore,
+        String dataSource = buildDataSource(keyword, deptId, roleCode, status, lastLoginBefore,
                 neverLoggedIn, includeDeleted, effectiveLimit, scope.description(), canSeeContact);
         log.info("Tool queryUser 执行完成 keyword={} 命中={} total={} canSeeContact={} scope={}",
                 keyword, items.size(), page.total(), canSeeContact, scope.description());
@@ -135,8 +132,6 @@ public class UserQueryTool {
                 vo.getId(),
                 vo.getUsername(),
                 vo.getRealName(),
-                vo.getOrgId(),
-                vo.getOrgName(),
                 vo.getDeptId(),
                 vo.getDeptName(),
                 vo.getRoleCodes(),
@@ -170,13 +165,12 @@ public class UserQueryTool {
         return Math.min(limit, MAX_LIMIT);
     }
 
-    private static String buildDataSource(String keyword, Long orgId, Long deptId, String roleCode,
+    private static String buildDataSource(String keyword, Long deptId, String roleCode,
                                           Integer status, String lastLoginBefore, Boolean neverLoggedIn,
                                           Boolean includeDeleted, int limit, String scope,
                                           boolean canSeeContact) {
         Map<String, Object> parts = new LinkedHashMap<>();
         parts.put("keyword", keyword == null ? "不限" : keyword);
-        parts.put("orgId", orgId == null ? "不限" : orgId);
         parts.put("deptId", deptId == null ? "不限" : deptId);
         parts.put("roleCode", roleCode == null ? "不限" : roleCode);
         parts.put("status", status == null ? "不限" : status);
@@ -184,7 +178,7 @@ public class UserQueryTool {
         parts.put("neverLoggedIn", Boolean.TRUE.equals(neverLoggedIn));
         parts.put("includeDeleted", Boolean.TRUE.equals(includeDeleted));
         parts.put("limit", limit);
-        parts.put("字段集", canSeeContact ? "含脱敏手机号/邮箱" : "仅账号/姓名/机构/部门/角色/状态");
+        parts.put("字段集", canSeeContact ? "含脱敏手机号/邮箱" : "仅账号/姓名/部门/角色/状态");
         parts.put("数据范围", scope);
         return "queryUser(" + OrgQueryTool.render(parts) + ")";
     }

@@ -1,7 +1,5 @@
 package com.guarantee.system.scope;
 
-import com.guarantee.common.security.CurrentUser;
-
 import java.util.List;
 
 /**
@@ -55,16 +53,12 @@ public final class QueryScope {
     /**
      * 从请求线程的登录用户构造。
      *
-     * <p>此时权限尚未按机构层级解析，因此必须显式提供由
-     * {@code DataScopeService#resolve} 得到的结果——本方法保留给"确实不需要机构过滤"的
-     * 场景（例如 ANALYST 自查工具调用记录，范围固定为本人）。</p>
+     * <p>阶段一 O3：用户与部门都已不再挂机构，数据范围恒为**全量**，因此本方法恒返回
+     * {@link #unrestricted()}（原先"非 ADMIN 则收敛为本人所属机构"的语义已废弃）。
+     * 方法保留是为了不改动调用点的形状；阶段二以权限码重建分级范围时会重新实现。</p>
      */
     public static QueryScope currentUserOrUnrestricted() {
-        CurrentUser.Principal principal = CurrentUser.get();
-        if (principal == null || principal.isAdmin()) {
-            return unrestricted();
-        }
-        return new QueryScope(false, principal.orgId() == null ? List.of() : List.of(principal.orgId()));
+        return unrestricted();
     }
 
     /** 序列化/日志友好。 */

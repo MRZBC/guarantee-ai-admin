@@ -17,7 +17,7 @@ import java.util.Map;
 /**
  * 部门提案执行器（SYS-W-03）。
  *
- * <p>执行期重新校验：编码唯一、机构在数据范围内、上级部门同机构、
+ * <p>执行期重新校验：编码唯一、上级部门存在、
  * 停用前置检查（部门下有启用用户时禁止停用）、删除前置检查（下有用户或下级部门即拒绝）。</p>
  */
 @Component
@@ -50,19 +50,16 @@ public class DepartmentProposalExecutor implements ProposalExecutor {
         DepartmentDto.CreateRequest dto = new DepartmentDto.CreateRequest();
         dto.setDeptCode(request.deptCode());
         dto.setDeptName(request.deptName());
-        dto.setOrgId(request.orgId());
         dto.setParentId(request.parentId());
         dto.setSortNo(request.sortNo());
         var created = departmentService.create(dto, context.scope());
         Map<String, Object> after = new LinkedHashMap<>();
         after.put("deptCode", created.getDeptCode());
         after.put("deptName", created.getDeptName());
-        after.put("orgId", created.getOrgId());
-        after.put("orgName", created.getOrgName());
         after.put("parentId", created.getParentId());
         return ProposalExecutionResult.ok(
-                "部门「" + created.getDeptName() + "」已新增（" + created.getOrgName() + "，id="
-                        + created.getId() + "）", Map.of(), after);
+                "部门「" + created.getDeptName() + "」已新增（id=" + created.getId() + "）",
+                Map.of(), after);
     }
 
     private ProposalExecutionResult update(AiOperationProposal proposal, ProposalRequest request,
@@ -119,7 +116,6 @@ public class DepartmentProposalExecutor implements ProposalExecutor {
                 "部门「" + deleted.getDeptName() + "」已删除（默认不再出现在列表中，"
                         + "可在「显示已删除」中恢复）", before, after,
                 List.of(),
-                List.of("删除不改变启用/停用状态，恢复后回到删除前的状态（LD-02）；"
-                        + "恢复时要求其所属机构已恢复"));
+                List.of("删除不改变启用/停用状态，恢复后回到删除前的状态（LD-02）"));
     }
 }

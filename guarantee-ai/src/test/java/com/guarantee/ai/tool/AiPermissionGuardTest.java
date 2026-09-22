@@ -28,7 +28,7 @@ class AiPermissionGuardTest {
         map.put(AiToolContextKeys.PERMISSIONS, permissions);
         map.put(AiToolContextKeys.ROLES, roles);
         map.put(AiToolContextKeys.USER_ID, 42L);
-        map.put(AiToolContextKeys.ORG_ID, 3L);
+        // 机构不再随身份下传（机构服务于订单，不是人的归属属性），因此这里不再写 ORG_ID
         return new ToolContext(map);
     }
 
@@ -38,7 +38,6 @@ class AiPermissionGuardTest {
         ToolContext ctx = context(List.of(Permissions.ORG_VIEW, Permissions.AI_CHAT), List.of(Roles.ANALYST));
         assertThat(AiPermissionGuard.allowed(ctx, Permissions.ORG_VIEW)).isTrue();
         assertThat(AiPermissionGuard.userId(ctx)).isEqualTo(42L);
-        assertThat(AiPermissionGuard.orgId(ctx)).isEqualTo(3L);
     }
 
     @Test

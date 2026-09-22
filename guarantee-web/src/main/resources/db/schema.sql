@@ -39,7 +39,6 @@ CREATE TABLE IF NOT EXISTS sys_department (
     id         BIGINT      NOT NULL AUTO_INCREMENT,
     dept_code  VARCHAR(32) NOT NULL COMMENT '部门编码',
     dept_name  VARCHAR(64) NOT NULL COMMENT '部门名称',
-    org_id     BIGINT      NOT NULL COMMENT '所属机构',
     parent_id  BIGINT      NOT NULL DEFAULT 0 COMMENT '上级部门，0为顶级',
     status     TINYINT     NOT NULL DEFAULT 1 COMMENT '状态 1启用 0停用',
     sort_no    INT         NOT NULL DEFAULT 0,
@@ -50,8 +49,7 @@ CREATE TABLE IF NOT EXISTS sys_department (
     deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
     KEY idx_sys_department_deleted (is_deleted),
-    UNIQUE KEY uk_sys_dept_code (dept_code, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
-    KEY idx_sys_dept_org (org_id)
+    UNIQUE KEY uk_sys_dept_code (dept_code, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000')))
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '部门配置';
 
 CREATE TABLE IF NOT EXISTS sys_user (
@@ -59,8 +57,7 @@ CREATE TABLE IF NOT EXISTS sys_user (
     username      VARCHAR(64)  NOT NULL COMMENT '登录账号',
     password      VARCHAR(100) NOT NULL COMMENT 'BCrypt 密码散列',
     real_name     VARCHAR(64)  NOT NULL COMMENT '姓名',
-    org_id        BIGINT       NOT NULL COMMENT '所属机构',
-    dept_id       BIGINT       NULL COMMENT '所属部门',
+    dept_id       BIGINT       NOT NULL COMMENT '所属部门',
     phone         VARCHAR(20)  NULL,
     email         VARCHAR(128) NULL,
     status        TINYINT      NOT NULL DEFAULT 1 COMMENT '状态 1启用 0停用',
@@ -73,7 +70,6 @@ CREATE TABLE IF NOT EXISTS sys_user (
     PRIMARY KEY (id),
     KEY idx_sys_user_deleted (is_deleted),
     UNIQUE KEY uk_sys_user_username (username, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
-    KEY idx_sys_user_org (org_id),
     KEY idx_sys_user_dept (dept_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户配置';
 

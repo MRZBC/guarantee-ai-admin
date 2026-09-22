@@ -25,7 +25,6 @@ public class JwtTokenProvider {
 
     private static final String CLAIM_USER_ID = "uid";
     private static final String CLAIM_REAL_NAME = "name";
-    private static final String CLAIM_ORG_ID = "orgId";
     private static final String CLAIM_ROLES = "roles";
     private static final String CLAIM_PERMISSIONS = "perms";
 
@@ -65,7 +64,6 @@ public class JwtTokenProvider {
                 .issuer(properties.getIssuer())
                 .claim(CLAIM_USER_ID, user.getId())
                 .claim(CLAIM_REAL_NAME, user.getRealName())
-                .claim(CLAIM_ORG_ID, user.getOrgId())
                 .claim(CLAIM_ROLES, roles)
                 .claim(CLAIM_PERMISSIONS, permissions)
                 .issuedAt(now)
@@ -91,11 +89,6 @@ public class JwtTokenProvider {
 
     public static Long userId(Claims claims) {
         Object value = claims.get(CLAIM_USER_ID);
-        return value instanceof Number number ? number.longValue() : null;
-    }
-
-    public static Long orgId(Claims claims) {
-        Object value = claims.get(CLAIM_ORG_ID);
         return value instanceof Number number ? number.longValue() : null;
     }
 

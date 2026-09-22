@@ -38,8 +38,6 @@ public final class UserDto {
         @Size(max = 64, message = "关键字长度不能超过 64")
         private String keyword;
 
-        private Long orgId;
-
         private Long deptId;
 
         /** 角色编码过滤。 */
@@ -82,16 +80,17 @@ public final class UserDto {
         @Size(max = 128, message = "邮箱长度不能超过 128")
         private String email;
 
-        /** 变更部门；null 表示不改。置空部门用 {@code clearDept=true}。 */
+        /**
+         * 变更部门；{@code null} 表示不改。
+         *
+         * <p>阶段一 O3：用户必须属于一个部门（{@code sys_user.dept_id NOT NULL}），
+         * "清空部门"能力已整体移除，因此不再有 {@code clearDept} 字段。</p>
+         */
         private Long deptId;
-
-        /** 是否把部门清空。 */
-        private Boolean clearDept;
 
         /** 至少一个字段可改：由 Service 层显式校验，避免"空请求"被当成成功。 */
         public boolean isEmpty() {
-            return realName == null && phone == null && email == null
-                    && deptId == null && !Boolean.TRUE.equals(clearDept);
+            return realName == null && phone == null && email == null && deptId == null;
         }
     }
 

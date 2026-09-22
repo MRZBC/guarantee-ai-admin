@@ -14,8 +14,9 @@
       结果集必为空（由 <choose> 显式写成 1 = 0，而不是依赖 SQL 语义碰巧为空）。
       调用方必须在 scope.unrestricted 为 true 时**不**传入本片段。
 
-      用 ${alias} 而不是固定的表别名，是因为 sys_org 自身、sys_user.org_id、
-      sys_department.org_id、tender_order.org_id 都要复用同一份过滤逻辑。
+      用 ${alias} 而不是固定的表别名，是因为 sys_org 自身与订单（tender_order 等）
+      都要复用同一份过滤逻辑。
+      注：用户与部门已不再挂机构（阶段一 O3），不再使用本片段。
     -->
     <sql id="scopeOrgFilter">
         <choose>
@@ -207,36 +208,13 @@
         WHERE status = 1 AND is_deleted = 0 AND id IN (SELECT id FROM org_tree)
     </select>
 
-    <select id="countEnabledUserByOrg" resultType="long">
-        <!-- LD-03：停用前置检查只统计未删除的启用用户 -->
-        SELECT COUNT(*) FROM sys_user WHERE org_id = #{orgId} AND status = 1 AND is_deleted = 0
-    </select>
-
-    <select id="countDepartmentByOrg" resultType="long">
-        SELECT COUNT(*) FROM sys_department WHERE org_id = #{orgId} AND is_deleted = 0
-    </select>
-
+    <!-- 阶段一（O3）：用户与部门都不再挂机构，因此
+         countEnabledUserByOrg / countDepartmentByOrg 已删除
+         （机构停用/删除不再需要这两个前置检查）。
+         订单仍带机构维度，countOrderByOrg 保留。 -->
     <select id="countOrderByOrg" resultType="long">
         SELECT (SELECT COUNT(*) FROM tender_order WHERE org_id = #{orgId} AND is_deleted = 0)
              + (SELECT COUNT(*) FROM performance_order WHERE org_id = #{orgId} AND is_deleted = 0)
-    </select>
-
-    <!--
-      机构下的部门数与启用用户数（SYS-Q-01 出参 deptCount / userCount）。
-      一次批量取回，避免逐机构查询造成 N+1；部门数含停用部门（体现"铺设情况"），
-      用户数只算启用用户（停用用户不属于有效人力）。
-    -->
-    <select id="selectOrgCounts" resultType="com.guarantee.system.dto.OrgCountRef">
-        SELECT o.id AS orgId,
-               (SELECT COUNT(*) FROM sys_department d
-                 WHERE d.org_id = o.id AND d.is_deleted = 0) AS deptCount,
-               (SELECT COUNT(*) FROM sys_user u
-                 WHERE u.org_id = o.id AND u.status = 1 AND u.is_deleted = 0) AS userCount
-        FROM sys_org o
-        WHERE o.id IN
-        <foreach collection="orgIds" item="orgId" open="(" separator="," close=")">
-            #{orgId}
-        </foreach>
     </select>
 
     <insert id="insert" parameterType="com.guarantee.system.entity.SysOrg" useGeneratedKeys="true" keyProperty="id">
@@ -292,11 +270,6 @@
     -->
     <select id="selectEntityByIdIncludingDeleted" resultType="com.guarantee.system.entity.SysOrg">
         SELECT <include refid="entityCols"/> FROM sys_org WHERE id = #{id}
-    </select>
-
-    <!-- 删除前置检查：机构下**未删除**的用户数（含停用用户，与停用检查的"启用用户"口径不同，§6.2） -->
-    <select id="countUserByOrg" resultType="long">
-        SELECT COUNT(*) FROM sys_user WHERE org_id = #{orgId} AND is_deleted = 0
     </select>
 
 </mapper>

@@ -28,8 +28,6 @@ public record OrgQueryToolResult(
             String parentName,
             Integer status,
             String statusName,
-            Long deptCount,
-            Long userCount,
             /**
              * 是否已被逻辑删除：1=已删除（仅 {@code includeDeleted=true} 时可能出现），
              * 0/null=未删除。模型据此区分"默认不可见"的记录，不得对已删除记录再提变更提案。

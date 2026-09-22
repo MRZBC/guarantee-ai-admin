@@ -42,8 +42,8 @@ public class OrgQueryTool {
 
     @Tool(name = "queryOrg",
             description = """
-                    查询保函运营机构的配置信息：机构编码、名称、行政区划、层级（1总部/2省级/3市级）、上级机构、状态，以及机构下的部门数与用户数。
-                    当用户询问"有哪些机构""某省有几个机构""XX 机构下面有哪些下级机构""机构下有多少部门/用户"时使用本工具。
+                    查询保函运营机构的配置信息：机构编码、名称、行政区划、层级（1总部/2省级/3市级）、上级机构、状态。
+                    当用户询问"有哪些机构""某省有几个机构""XX 机构下面有哪些下级机构"时使用本工具。
                     结果已按当前用户的数据范围过滤：省级用户只能看到本省机构，市级用户只能看到本市机构。
                     默认**不包含已删除机构**（逻辑删除：删除后默认不可见）。用户要看已删除数据
                     （「显示已删除」）时传 includeDeleted=true；该参数需要 system:org:delete 权限，
@@ -91,7 +91,7 @@ public class OrgQueryTool {
 
         var scope = scopeResolver.resolve(toolContext);
         long total = orgService.page(query, scope).total();
-        // 本工具需要 parentName / deptCount / userCount，且"命中多个要返回全量候选"，
+        // 本工具需要 parentName，且"命中多个要返回全量候选"，
         // 因此用 Service 的查询方法而不是分页结果（口径由 Service 统一）。
         List<OrgVO> list = orgService.listForQuery(query, scope);
 
@@ -117,7 +117,6 @@ public class OrgQueryTool {
                 vo.getOrgLevel(), OrgService.levelName(vo.getOrgLevel()),
                 vo.getParentId(), vo.getParentName(),
                 vo.getStatus(), OrgService.statusName(vo.getStatus()),
-                vo.getDeptCount(), vo.getUserCount(),
                 vo.getIsDeleted(), vo.getDeletedAt() == null ? null : vo.getDeletedAt().toString());
     }
 

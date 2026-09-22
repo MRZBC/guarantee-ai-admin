@@ -58,7 +58,7 @@ public class UserProposalTool extends BaseProposalTool {
                     提交一个【用户变更提案】。本工具**不会立即修改数据**，只生成待确认提案，
                     用户点击「确认执行」后才生效。
                     支持的动作：
-                    - UPDATE：修改资料（必填 id；可改 realName / phone / email / deptId，或 clearDept=true 清空部门）
+                    - UPDATE：修改资料（必填 id；可改 realName / phone / email / deptId）
                     - DISABLE / ENABLE：停用/启用（必填 id）
                     - ASSIGN_ROLES：角色分配（必填 id 与 roleCodes，例如 ["ANALYST","VIEWER"]）
                     - DELETE：删除用户（必填 id）。**与停用完全不同**：停用=暂停业务、可随时启用、
@@ -68,7 +68,7 @@ public class UserProposalTool extends BaseProposalTool {
                     - 重置密码（RESET_PASSWORD）
                     - 恢复已删除用户（RESTORE）：请引导用户到页面用「显示已删除」操作
                     重要规则：
-                    - username 与 orgId 不可修改；不允许修改自己的所属部门。
+                    - username 不可修改；不允许修改自己的所属部门。
                     - 禁止停用自己；禁止停用最后一个启用状态的超级管理员（ADMIN）。
                     - 禁止删除自己；禁止删除最后一个启用状态的超级管理员（ADMIN）。
                     - 禁止给自己增加或移除 ADMIN 角色；禁止移除最后一个启用 ADMIN 的 ADMIN 角色。
@@ -99,8 +99,6 @@ public class UserProposalTool extends BaseProposalTool {
             String email,
             @ToolParam(description = "所属部门 ID（UPDATE）。不允许修改自己的部门", required = false)
             Long deptId,
-            @ToolParam(description = "是否清空所属部门（UPDATE）。默认 false", required = false)
-            Boolean clearDept,
             @ToolParam(description = "变更后的角色编码列表（ASSIGN_ROLES），例如 [\"ANALYST\"]", required = false)
             List<String> roleCodes,
             @ToolParam(description = "用户的原话，用于确认卡上核对模型理解是否正确", required = false)
@@ -146,7 +144,7 @@ public class UserProposalTool extends BaseProposalTool {
                 List<TargetCandidate> list = new ArrayList<>();
                 for (var candidate : page.list()) {
                     list.add(new TargetCandidate(candidate.getId(), candidate.getUsername(),
-                            candidate.getRealName(), candidate.getOrgName()));
+                            candidate.getRealName(), candidate.getDeptName()));
                 }
                 return WriteToolResult.ambiguous(list,
                         "用户关键字命中多个目标，请把候选列给用户确认后再调用本工具，不要自行选择");
@@ -161,7 +159,7 @@ public class UserProposalTool extends BaseProposalTool {
         ProposalRequest request = ProposalRequest.builder()
                 .id(targetId).targetName(targetName).userText(userText)
                 .realName(realName).phone(phone).email(email)
-                .deptId(deptId).clearDept(clearDept).roleCodes(roleCodes)
+                .deptId(deptId).roleCodes(roleCodes)
                 .build();
 
         // 敏感值（phone / email）不落提案表，只加密暂存（SYS-A-09）
@@ -195,7 +193,6 @@ public class UserProposalTool extends BaseProposalTool {
             dto.setPhone(request.phone());
             dto.setEmail(request.email());
             dto.setDeptId(request.deptId());
-            dto.setClearDept(request.clearDept());
             // 预检：格式校验 + 不得修改自己的部门
             userService.validateUpdateProfile(targetId, dto, scope, operatorUserId);
 
@@ -210,12 +207,7 @@ public class UserProposalTool extends BaseProposalTool {
                 changes.add(new ProposalPreview.ChangeItem("email", "邮箱",
                         mask(existing.getEmail()), "将变更为新值（审计中只记录是否变更，不记录具体值）"));
             }
-            if (Boolean.TRUE.equals(request.clearDept())) {
-                changes.add(new ProposalPreview.ChangeItem("deptId", "所属部门",
-                        String.valueOf(existing.getDeptId()), "（清空）"));
-            } else {
-                addIfChanged(changes, "deptId", "所属部门", existing.getDeptId(), request.deptId());
-            }
+            addIfChanged(changes, "deptId", "所属部门", existing.getDeptId(), request.deptId());
             if (changes.isEmpty()) {
                 throw new BizException("没有任何字段发生变化，无需提交提案");
             }

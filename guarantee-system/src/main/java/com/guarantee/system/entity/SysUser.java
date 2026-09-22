@@ -19,9 +19,7 @@ public class SysUser {
     private String password;
     /** 姓名 */
     private String realName;
-    /** 所属机构 */
-    private Long orgId;
-    /** 所属部门 */
+    /** 所属部门（必填：用户必须属于一个部门） */
     private Long deptId;
     private String phone;
     private String email;

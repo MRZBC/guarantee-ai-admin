@@ -196,8 +196,12 @@ public class OperationAuditService {
                         "你没有查看 " + requested + " 类操作审计的权限（该类记录无机构归属，仅超级管理员可见）");
             }
             query.setAllowedTargetTypes(ORG_SCOPED_TARGET_TYPES);
-            query.setRestrictByOrg(true);
-            query.setVisibleOrgIds(scope == null || scope.unrestricted() ? null : scope.orgIds());
+            // 阶段一（O3）：用户与部门都不再挂机构，数据范围恒为全量，因此**不能再按
+            // operator_org_id 收敛**。若此处仍置 restrictByOrg=true，而 visibleOrgIds
+            // 因"范围不受限"恒为 null，SQL 会走 <otherwise> 注入 `AND 1 = 0`，
+            // 导致非 ADMIN 查询操作审计**恒为空**——这是编译期查不出的静默失效。
+            query.setRestrictByOrg(false);
+            query.setVisibleOrgIds(null);
         }
 
         long total = auditMapper.countByQuery(query);

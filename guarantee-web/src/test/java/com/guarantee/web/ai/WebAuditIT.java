@@ -57,7 +57,8 @@ class WebAuditIT {
     /** 模拟页面请求线程上的登录主体（Web 线程上 CurrentUser 是有效的）。 */
     @BeforeEach
     void setUpPrincipal() {
-        CurrentUser.set(new CurrentUser.Principal(adminId(), "admin", "超级管理员", headquartersId(),
+        // 机构已从用户上移除：Principal 不再携带 orgId
+        CurrentUser.set(new CurrentUser.Principal(adminId(), "admin", "超级管理员",
                 List.of(Roles.ADMIN), userService.listPermissionCodesByUserId(adminId())));
         // 复位可能被其它用例改动的状态，保证本类可重复运行
         jdbcTemplate.update("UPDATE insurance_type SET status = 1 WHERE status <> 1");
@@ -184,7 +185,7 @@ class WebAuditIT {
                     .hasMessageContaining("缺少操作者身份");
         } finally {
             // 恢复上下文，供后续断言使用
-            CurrentUser.set(new CurrentUser.Principal(adminId(), "admin", "超级管理员", headquartersId(),
+            CurrentUser.set(new CurrentUser.Principal(adminId(), "admin", "超级管理员",
                     List.of(Roles.ADMIN), userService.listPermissionCodesByUserId(adminId())));
         }
 
@@ -238,12 +239,11 @@ class WebAuditIT {
             orgService().changeStatus(testOrgId, 0, adminScope());
 
             // 部门（启停自建的空部门）。
-            // 注意必须挂到**新建的**空机构下：演示数据里的部门大多已有启用用户，
+            // 部门不再挂机构，因此这里建一个**全新的顶级部门**：演示数据里的部门大多已有启用用户，
             // 停用它们会被前置检查拒绝（这本身是正确行为，但不适合用来断言"审计已接上"）。
             var deptCreate = new com.guarantee.system.dto.DepartmentDto.CreateRequest();
             deptCreate.setDeptCode("DEPTT" + System.currentTimeMillis() % 10000);
             deptCreate.setDeptName("审计覆盖检查部门");
-            deptCreate.setOrgId(testOrgId);
             deptCreate.setParentId(0L);
             testDeptId = departmentService().create(deptCreate, adminScope()).getId();
             // 自证前提：新建部门在空机构下，必须没有任何启用用户，否则后面的停用断言无意义
@@ -308,7 +308,7 @@ class WebAuditIT {
     }
 
     private DataScope adminScope() {
-        return dataScopeService.resolve(adminId(), headquartersId(), List.of(Roles.ADMIN));
+        return dataScopeService.resolve(adminId(), List.of(Roles.ADMIN));
     }
 
     /** 取某目标最近的审计记录。 */
@@ -372,10 +372,5 @@ class WebAuditIT {
 
     private long orgIdByCode(String orgCode) {
         return jdbcTemplate.queryForObject("SELECT id FROM sys_org WHERE org_code = ?", Long.class, orgCode);
-    }
-
-    private long firstDepartmentIdOf(long orgId) {
-        return jdbcTemplate.queryForObject(
-                "SELECT id FROM sys_department WHERE org_id = ? ORDER BY id LIMIT 1", Long.class, orgId);
     }
 }

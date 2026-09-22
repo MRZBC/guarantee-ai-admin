@@ -90,10 +90,9 @@ export function pageDepartments(params: DepartmentQuery) {
   return http.get<PageResult<DepartmentItem>>('/system/departments', { params })
 }
 
-export function listDepartmentOptions(orgId?: number) {
-  return http.get<DepartmentOption[]>('/system/departments/options', {
-    params: orgId ? { orgId } : {}
-  })
+/** 部门下拉项（重构后不再接受 `orgId`：用户与部门都没有机构归属属性） */
+export function listDepartmentOptions() {
+  return http.get<DepartmentOption[]>('/system/departments/options')
 }
 
 /**
@@ -111,7 +110,7 @@ export function createDepartment(data: Record<string, unknown>) {
   return http.post<DepartmentItem>('/system/departments', data)
 }
 
-/** 修改部门（权限：system:dept:update）。deptCode 与 orgId 不可改（SYS-W-03） */
+/** 修改部门（权限：system:dept:update）。deptCode 不可改（SYS-W-03） */
 export function updateDepartment(id: number, data: Record<string, unknown>) {
   return http.put<DepartmentItem>(`/system/departments/${id}`, data)
 }

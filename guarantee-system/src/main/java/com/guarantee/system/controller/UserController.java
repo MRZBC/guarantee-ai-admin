@@ -90,7 +90,7 @@ public class UserController {
         if (principal == null) {
             return DataScope.of(null, null, List.of(), "未登录（无可见范围）");
         }
-        return dataScopeService.resolve(principal.userId(), principal.orgId(), principal.roles());
+        return dataScopeService.resolve(principal.userId(), principal.roles());
     }
 
     private static Long currentUserId() {

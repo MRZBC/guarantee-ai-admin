@@ -42,7 +42,8 @@ class AiToolRegistryTest {
         registry = new AiToolRegistry(
                 new OrderSummaryTool(mock(OrderStatisticsService.class)),
                 new OrgQueryTool(mock(OrgService.class), mock(AiDataScopeResolver.class)),
-                new DepartmentQueryTool(mock(DepartmentService.class), mock(OrgService.class),
+                // 部门不再挂机构：两个部门工具的构造器都不再需要 OrgService
+                new DepartmentQueryTool(mock(DepartmentService.class),
                         mock(AiDataScopeResolver.class)),
                 new UserQueryTool(mock(UserService.class), mock(AiDataScopeResolver.class)),
                 new RoleQueryTool(mock(RoleService.class), mock(AiDataScopeResolver.class)),
@@ -53,7 +54,7 @@ class AiToolRegistryTest {
                 new OrgProposalTool(mock(ProposalService.class), mock(AiDataScopeResolver.class),
                         mock(OrgService.class)),
                 new DepartmentProposalTool(mock(ProposalService.class), mock(AiDataScopeResolver.class),
-                        mock(DepartmentService.class), mock(OrgService.class)),
+                        mock(DepartmentService.class)),
                 new UserProposalTool(mock(ProposalService.class), mock(AiDataScopeResolver.class),
                         mock(UserService.class)),
                 new RoleProposalTool(mock(ProposalService.class), mock(AiDataScopeResolver.class),

@@ -91,7 +91,7 @@ public class AuthService {
     private CurrentUserVO buildCurrentUser(Long userId, List<String> roles, List<String> permissions) {
         UserVO user = userService.getById(userId);
         return new CurrentUserVO(user.getId(), user.getUsername(), user.getRealName(),
-                user.getOrgId(), user.getOrgName(), user.getDeptId(), user.getDeptName(),
+                user.getDeptId(), user.getDeptName(),
                 roles, permissions);
     }
 }

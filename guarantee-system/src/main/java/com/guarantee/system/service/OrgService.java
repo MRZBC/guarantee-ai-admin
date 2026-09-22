@@ -114,7 +114,8 @@ public class OrgService {
     /**
      * 工具/页面共用的机构查询（SYS-Q-01）。
      *
-     * <p>返回 {@link OrgVO} 列表并补齐 {@code parentName} / {@code deptCount} / {@code userCount}；
+     * <p>阶段一 O3 起机构不再承载"部门数 / 用户数"（部门与用户都已不挂机构，
+     * {@code OrgVO} 也已删除这两个字段），因此这里只补齐 {@code parentName}；
      * 补齐放在 Service 而不是工具里，是为了让"助手回答"与"页面展示"共用同一份口径。</p>
      */
     @Transactional(readOnly = true)
@@ -124,14 +125,9 @@ public class OrgService {
         if (list.isEmpty()) {
             return list;
         }
-        List<Long> ids = list.stream().map(OrgVO::getId).toList();
-        Map<Long, long[]> counts = countByOrgIds(ids);
         Map<Long, String> parentNames = orgNameByIds(list.stream()
                 .map(OrgVO::getParentId).filter(pid -> pid != null && pid != 0L).distinct().toList());
         for (OrgVO vo : list) {
-            long[] count = counts.get(vo.getId());
-            vo.setDeptCount(count == null ? 0L : count[0]);
-            vo.setUserCount(count == null ? 0L : count[1]);
             vo.setParentName(vo.getParentId() == null || vo.getParentId() == 0L
                     ? null : parentNames.get(vo.getParentId()));
         }
@@ -167,25 +163,6 @@ public class OrgService {
             return "未知";
         }
         return status == 1 ? "启用" : "停用";
-    }
-
-    /**
-     * 机构下的部门数与启用用户数（批量，SYS-Q-01 出参）。
-     *
-     * @return {@code orgId -> [deptCount, userCount]}
-     */
-    @Transactional(readOnly = true)
-    public Map<Long, long[]> countByOrgIds(List<Long> orgIds) {
-        if (orgIds == null || orgIds.isEmpty()) {
-            return Map.of();
-        }
-        Map<Long, long[]> result = new LinkedHashMap<>();
-        for (var ref : sysOrgMapper.selectOrgCounts(orgIds)) {
-            result.put(ref.getOrgId(), new long[]{
-                    ref.getDeptCount() == null ? 0L : ref.getDeptCount(),
-                    ref.getUserCount() == null ? 0L : ref.getUserCount()});
-        }
-        return result;
     }
 
     /** 全部机构实体（用于把 parentId 翻译成 parentName，机构表很小）。 */
@@ -304,7 +281,8 @@ public class OrgService {
     /**
      * 机构启停。
      *
-     * <p>停用前置检查：存在启用中的下级机构或启用中的用户时**禁止**停用（SYS-W-02）。</p>
+     * <p>停用前置检查：存在启用中的**下级机构**时禁止停用（SYS-W-02）。
+     * 阶段一 O3 起"启用中的用户"检查已移除（用户不再挂机构）。</p>
      */
     @Transactional
     public OrgVO changeStatus(Long id, Integer targetStatus, DataScope scope) {
@@ -389,26 +367,29 @@ public class OrgService {
         return existing;
     }
 
-    /** 停用阻碍项（SYS-W-02）：下级机构数、部门数、用户数、订单数。 */
+    /**
+     * 停用阻碍项（SYS-W-02）：仅"启用中的下级机构"。
+     *
+     * <p>阶段一 O3：部门与用户都已不挂机构，原"启用中的用户数"检查已无意义，故移除；
+     * 下级机构这道守卫必须保留——停用父机构会让启用中的下级机构悬挂。</p>
+     */
     public List<String> stopBlockers(SysOrg org) {
         List<String> blockers = new ArrayList<>();
         long enabledDescendants = sysOrgMapper.countEnabledDescendants(org.getId());
         if (enabledDescendants > 0) {
             blockers.add("存在 " + enabledDescendants + " 个启用中的下级机构");
         }
-        long enabledUsers = sysOrgMapper.countEnabledUserByOrg(org.getId());
-        if (enabledUsers > 0) {
-            blockers.add("存在 " + enabledUsers + " 个启用中的用户");
-        }
         return blockers;
     }
 
-    /** 停用影响面（用于确认卡明示，不作为阻碍）。 */
+    /**
+     * 停用影响面（用于确认卡明示，不作为阻碍）。
+     *
+     * <p>阶段一 O3：部门数 / 启用用户数已不再挂在机构下，只剩下级机构数与订单数。</p>
+     */
     public Map<String, Object> stopImpact(SysOrg org) {
         Map<String, Object> impact = new LinkedHashMap<>();
         impact.put("下级机构数", sysOrgMapper.countChildren(org.getId()));
-        impact.put("部门数", sysOrgMapper.countDepartmentByOrg(org.getId()));
-        impact.put("启用用户数", sysOrgMapper.countEnabledUserByOrg(org.getId()));
         impact.put("订单数", sysOrgMapper.countOrderByOrg(org.getId()));
         return impact;
     }
@@ -428,9 +409,11 @@ public class OrgService {
     /**
      * 机构逻辑删除。
      *
-     * <p>前置检查**比停用更严格**（设计 §6.2）：停用只拦"启用中的下级机构/用户"，
-     * 删除要求机构下不存在任何未删除的下级机构、部门、用户与关联订单——
+     * <p>前置检查**比停用更严格**（设计 §6.2）：停用只拦"启用中的下级机构"，
+     * 删除要求机构下不存在任何未删除的下级机构与关联订单——
      * 删除后被引用的历史会指向一条"不存在"的记录，因此被引用即拒绝。</p>
+     *
+     * <p>阶段一 O3：原"未删除的部门 / 用户"检查已移除（部门与用户都已不挂机构）。</p>
      */
     @Transactional
     public OrgVO delete(Long id, DataScope scope, Long operatorUserId) {
@@ -457,20 +440,17 @@ public class OrgService {
         return before;
     }
 
-    /** 删除阻碍项（§6.2）：下级机构 / 部门 / 用户 / 关联订单必须全部为"未删除"。 */
+    /**
+     * 删除阻碍项（§6.2）：下级机构 / 关联订单必须全部为"未删除"。
+     *
+     * <p>阶段一 O3：部门与用户都已不挂机构，原"未删除的部门数 / 用户数"检查已无意义，故移除；
+     * 下级机构与订单这两道守卫必须保留——机构仍被它们引用，删除会产生悬挂引用。</p>
+     */
     public List<String> deleteBlockers(SysOrg org) {
         List<String> blockers = new ArrayList<>();
         long children = sysOrgMapper.countChildren(org.getId());
         if (children > 0) {
             blockers.add("存在 " + children + " 个未删除的下级机构");
-        }
-        long departments = sysOrgMapper.countDepartmentByOrg(org.getId());
-        if (departments > 0) {
-            blockers.add("存在 " + departments + " 个未删除的部门");
-        }
-        long users = sysOrgMapper.countUserByOrg(org.getId());
-        if (users > 0) {
-            blockers.add("存在 " + users + " 个未删除的用户");
         }
         long orders = sysOrgMapper.countOrderByOrg(org.getId());
         if (orders > 0) {
@@ -483,10 +463,8 @@ public class OrgService {
     public Map<String, Object> deleteImpact(SysOrg org) {
         Map<String, Object> impact = new LinkedHashMap<>();
         impact.put("下级机构数", sysOrgMapper.countChildren(org.getId()));
-        impact.put("部门数", sysOrgMapper.countDepartmentByOrg(org.getId()));
-        impact.put("用户数", sysOrgMapper.countUserByOrg(org.getId()));
         impact.put("关联订单数", sysOrgMapper.countOrderByOrg(org.getId()));
-        impact.put("影响", "该机构默认不再出现在列表中；被下级机构/部门/用户/订单引用时会被拒绝，可在「显示已删除」中恢复");
+        impact.put("影响", "该机构默认不再出现在列表中；被下级机构或订单引用时会被拒绝，可在「显示已删除」中恢复");
         return impact;
     }
 

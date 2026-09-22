@@ -121,7 +121,9 @@ public abstract class BaseProposalTool {
                 AiPermissionGuard.userId(context),
                 AiPermissionGuard.username(context),
                 AiPermissionGuard.realName(context),
-                AiPermissionGuard.orgId(context),
+                // 机构不再是人/部门的归属属性（机构服务于订单）：审计操作者机构暂落空，
+                // 该列去留见 PLAN-移除用户与部门的机构归属 §8 Q3
+                null,
                 toolName, action, targetType, targetId, targetName,
                 request, preview, requiredPerms, userText, secretValues,
                 AiPermissionGuard.traceId(context));

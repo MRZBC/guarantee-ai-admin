@@ -1,25 +1,23 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { deleteUser, listOrgOptions, pageUsers } from '@/api/system'
+import { deleteUser, pageUsers } from '@/api/system'
 import { useUserStore } from '@/stores/user'
 import { formatDateTime } from '@/utils/format'
 import { isEnabled, statusLabel, statusParam, STATUS_OPTIONS } from '@/utils/status'
-import type { OrgOption, UserItem, UserQuery } from '@/types/system'
+import type { UserItem, UserQuery } from '@/types/system'
 
 const userStore = useUserStore()
 
 const loading = ref(false)
 const rows = ref<UserItem[]>([])
 const total = ref(0)
-const orgOptions = ref<OrgOption[]>([])
 
 const query = reactive<UserQuery>({
   pageNum: 1,
   pageSize: 10,
   username: '',
   realName: '',
-  orgId: null,
   status: null
 })
 
@@ -39,7 +37,6 @@ async function loadData(): Promise<void> {
       pageSize: query.pageSize,
       username: query.username || undefined,
       realName: query.realName || undefined,
-      orgId: query.orgId ?? undefined,
       status: statusParam(query.status),
     })
     rows.value = result?.list ?? []
@@ -52,14 +49,6 @@ async function loadData(): Promise<void> {
   }
 }
 
-async function loadOrgOptions(): Promise<void> {
-  try {
-    orgOptions.value = (await listOrgOptions()) ?? []
-  } catch {
-    orgOptions.value = []
-  }
-}
-
 function handleSearch(): void {
   query.pageNum = 1
   void loadData()
@@ -68,7 +57,6 @@ function handleSearch(): void {
 function handleReset(): void {
   query.username = ''
   query.realName = ''
-  query.orgId = null
   query.status = null
   query.pageNum = 1
   void loadData()
@@ -113,7 +101,6 @@ async function handleDelete(row: UserItem): Promise<void> {
 
 
 onMounted(() => {
-  void loadOrgOptions()
   void loadData()
 })
 </script>
@@ -136,18 +123,6 @@ onMounted(() => {
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
             <el-form-item label="姓名">
               <el-input v-model="query.realName" placeholder="请输入姓名" clearable />
-            </el-form-item>
-          </el-col>
-          <el-col :xs="24" :sm="12" :md="8" :lg="6">
-            <el-form-item label="所属机构">
-              <el-select v-model="query.orgId" placeholder="全部机构" clearable filterable>
-                <el-option
-                  v-for="org in orgOptions"
-                  :key="org.id"
-                  :label="org.orgName"
-                  :value="org.id"
-                />
-              </el-select>
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
@@ -188,9 +163,6 @@ onMounted(() => {
         <el-table-column type="index" label="#" width="52" align="center" fixed />
         <el-table-column prop="username" label="用户名" width="140" fixed show-overflow-tooltip />
         <el-table-column prop="realName" label="姓名" width="120" show-overflow-tooltip />
-        <el-table-column prop="orgName" label="所属机构" min-width="170" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.orgName || '--' }}</template>
-        </el-table-column>
         <el-table-column prop="deptName" label="所属部门" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.deptName || '--' }}</template>
         </el-table-column>

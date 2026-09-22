@@ -20,10 +20,6 @@ public class OrgVO {
     private Long parentId;
     /** 上级机构名称（Service 层补齐，SYS-Q-01 出参） */
     private String parentName;
-    /** 机构下的部门数（Service 层补齐） */
-    private Long deptCount;
-    /** 机构下的启用用户数（Service 层补齐） */
-    private Long userCount;
     /** 状态 1启用 0停用 */
     private Integer status;
     private Integer sortNo;

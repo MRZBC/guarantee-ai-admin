@@ -412,7 +412,7 @@ public class AiChatService {
         if (principal != null) {
             putIfNotNull(context, AiToolContextKeys.USERNAME, principal.username());
             putIfNotNull(context, AiToolContextKeys.REAL_NAME, principal.realName());
-            putIfNotNull(context, AiToolContextKeys.ORG_ID, principal.orgId());
+            // 机构不再是人/部门的归属属性（机构服务于订单），ToolContext 不再携带 orgId
             context.put(AiToolContextKeys.PERMISSIONS, principal.permissions());
             context.put(AiToolContextKeys.ROLES, principal.roles());
         } else {

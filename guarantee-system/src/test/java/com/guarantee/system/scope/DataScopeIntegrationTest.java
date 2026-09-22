@@ -1,5 +1,6 @@
 package com.guarantee.system.scope;
 
+import com.guarantee.common.exception.BizException;
 import com.guarantee.common.security.Roles;
 import com.guarantee.system.dto.DepartmentDto;
 import com.guarantee.system.dto.OrgDto;
@@ -21,17 +22,33 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 数据范围与机构层级的集成测试（TEST-03 / TEST-13 / SYS-P-15~17 / AC-03 / AC-11）。
+ * 机构层级 / 部门层级 / 数据范围的集成测试（TEST-03 / TEST-13 / SYS-P-15~17 / AC-03 / AC-11）。
+ *
+ * <p><b>领域模型前提（本次重构后）</b>：</p>
+ * <ul>
+ *   <li>{@code sys_org} 是**外部出函机构**，服务于**订单**；</li>
+ *   <li>{@code sys_department} 是内部组织单元，服务于**人**，用户必须属于一个部门；</li>
+ *   <li>用户与部门**都不再有机构字段**（{@code sys_user.org_id} / {@code sys_department.org_id}
+ *       已由 {@code V4__drop_org_from_user_and_dept.sql} 删除）。</li>
+ * </ul>
+ *
+ * <p><b>分级数据范围已废弃（阶段一 O3 显式全量）</b>：
+ * 原先"省级用户只看本省、市级用户只看本市"的用例需要给用户/部门设不同机构来构造场景，
+ * 而机构归属已从用户与部门上移除，这些用例**无法成立，已整体删除**
+ * （连同 {@code ScopeFixture} 夹具）。取而代之的是
+ * {@link DataScopeService#resolve(Long, List)} 恒返回全量
+ * （{@code DataScope.all(...)}）的断言：阶段一与重构前的实际行为等价（重构前所有人挂总部 = 全量）。
+ * 阶段二将以权限码重建授权模型，详见
+ * {@code docs/PLAN-移除用户与部门的机构归属.md} §2.3 / §3 / §8（C6、Q5）。</p>
  *
  * <p>这些断言只能对着**真实 MySQL** 验证：机构层级由 {@code DataInitializer} 生成，
- * 数据范围靠递归 CTE（{@code selectVisibleOrgIds}）与 Mapper 里的 {@code IN (...)} 实现，
- * 用内存库或 mock 都验不出"省级用户是否真的只看到本省"。</p>
+ * 部门树靠 {@code parent_id} 组装，用内存库或 mock 都验不出"树是否完整、父节点是否都在集合内"。</p>
  *
  * <p>依赖演示数据已初始化（{@code guarantee.data-init.enabled=true} 时首次启动会生成）。
- * 若使用空库运行，本测试会在层级断言处失败——这是有意的：数据范围是本需求的核心能力，
- * 没有可验证的层级数据就等于没验证（SYS-P-15 的现状提示）。</p>
+ * 若使用空库运行，本测试会在层级断言处失败——这是有意的：层级数据是这些不变量的验证前提。</p>
  */
 @SpringBootTest(classes = com.guarantee.system.ItMybatisConfig.class)
 @TestPropertySource(properties = {
@@ -100,35 +117,26 @@ class DataScopeIntegrationTest {
                 .isZero();
     }
 
+    // ==================================================================
+    // 部门层级（SYS-P-25）：纯部门树，不再有机构归属
+    // ==================================================================
+
     @Test
-    @DisplayName("部门层级：每机构 1 个总部为顶级，一级/二级部门挂在本机构内（SYS-P-25）")
+    @DisplayName("部门层级：整库恰好 1 个顶级部门，其余部门的父部门都真实存在且未删除")
     void departmentHierarchyShouldBeCorrect() {
-        // 非顶级部门的父部门必须与它同机构，且父部门本身不能已删除
+        // 机构已从部门上移除，因此这里不再有"同机构"约束，只剩"父必须存在且未删除"
         Integer orphans = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM sys_department d
                 WHERE d.parent_id <> 0
                   AND NOT EXISTS (SELECT 1 FROM sys_department p
-                                  WHERE p.id = d.parent_id AND p.org_id = d.org_id AND p.is_deleted = 0)
+                                  WHERE p.id = d.parent_id AND p.is_deleted = 0)
                 """, Integer.class);
-        assertThat(orphans).as("非顶级部门的父部门必须与它同机构且未删除").isZero();
+        assertThat(orphans).as("非顶级部门的父部门必须存在且未删除").isZero();
 
-        long orgTotal = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM sys_org WHERE is_deleted = 0", Long.class);
+        // 部门树已收敛为单棵纯部门树（原"每机构 1 个顶级部门"随机构归属一并失效）
         Integer topLevel = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM sys_department WHERE parent_id = 0 AND is_deleted = 0", Integer.class);
-        // 注意用"有部门的机构数"而不是"机构总数"：演示数据已收敛为只有 ORGHQ 有部门（评审要求），
-        // 但仍断言"每个有部门的机构恰好 1 个顶级部门"这条不变量
-        long deptOrgTotal = jdbcTemplate.queryForObject(
-                "SELECT COUNT(DISTINCT org_id) FROM sys_department WHERE is_deleted = 0", Long.class);
-        assertThat(topLevel).as("每个有部门的机构恰有 1 个顶级部门").isEqualTo((int) deptOrgTotal);
-        assertThat(deptOrgTotal).as("有部门的机构数不超过机构总数").isLessThanOrEqualTo((int) orgTotal);
-
-        // 每机构部门数必须一致（规格表驱动，任何机构少一个都说明规格没套全）
-        Integer distinctCounts = jdbcTemplate.queryForObject("""
-                SELECT COUNT(DISTINCT cnt) FROM (
-                    SELECT COUNT(*) AS cnt FROM sys_department WHERE is_deleted = 0 GROUP BY org_id) t
-                """, Integer.class);
-        assertThat(distinctCounts).as("所有机构的部门数必须相同（同一套 DEPT_SPEC）").isEqualTo(1);
+        assertThat(topLevel).as("部门树只有 1 个顶级节点（没有机构根节点了）").isEqualTo(1);
 
         // 层级不止一层：必须存在"挂在非顶级部门下"的二级部门（否则就是平铺，层级语义没落地）
         Integer secondLevel = jdbcTemplate.queryForObject("""
@@ -141,26 +149,35 @@ class DataScopeIntegrationTest {
     }
 
     @Test
-    @DisplayName("演示账号的归属机构都是真实机构（SYS-P-24）")
-    void demoAccountsBelongToRealOrgs() {
+    @DisplayName("用户必须挂在真实存在的部门上（「用户必须属于一个部门」）")
+    void everyUserBelongsToRealDepartment() {
+        // 列已收紧为 NOT NULL，库里不允许出现"无部门用户"
+        Integer noDept = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM sys_user WHERE is_deleted = 0 AND dept_id IS NULL", Integer.class);
+        assertThat(noDept).as("不存在无部门的有效用户（dept_id 已收紧为 NOT NULL）").isZero();
+
+        Integer orphans = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM sys_user u
+                WHERE u.is_deleted = 0
+                  AND NOT EXISTS (SELECT 1 FROM sys_department d
+                                  WHERE d.id = u.dept_id AND d.is_deleted = 0)
+                """, Integer.class);
+        assertThat(orphans).as("每个有效用户都必须指向一个真实存在且未删除的部门").isZero();
+
         for (String username : new String[]{"admin", "operator", "analyst", "user0004"}) {
-            Long orgId = orgIdOf(username);
-            assertThat(orgId).as("%s 必须有归属机构", username).isNotNull();
+            Long deptId = deptIdOf(username);
+            assertThat(deptId).as("%s 必须有归属部门", username).isNotNull();
             assertThat(jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM sys_org WHERE id = ? AND is_deleted = 0", Integer.class, orgId))
-                    .as("%s 的归属机构必须存在且未删除", username).isEqualTo(1);
-            assertThat(orgLevelOf(orgId)).as("%s 的机构层级必须有值", username).isNotNull();
+                    "SELECT COUNT(*) FROM sys_department WHERE id = ? AND is_deleted = 0",
+                    Integer.class, deptId))
+                    .as("%s 的归属部门必须存在且未删除", username).isEqualTo(1);
         }
-        assertThat(orgIdOf("admin")).as("admin 归属总部（数据范围演示以 admin 为准）")
-                .isEqualTo(headquartersId());
-        // 说明：演示数据已收敛为"只有 ORGHQ 一个机构的部门树、所有用户归属总部"，
-        // 因此不再断言 operator/analyst 分别处于省级/市级——那需要独立夹具，见 ScopeFixture。
     }
 
     @Test
     @DisplayName("部门树为全量数据源：节点数不受分页影响，且父节点必在集合内（SYS-C-22 / SYS-C-24 同构）")
     void departmentTreeIsComplete() {
-        DataScope all = dataScopeService.resolve(userIdOf("admin"), orgIdOf("admin"), List.of(Roles.ADMIN));
+        DataScope all = dataScopeService.resolve(userIdOf("admin"), List.of(Roles.ADMIN));
 
         // 用分页接口取"一页"作为对照：若树错用了分页接口，节点数会等于页大小（默认 10）而不是全量
         DepartmentDto.Query pageQuery = new DepartmentDto.Query();
@@ -171,11 +188,8 @@ class DataScopeIntegrationTest {
         List<DepartmentVO> tree = departmentService.tree(new DepartmentDto.Query(), all);
         assertThat(tree).as("树形数据源必须是全量，绝不能只有一页").hasSize((int) pageTotal);
         // 全量条数必须与库内有效部门数一致（防"树少给了几条"这种静默缺失）
-        long activeInDb = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM sys_department WHERE is_deleted = 0", Long.class);
+        long activeInDb = deptTotal();
         assertThat(pageTotal).as("列表总数 = 库内有效部门数").isEqualTo(activeInDb);
-        assertThat(deptOrgTotal() * DEPTS_PER_ORG).as("有部门的机构数 × 每机构部门数 = 部门总数")
-                .isEqualTo(activeInDb);
 
         // 父节点必须在返回集合内（或为 0），否则前端会组装出游离节点
         List<Long> ids = tree.stream().map(DepartmentVO::getId).toList();
@@ -187,40 +201,15 @@ class DataScopeIntegrationTest {
             }
         }
 
-        // 层级形状：每个有部门的机构恰 1 个顶级部门，且每个部门都能带出所属机构
+        // 层级形状：整棵树只有 1 个顶级部门（机构根节点已随机构归属移除）
         assertThat(tree.stream().filter(n -> n.getParentId() != null && n.getParentId().equals(0L)).count())
-                .as("每个有部门的机构恰有 1 个顶级部门").isEqualTo(deptOrgTotal());
-        assertThat(tree.stream().filter(n -> n.getOrgId() == null).count())
-                .as("部门必须能带出所属机构（「所属机构」列与根节点标签依赖它）").isZero();
-    }
-
-    @Test
-    @DisplayName("部门树按数据范围过滤：市级用户只看到本市机构下的部门（SYS-P-08 / AC-08）")
-    void departmentTreeIsScoped() {
-        ScopeFixture fx = createScopeFixture();
-        try {
-            // 夹具的市级机构下原本没有部门，先补一个：否则"只看到本市"会退化成"什么都没看到"，验不出过滤
-            long cityDeptId = insertDept("TESTFIX-P1C1-D1", "夹具市一部门", fx.city1OrgId, 0);
-            long otherDeptId = insertDept("TESTFIX-P2C1-D1", "夹具省二市一部门", fx.otherCityOrgId, 0);
-            try {
-                List<DepartmentVO> tree = departmentService.tree(new DepartmentDto.Query(), fx.cityScope());
-                assertThat(tree).extracting(DepartmentVO::getId).contains(cityDeptId);
-                assertThat(tree).extracting(DepartmentVO::getId)
-                        .as("跨机构部门的部门不能出现在本市用户的结果里").doesNotContain(otherDeptId);
-                assertThat(tree).allSatisfy(vo ->
-                        assertThat(vo.getOrgId()).as("不能出现范围外机构的部门").isEqualTo(fx.city1OrgId));
-            } finally {
-                jdbcTemplate.update("DELETE FROM sys_department WHERE id IN (?, ?)", cityDeptId, otherDeptId);
-            }
-        } finally {
-            fx.cleanup();
-        }
+                .as("纯部门树只有 1 个顶级部门").isEqualTo(1L);
     }
 
     @Test
     @DisplayName("部门树与列表口径一致：同一条件树上的条数等于列表总数")
     void departmentTreeMatchesListCount() {
-        DataScope all = dataScopeService.resolve(userIdOf("admin"), orgIdOf("admin"), List.of(Roles.ADMIN));
+        DataScope all = dataScopeService.resolve(userIdOf("admin"), List.of(Roles.ADMIN));
 
         DepartmentDto.Query listQuery = new DepartmentDto.Query();
         listQuery.setPageNum(1);
@@ -242,11 +231,10 @@ class DataScopeIntegrationTest {
     @Test
     @DisplayName("部门树的 includeDeleted：默认不含已删除，开启后已删除节点仍在原层级（LD-04b）")
     void departmentTreeHonoursIncludeDeleted() {
-        DataScope all = dataScopeService.resolve(userIdOf("admin"), orgIdOf("admin"), List.of(Roles.ADMIN));
+        DataScope all = dataScopeService.resolve(userIdOf("admin"), List.of(Roles.ADMIN));
 
         int defaultSize = departmentService.tree(new DepartmentDto.Query(), all).size();
-        long activeInDb = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM sys_department WHERE is_deleted = 0", Long.class);
+        long activeInDb = deptTotal();
         assertThat(defaultSize).as("默认视图 = 库内有效部门数").isEqualTo((int) activeInDb);
 
         DepartmentDto.Query includingDeleted = new DepartmentDto.Query();
@@ -255,12 +243,10 @@ class DataScopeIntegrationTest {
 
         long deleted = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM sys_department WHERE is_deleted = 1", Long.class);
-        long active = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM sys_department WHERE is_deleted = 0", Long.class);
         assertThat(allNodes).as("开启后 = 有效 + 已删除，且不能把有效行漏掉")
-                .hasSize((int) (active + deleted));
+                .hasSize((int) (activeInDb + deleted));
 
-        // 已删除行的 parentId 必须仍指向同机构的未删除父部门：
+        // 已删除行的 parentId 必须仍指向未删除的父部门：
         // 删父部门要求"无未删除下级"，所以正常情况下不会出现"父已删除、子还在"的孤儿
         List<Long> nodeIds = allNodes.stream().map(DepartmentVO::getId).toList();
         for (DepartmentVO node : allNodes) {
@@ -273,117 +259,50 @@ class DataScopeIntegrationTest {
     }
 
     // ==================================================================
-    // 数据范围（TEST-03 / SYS-P-07 / SYS-P-09 / AC-03）
+    // 数据范围（阶段一 O3：显式全量）
     // ==================================================================
 
     @Test
-    @DisplayName("ADMIN 为全量范围：可见机构数等于机构总数")
+    @DisplayName("O3 显式全量：ADMIN 的范围不受限，机构查询返回全部机构")
     void adminSeesEverything() {
-        DataScope scope = dataScopeService.resolve(userIdOf("admin"), orgIdOf("admin"), List.of(Roles.ADMIN));
+        DataScope scope = dataScopeService.resolve(userIdOf("admin"), List.of(Roles.ADMIN));
         assertThat(scope.unrestricted()).isTrue();
         assertThat(orgService.page(new OrgDto.Query(), scope).total()).isEqualTo(21);
     }
 
     @Test
-    @DisplayName("省级用户只看到「本省 + 其下市级」范围内的机构")
-    void provinceUserSeesOnlyOwnProvince() {
-        ScopeFixture fx = createScopeFixture();
-        try {
-            DataScope scope = fx.provinceScope();
+    @DisplayName("O3 显式全量：非 ADMIN（含只读角色）同样看到全部机构与全部用户")
+    void nonAdminAlsoSeesEverything() {
+        long activeOrgs = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM sys_org WHERE is_deleted = 0", Long.class);
+        long activeUsers = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM sys_user WHERE is_deleted = 0", Long.class);
 
-            assertThat(scope.unrestricted()).as("省级是受限范围").isFalse();
-            assertThat(scope.orgLevel()).isEqualTo(2);
-            assertThat(scope.orgIds())
-                    .as("本省范围 = 自身 + 2 个市级")
-                    .containsExactlyInAnyOrder(fx.provinceOrgId, fx.city1OrgId, fx.city2OrgId);
+        for (String role : new String[]{Roles.OPERATOR, Roles.ANALYST, Roles.VIEWER}) {
+            DataScope scope = dataScopeService.resolve(userIdOf("analyst"), List.of(role));
 
-            long total = orgService.page(new OrgDto.Query(), scope).total();
-            assertThat(total).as("该省范围内机构数 = 3（自身 + 2 个市）").isEqualTo(3);
+            assertThat(scope.unrestricted()).as("%s 也是全量范围（阶段一 O3）", role).isTrue();
 
-            // 同省另一个市可见；跨省的市不可见（不能因同层级就穿透）
-            assertThat(scope.contains(fx.city1OrgId)).as("同省市级应可见").isTrue();
-            assertThat(scope.contains(fx.otherCityOrgId)).as("跨省市级不可见").isFalse();
-            assertThat(scope.contains(fx.otherProvinceOrgId)).as("跨省省级不可见").isFalse();
-            assertThat(scope.contains(fx.hqOrgId)).as("上级（总部）不在省级用户范围内").isFalse();
-        } finally {
-            fx.cleanup();
-        }
-    }
+            OrgDto.Query orgQuery = new OrgDto.Query();
+            orgQuery.setPageNum(1);
+            orgQuery.setPageSize(1);
+            assertThat(orgService.page(orgQuery, scope).total())
+                    .as("%s 可见机构数 = 机构总数（阶段一与重构前等价：所有人都挂总部）", role)
+                    .isEqualTo(activeOrgs);
 
-    @Test
-    @DisplayName("市级用户仅见本市机构：范围为单一机构")
-    void cityUserSeesOnlyOwnCity() {
-        ScopeFixture fx = createScopeFixture();
-        try {
-            DataScope scope = fx.cityScope();
-
-            assertThat(scope.orgLevel()).isEqualTo(3);
-            assertThat(scope.isSingleOrg()).as("市级只可见本市").isTrue();
-            assertThat(scope.orgIds()).containsExactly(fx.city1OrgId);
-
-            List<OrgVO> list = orgService.page(new OrgDto.Query(), scope).list();
-            assertThat(list).hasSize(1);
-            assertThat(list.get(0).getId()).isEqualTo(fx.city1OrgId);
-
-            // 同省的另一个市不可见——这是市级范围最容易出错的地方
-            assertThat(scope.contains(fx.city2OrgId)).as("同省其它市不可见").isFalse();
-        } finally {
-            fx.cleanup();
-        }
-    }
-
-    @Test
-    @DisplayName("跨范围查询返回 0 结果，且不暴露存在性（SYS-P-09）")
-    void crossScopeQueryReturnsNothing() {
-        ScopeFixture fx = createScopeFixture();
-        try {
-            DataScope scope = fx.cityScope();
-
-            // 明确查询同省另一个市的机构名称：目标是存在的，但当前用户看不到
-            OrgDto.Query query = new OrgDto.Query();
-            query.setPageNum(1);
-            query.setPageSize(10);
-            query.setOrgName(fx.city2Name);
-            assertThat(orgService.page(query, scope).total())
-                    .as("跨范围目标必须表现为 0 条，不能暴露它是否存在")
-                    .isZero();
-        } finally {
-            fx.cleanup();
-        }
-    }
-
-    @Test
-    @DisplayName("用户列表同样受机构范围过滤（SYS-P-08 覆盖列表查询）")
-    void userListIsScoped() {
-        ScopeFixture fx = createScopeFixture();
-        try {
-            DataScope all = dataScopeService.resolve(userIdOf("admin"), orgIdOf("admin"), List.of(Roles.ADMIN));
-            DataScope city = fx.cityScope();
-
-            UserDto.Query allQuery = new UserDto.Query();
-            allQuery.setPageNum(1);
-            allQuery.setPageSize(1);
-            long allTotal = userService.page(allQuery, all).total();
-
-            UserDto.Query cityQuery = new UserDto.Query();
-            cityQuery.setPageNum(1);
-            cityQuery.setPageSize(1);
-            long cityTotal = userService.page(cityQuery, city).total();
-
-            long activeUsers = jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM sys_user WHERE is_deleted = 0", Long.class);
-            assertThat(allTotal).as("平台总用户数（含夹具用户）").isEqualTo(activeUsers);
-            assertThat(cityTotal).as("市级用户只看到本市 + 夹具用户，必然少于全量")
-                    .isLessThan(allTotal).isGreaterThan(0);
-        } finally {
-            fx.cleanup();
+            UserDto.Query userQuery = new UserDto.Query();
+            userQuery.setPageNum(1);
+            userQuery.setPageSize(1);
+            assertThat(userService.page(userQuery, scope).total())
+                    .as("%s 可见用户数 = 用户总数", role)
+                    .isEqualTo(activeUsers);
         }
     }
 
     @Test
     @DisplayName("机构树的节点数等于范围内机构数，不因分页缺节点（SYS-C-24 / AC-31）")
     void orgTreeIsComplete() {
-        DataScope all = dataScopeService.resolve(userIdOf("admin"), orgIdOf("admin"), List.of(Roles.ADMIN));
+        DataScope all = dataScopeService.resolve(userIdOf("admin"), List.of(Roles.ADMIN));
         List<OrgVO> tree = orgService.tree(new OrgDto.Query(), all);
         assertThat(tree).as("树形数据源必须是全量，不受分页影响").hasSize(21);
 
@@ -399,23 +318,20 @@ class DataScopeIntegrationTest {
     }
 
     @Test
-    @DisplayName("机构查询补齐 parentName / deptCount / userCount（SYS-Q-01 出参）")
-    void orgQueryFillsDerivedFields() {
-        DataScope all = dataScopeService.resolve(userIdOf("admin"), orgIdOf("admin"), List.of(Roles.ADMIN));
+    @DisplayName("机构查询补齐 parentName（机构只有自身属性，deptCount/userCount 已随机构归属移除）")
+    void orgQueryFillsParentName() {
+        DataScope all = dataScopeService.resolve(userIdOf("admin"), List.of(Roles.ADMIN));
         OrgDto.Query query = new OrgDto.Query();
         query.setPageNum(1);
         query.setPageSize(50);
         List<OrgVO> list = orgService.listForQuery(query, all);
 
-        // 演示数据已收敛为"只有 ORGHQ 有部门/用户"，因此派生化字段取总部验证
         OrgVO headquarters = list.stream()
                 .filter(vo -> vo.getId().equals(headquartersId())).findFirst()
                 .orElseThrow(() -> new AssertionError("总部不存在"));
         assertThat(headquarters.getParentName()).as("总部没有上级").isNull();
-        assertThat(headquarters.getDeptCount()).as("总部下部门数不少于 3").isGreaterThanOrEqualTo(3L);
-        assertThat(headquarters.getUserCount()).as("总部下启用用户数不为空").isNotNull();
 
-        // 省级机构的上级仍是总部，用来验证 parentName 的关联取数（不依赖它下面有部门）
+        // 省级机构的上级仍是总部，用来验证 parentName 的关联取数（不依赖部门/用户）
         OrgVO province = list.stream()
                 .filter(vo -> vo.getId().equals(2L)).findFirst()
                 .orElseThrow(() -> new AssertionError("浙江省省级机构不存在"));
@@ -423,9 +339,20 @@ class DataScopeIntegrationTest {
     }
 
     @Test
+    @DisplayName("目标不存在时仍抛统一文案的 404 语义，不暴露存在性（SYS-P-09）")
+    void requireVisibleOrgUsesUnifiedMessage() {
+        DataScope scope = dataScopeService.resolve(userIdOf("admin"), List.of(Roles.ADMIN));
+
+        assertThatThrownBy(() -> dataScopeService.requireVisibleOrg(scope, -1L))
+                .as("目标不存在时的文案必须与越权一致，使探测无法区分两种情况")
+                .isInstanceOf(BizException.class)
+                .hasMessage(DataScopeService.OUT_OF_SCOPE_MESSAGE);
+    }
+
+    @Test
     @DisplayName("queryUser 的白名单字段来源：VO 本身不含 password（SYS-P-11 前提）")
     void userVoHasNoPasswordField() {
-        DataScope all = dataScopeService.resolve(userIdOf("admin"), orgIdOf("admin"), List.of(Roles.ADMIN));
+        DataScope all = dataScopeService.resolve(userIdOf("admin"), List.of(Roles.ADMIN));
         UserDto.Query query = new UserDto.Query();
         query.setPageNum(1);
         query.setPageSize(1);
@@ -441,141 +368,17 @@ class DataScopeIntegrationTest {
     // 辅助
     // ==================================================================
 
-    /**
-     * 每机构部门数（= `DataInitializer.DEPT_SPEC` 的节点数）。
-     *
-     * <p>测试不该把这个数字写死在不同地方：规格表改动时只改这一处，
-     * 其余断言用 {@code 机构数 × DEPTS_PER_ORG} 表达。</p>
-     */
-    private static final int DEPTS_PER_ORG = 11;
-
-    private long orgTotal() {
-        return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_org WHERE is_deleted = 0", Long.class);
-    }
-
     /** 库内有效部门数（不写死，随部门树规格变化）。 */
     private long deptTotal() {
         return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_department WHERE is_deleted = 0", Long.class);
-    }
-
-    /** 库内部门涉及的机构数（用于"每机构 1 个顶级部门"这类断言）。 */
-    private long deptOrgTotal() {
-        return jdbcTemplate.queryForObject(
-                "SELECT COUNT(DISTINCT org_id) FROM sys_department WHERE is_deleted = 0", Long.class);
-    }
-
-    // ==================================================================
-    // 数据范围夹具（SYS-P-07 / SYS-P-09）
-    // ==================================================================
-
-    /**
-     * 数据范围夹具：3 层机构 + 2 个用户，用于验证"省级看本省及下级、市级只看本市"。
-     *
-     * <p><b>为什么需要夹具而不复用演示数据</b>：演示数据已被收敛为"只有 ORGHQ 一个机构的部门树、
-     * 所有用户归属总部"（评审要求），那时所有账号的可见范围都与 ADMIN 相同，
-     * 省级/市级这两条最关键的越权防线就没有数据可验了。数据范围是 SYS-P-07 的安全边界，
-     * 不能因为演示数据变简单就失去覆盖，因此这里自建夹具。</p>
-     *
-     * <p>夹具用 {@code TESTFIX} 前缀命名，且**物理删除**——本测试类不在事务里，
-     * 逻辑删除会留在库里影响其他用例的统计（本仓库踩过这个坑）。</p>
-     */
-    private final class ScopeFixture {
-        private final long hqOrgId;
-        private final long provinceOrgId;
-        private final long city1OrgId;
-        private final long city2OrgId;
-        private final long otherProvinceOrgId;
-        private final long otherCityOrgId;
-        private final long provinceUserId;
-        private final long cityUserId;
-        private final String city2Name;
-
-        private ScopeFixture(long hqOrgId, long provinceOrgId, long city1OrgId, long city2OrgId,
-                             long otherProvinceOrgId, long otherCityOrgId,
-                             long provinceUserId, long cityUserId, String city2Name) {
-            this.hqOrgId = hqOrgId;
-            this.provinceOrgId = provinceOrgId;
-            this.city1OrgId = city1OrgId;
-            this.city2OrgId = city2OrgId;
-            this.otherProvinceOrgId = otherProvinceOrgId;
-            this.otherCityOrgId = otherCityOrgId;
-            this.provinceUserId = provinceUserId;
-            this.cityUserId = cityUserId;
-            this.city2Name = city2Name;
-        }
-
-        DataScope provinceScope() {
-            return dataScopeService.resolve(provinceUserId, provinceOrgId, List.of(Roles.OPERATOR));
-        }
-
-        DataScope cityScope() {
-            return dataScopeService.resolve(cityUserId, city1OrgId, List.of(Roles.ANALYST));
-        }
-
-        void cleanup() {
-            for (long uid : new long[]{provinceUserId, cityUserId}) {
-                jdbcTemplate.update("DELETE FROM sys_user_role WHERE user_id = ?", uid);
-                jdbcTemplate.update("DELETE FROM sys_user WHERE id = ?", uid);
-            }
-            for (long orgId : new long[]{city1OrgId, city2OrgId, otherCityOrgId,
-                    provinceOrgId, otherProvinceOrgId, hqOrgId}) {
-                jdbcTemplate.update("DELETE FROM sys_org WHERE id = ?", orgId);
-            }
-        }
-    }
-
-    private ScopeFixture createScopeFixture() {
-        long hq = insertOrg("TESTFIX-HQ", "夹具总部", "990000", "夹具区", 1, 0);
-        long province = insertOrg("TESTFIX-P1", "夹具省一", "991000", "夹具省一", 2, hq);
-        long city1 = insertOrg("TESTFIX-P1C1", "夹具省一市一", "991100", "夹具市一", 3, province);
-        long city2 = insertOrg("TESTFIX-P1C2", "夹具省一市二", "991200", "夹具市二", 3, province);
-        long otherProvince = insertOrg("TESTFIX-P2", "夹具省二", "992000", "夹具省二", 2, hq);
-        long otherCity = insertOrg("TESTFIX-P2C1", "夹具省二市一", "992100", "夹具省市一", 3, otherProvince);
-
-        long provinceUser = insertUser("testfix_province", province);
-        long cityUser = insertUser("testfix_city", city1);
-
-        return new ScopeFixture(hq, province, city1, city2, otherProvince, otherCity,
-                provinceUser, cityUser, "夹具省一市二");
-    }
-
-    private long insertOrg(String code, String name, String regionCode, String regionName, int level, long parentId) {
-        jdbcTemplate.update("""
-                INSERT INTO sys_org (org_code, org_name, region_code, region_name, org_level, parent_id, status, sort_no)
-                VALUES (?, ?, ?, ?, ?, ?, 1, 0)
-                """, code, name, regionCode, regionName, level, parentId);
-        return jdbcTemplate.queryForObject("SELECT id FROM sys_org WHERE org_code = ?", Long.class, code);
-    }
-
-    private long insertDept(String code, String name, long orgId, long parentId) {
-        jdbcTemplate.update("""
-                INSERT INTO sys_department (dept_code, dept_name, org_id, parent_id, status, sort_no)
-                VALUES (?, ?, ?, ?, 1, 999)
-                """, code, name, orgId, parentId);
-        return jdbcTemplate.queryForObject("SELECT id FROM sys_department WHERE dept_code = ?", Long.class, code);
-    }
-
-    private long insertUser(String username, long orgId) {
-        long roleId = jdbcTemplate.queryForObject("SELECT id FROM sys_role WHERE role_code = 'VIEWER'", Long.class);
-        jdbcTemplate.update("""
-                INSERT INTO sys_user (username, password, real_name, org_id, status)
-                VALUES (?, ?, ?, ?, 1)
-                """, username, "$2a$10$fixturefixturefixturefixturefixturefixturefixturefixtur", "夹具用户", orgId);
-        long uid = jdbcTemplate.queryForObject("SELECT id FROM sys_user WHERE username = ?", Long.class, username);
-        jdbcTemplate.update("INSERT INTO sys_user_role (user_id, role_id) VALUES (?, ?)", uid, roleId);
-        return uid;
     }
 
     private Long userIdOf(String username) {
         return jdbcTemplate.queryForObject("SELECT id FROM sys_user WHERE username = ?", Long.class, username);
     }
 
-    private Long orgIdOf(String username) {
-        return jdbcTemplate.queryForObject("SELECT org_id FROM sys_user WHERE username = ?", Long.class, username);
-    }
-
-    private Integer orgLevelOf(Long orgId) {
-        return jdbcTemplate.queryForObject("SELECT org_level FROM sys_org WHERE id = ?", Integer.class, orgId);
+    private Long deptIdOf(String username) {
+        return jdbcTemplate.queryForObject("SELECT dept_id FROM sys_user WHERE username = ?", Long.class, username);
     }
 
     private Long headquartersId() {

@@ -8,9 +8,7 @@ import com.guarantee.system.dto.UserDto;
 import com.guarantee.system.dto.UserRoleRef;
 import com.guarantee.system.entity.SysUser;
 import com.guarantee.system.entity.SysDepartment;
-import com.guarantee.system.entity.SysOrg;
 import com.guarantee.system.mapper.SysDepartmentMapper;
-import com.guarantee.system.mapper.SysOrgMapper;
 import com.guarantee.system.mapper.SysRoleMapper;
 import com.guarantee.system.mapper.SysUserMapper;
 import com.guarantee.system.scope.DataScope;
@@ -61,9 +59,10 @@ public class UserService {
 
     private final SysUserMapper sysUserMapper;
     private final SysRoleMapper sysRoleMapper;
-    /** 恢复用户时校验所属机构未被删除（LD-04a）。 */
-    private final SysOrgMapper sysOrgMapper;
-    /** 恢复用户时校验所属部门未被删除（LD-04a）。 */
+    /**
+     * 部门是用户唯一的组织归属（{@code sys_user.dept_id NOT NULL}）：
+     * 更新资料时校验目标部门存在，恢复用户时校验该部门未被删除（LD-04a）。
+     */
     private final SysDepartmentMapper sysDepartmentMapper;
     private final DataScopeService dataScopeService;
     private final ObjectProvider<UserTokenRevoker> tokenRevokerProvider;
@@ -71,14 +70,12 @@ public class UserService {
 
     public UserService(SysUserMapper sysUserMapper,
                        SysRoleMapper sysRoleMapper,
-                       SysOrgMapper sysOrgMapper,
                        SysDepartmentMapper sysDepartmentMapper,
                        DataScopeService dataScopeService,
                        ObjectProvider<UserTokenRevoker> tokenRevokerProvider,
                        WebAuditor webAuditor) {
         this.sysUserMapper = sysUserMapper;
         this.sysRoleMapper = sysRoleMapper;
-        this.sysOrgMapper = sysOrgMapper;
         this.sysDepartmentMapper = sysDepartmentMapper;
         this.dataScopeService = dataScopeService;
         this.tokenRevokerProvider = tokenRevokerProvider;
@@ -169,7 +166,12 @@ public class UserService {
     // 写（SYS-W-04，D-2 收敛后的三类动作）
     // ==================================================================
 
-    /** 修改用户资料：realName / phone / email / deptId。 */
+    /**
+     * 修改用户资料：realName / phone / email / deptId。
+     *
+     * <p>阶段一 O3：用户不再挂机构，"清空部门"能力（{@code clearDept}）已整体移除——
+     * 用户**必须属于一个部门**，{@code deptId} 为 {@code null} 表示"不改"。</p>
+     */
     @Transactional
     public UserVO updateProfile(Long id, UserDto.UpdateRequest request, DataScope scope, Long operatorUserId) {
         SysUser existing = validateUpdateProfile(id, request, scope, operatorUserId);
@@ -180,9 +182,6 @@ public class UserService {
         entity.setEmail(request.getEmail());
         entity.setDeptId(request.getDeptId());
         sysUserMapper.updateProfile(entity);
-        if (Boolean.TRUE.equals(request.getClearDept())) {
-            sysUserMapper.clearDept(id);
-        }
         log.info("修改用户资料成功 id={} 操作者={} 变更字段={}", id, operatorUserId,
                 describeChangedFields(existing, request));
 
@@ -198,8 +197,7 @@ public class UserService {
         after.put("realName", request.getRealName() == null ? existing.getRealName() : request.getRealName());
         after.put("phone", request.getPhone() == null ? existing.getPhone() : request.getPhone());
         after.put("email", request.getEmail() == null ? existing.getEmail() : request.getEmail());
-        after.put("deptId", Boolean.TRUE.equals(request.getClearDept())
-                ? null : (request.getDeptId() == null ? existing.getDeptId() : request.getDeptId()));
+        after.put("deptId", request.getDeptId() == null ? existing.getDeptId() : request.getDeptId());
         webAuditor.success("UPDATE", "USER", id, existing.getUsername(), before, after);
 
         return getById(id);
@@ -279,9 +277,15 @@ public class UserService {
                 && !EMAIL.matcher(request.getEmail().trim()).matches()) {
             throw BizException.badRequest("邮箱格式不正确");
         }
-        // 不得修改自己的部门：改变自己的数据范围属于提权风险（SYS-W-04）
+        // 不得修改自己的部门：改变自己的组织归属属于提权风险（SYS-W-04）
         if (request.getDeptId() != null && id.equals(operatorUserId)) {
             throw BizException.badRequest("不允许修改自己的所属部门");
+        }
+        // 用户必须属于一个部门（sys_user.dept_id NOT NULL）：
+        // 传了 deptId 就是要"改到某个部门"，因此该部门必须存在且未删除
+        if (request.getDeptId() != null
+                && sysDepartmentMapper.selectEntityById(request.getDeptId()) == null) {
+            throw BizException.badRequest("部门不存在或已删除: " + request.getDeptId());
         }
         return existing;
     }
@@ -390,10 +394,16 @@ public class UserService {
     // 内部
     // ==================================================================
 
+    /**
+     * 用户可见性校验（SYS-P-14）。
+     *
+     * <p>阶段一 O3：用户已不再挂机构，数据范围恒为全量，因此这里只做**存在性**判定；
+     * 跨范围目标返回与"不存在"一致的文案（SYS-P-09）。</p>
+     */
     @Transactional(readOnly = true)
     public SysUser requireVisible(Long id, DataScope scope) {
         SysUser entity = sysUserMapper.selectEntityById(id);
-        if (entity == null || !scope.contains(entity.getOrgId())) {
+        if (entity == null) {
             throw BizException.notFound(DataScopeService.OUT_OF_SCOPE_MESSAGE);
         }
         return entity;
@@ -426,9 +436,6 @@ public class UserService {
             fields.add("email");
         }
         if (request.getDeptId() != null && !request.getDeptId().equals(before.getDeptId())) {
-            fields.add("deptId");
-        }
-        if (Boolean.TRUE.equals(request.getClearDept())) {
             fields.add("deptId");
         }
         return fields.toString();
@@ -496,7 +503,9 @@ public class UserService {
     /**
      * 用户恢复（LD-04a）。
      *
-     * <p>所属机构与部门若仍处于已删除状态则拒绝——否则会出现"机构已删、用户被恢复"的悬挂引用。</p>
+     * <p>用户必须属于一个部门，因此所属部门若不存在或仍处于已删除状态则拒绝——
+     * 否则会出现"部门已删、用户被恢复"的悬挂引用。所属机构已不再是用户的归属维度
+     * （阶段一 O3），故不再校验。</p>
      */
     @Transactional
     public UserVO restore(Long id, Long operatorUserId) {
@@ -521,22 +530,14 @@ public class UserService {
         return getById(id);
     }
 
-    /** 恢复阻碍项（LD-04a）：父记录（机构 / 部门）必须已恢复。 */
+    /** 恢复阻碍项（LD-04a）：所属部门必须存在且已恢复（dept_id 为必填，故无"无部门"分支）。 */
     public List<String> restoreBlockers(SysUser user) {
         List<String> blockers = new ArrayList<>();
-        SysOrg org = sysOrgMapper.selectEntityByIdIncludingDeleted(user.getOrgId());
-        if (org == null) {
-            blockers.add("所属机构不存在");
-        } else if (Integer.valueOf(1).equals(org.getIsDeleted())) {
-            blockers.add("请先恢复其所属机构：" + org.getOrgName());
-        }
-        if (user.getDeptId() != null) {
-            SysDepartment dept = sysDepartmentMapper.selectEntityByIdIncludingDeleted(user.getDeptId());
-            if (dept == null) {
-                blockers.add("所属部门不存在");
-            } else if (Integer.valueOf(1).equals(dept.getIsDeleted())) {
-                blockers.add("请先恢复其所属部门：" + dept.getDeptName());
-            }
+        SysDepartment dept = sysDepartmentMapper.selectEntityByIdIncludingDeleted(user.getDeptId());
+        if (dept == null) {
+            blockers.add("所属部门不存在");
+        } else if (Integer.valueOf(1).equals(dept.getIsDeleted())) {
+            blockers.add("请先恢复其所属部门：" + dept.getDeptName());
         }
         return blockers;
     }

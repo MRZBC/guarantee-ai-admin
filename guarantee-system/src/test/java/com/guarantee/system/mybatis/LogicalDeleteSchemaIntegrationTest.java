@@ -222,6 +222,40 @@ class LogicalDeleteSchemaIntegrationTest {
     }
 
     // ==================================================================
+    // LD-T18（本次重构新增）：机构归属列已从用户/部门上移除
+    // ==================================================================
+
+    @Test
+    @DisplayName("机构归属列已删除：sys_user / sys_department 都不再有 org_id，且 sys_user.dept_id 为 NOT NULL")
+    void orgOwnershipColumnsAreDropped() {
+        for (String table : new String[]{"sys_user", "sys_department"}) {
+            Integer orgCol = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'org_id'
+                    """, Integer.class, table);
+            assertThat(orgCol)
+                    .as("%s.org_id 必须已删除：机构是外部出函机构，服务于订单，不是人或部门的归属属性", table)
+                    .isZero();
+        }
+
+        // 「用户必须属于一个部门」→ dept_id 收紧为 NOT NULL，"无部门用户"不再是合法状态
+        Map<String, Object> deptCol = jdbc.queryForMap("""
+                SELECT COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sys_user' AND COLUMN_NAME = 'dept_id'
+                """);
+        assertThat(deptCol.get("IS_NULLABLE")).as("sys_user.dept_id 必须为 NOT NULL").isEqualTo("NO");
+        assertThat(deptCol.get("COLUMN_TYPE")).isEqualTo("bigint");
+
+        // 机构列本身保留（服务于订单），因此不再是"删表"而是"删归属列"
+        Integer orgTable = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sys_org'
+                """, Integer.class);
+        assertThat(orgTable).as("sys_org 表本身保留").isEqualTo(1);
+    }
+
+    // ==================================================================
     // LD-T22：库中不存在触发器 / 存储过程 / 函数
     // ==================================================================
 
@@ -368,12 +402,12 @@ class LogicalDeleteSchemaIntegrationTest {
         // 而有效行的 deleted_at 就是 NULL，因此"两条同名有效行"曾被放行。
         // V3 改为 UNIQUE(业务键, IFNULL(deleted_at, 哨兵值)) 后，有效行在索引里是同一个常量，
         // 因此**数据库层面互斥**，同时已删除行仍可多条共存（哨兵只在 NULL 时生效）。
-        jdbc.update("INSERT INTO sys_user (username, password, real_name, org_id, status) VALUES (?, 'x', '夹具', ?, 1)",
-                P + "_dup", hqOrgId());
+        jdbc.update("INSERT INTO sys_user (username, password, real_name, dept_id, status) VALUES (?, 'x', '夹具', ?, 1)",
+                P + "_dup", deptId());
 
         assertThatThrownBy(() -> jdbc.update(
-                "INSERT INTO sys_user (username, password, real_name, org_id, status) VALUES (?, 'x', '夹具', ?, 1)",
-                P + "_dup", hqOrgId()))
+                "INSERT INTO sys_user (username, password, real_name, dept_id, status) VALUES (?, 'x', '夹具', ?, 1)",
+                P + "_dup", deptId()))
                 .as("数据库必须拒绝第二条未删除的同名行（业务唯一性由 DB 保证，不依赖应用层）")
                 .isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
 
@@ -386,8 +420,8 @@ class LogicalDeleteSchemaIntegrationTest {
         jdbc.update("UPDATE sys_user SET is_deleted = 1, deleted_at = NOW(6) WHERE username = ? AND is_deleted = 0",
                 P + "_dup");
         assertThatCode(() -> jdbc.update(
-                "INSERT INTO sys_user (username, password, real_name, org_id, status) VALUES (?, 'x', '夹具', ?, 1)",
-                P + "_dup", hqOrgId()))
+                "INSERT INTO sys_user (username, password, real_name, dept_id, status) VALUES (?, 'x', '夹具', ?, 1)",
+                P + "_dup", deptId()))
                 .as("删除后必须能重建同业务键")
                 .doesNotThrowAnyException();
 
@@ -419,15 +453,15 @@ class LogicalDeleteSchemaIntegrationTest {
 
         List<KeyCase> cases = List.of(
                 new KeyCase("sys_user", "username", P + "_u1",
-                        "INSERT INTO sys_user (username, password, real_name, org_id, status) VALUES (?, 'x', '夹具', ?, 1)",
-                        List.of(hq)),
+                        "INSERT INTO sys_user (username, password, real_name, dept_id, status) VALUES (?, 'x', '夹具', ?, 1)",
+                        List.of(deptId())),
                 new KeyCase("sys_org", "org_code", P + "_o1",
                         "INSERT INTO sys_org (org_code, org_name, region_code, region_name, org_level, parent_id, status) "
                                 + "VALUES (?, '夹具', '000000', '未指定', 3, 0, 1)",
                         List.of()),
                 new KeyCase("sys_department", "dept_code", P + "_d1",
-                        "INSERT INTO sys_department (dept_code, dept_name, org_id, parent_id, status) VALUES (?, '夹具', ?, 0, 1)",
-                        List.of(hq)),
+                        "INSERT INTO sys_department (dept_code, dept_name, parent_id, status) VALUES (?, '夹具', 0, 1)",
+                        List.of()),
                 new KeyCase("sys_role", "role_code", P + "_r1",
                         "INSERT INTO sys_role (role_code, role_name, status) VALUES (?, '夹具', 1)",
                         List.of()),
@@ -514,5 +548,16 @@ class LogicalDeleteSchemaIntegrationTest {
 
     private long hqOrgId() {
         return jdbc.queryForObject("SELECT id FROM sys_org WHERE org_level = 1", Long.class);
+    }
+
+    /**
+     * 一个真实存在的部门 id（用户夹具用）。
+     *
+     * <p>{@code sys_user.dept_id} 已收紧为 NOT NULL 且用户不再有机构归属，
+     * 因此用户夹具必须显式给一个真实部门。</p>
+     */
+    private long deptId() {
+        return jdbc.queryForObject(
+                "SELECT id FROM sys_department WHERE is_deleted = 0 ORDER BY id LIMIT 1", Long.class);
     }
 }

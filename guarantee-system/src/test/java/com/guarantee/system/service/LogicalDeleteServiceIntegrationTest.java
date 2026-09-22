@@ -165,9 +165,8 @@ class LogicalDeleteServiceIntegrationTest {
     void restoreKeepsOriginalStatus() {
         DataScope admin = adminScope();
         // 夹具用户：直接建成"停用"状态，验证删除/恢复不会把它改成启用
-        long orgId = hqOrgId();
-        jdbc.update("INSERT INTO sys_user (username, password, real_name, org_id, status) VALUES (?, 'x', '夹具', ?, 0)",
-                P + "t3", orgId);
+        jdbc.update("INSERT INTO sys_user (username, password, real_name, dept_id, status) "
+                + "VALUES (?, 'x', '夹具', ?, 0)", P + "t3", deptId());
         Long userId = jdbc.queryForObject("SELECT id FROM sys_user WHERE username = ?", Long.class, P + "t3");
 
         userService.delete(userId, admin, adminUserId());
@@ -188,18 +187,15 @@ class LogicalDeleteServiceIntegrationTest {
     @DisplayName("LD-T4 上级部门仍被删除时恢复子部门被拒绝，并提示先恢复上级")
     void restoreChildRejectedWhenParentStillDeleted() {
         DataScope admin = adminScope();
-        OrgVO org = orgService.create(orgRequest(P + "t4o", "LD-T4 机构"), admin);
-
+        // 部门不再挂机构：夹具直接建一棵纯部门树（原来的"机构夹具"已无意义）
         DepartmentDto.CreateRequest parentReq = new DepartmentDto.CreateRequest();
         parentReq.setDeptCode(P + "t4p");
         parentReq.setDeptName("LD-T4 父部门");
-        parentReq.setOrgId(org.getId());
         DepartmentVO parent = departmentService.create(parentReq, admin);
 
         DepartmentDto.CreateRequest childReq = new DepartmentDto.CreateRequest();
         childReq.setDeptCode(P + "t4c");
         childReq.setDeptName("LD-T4 子部门");
-        childReq.setOrgId(org.getId());
         childReq.setParentId(parent.getId());
         DepartmentVO child = departmentService.create(childReq, admin);
 
@@ -225,8 +221,8 @@ class LogicalDeleteServiceIntegrationTest {
     @DisplayName("LD-T5 角色分配 UPSERT：先清后插改 UPSERT 后反复变更不报错且最终状态正确")
     void assignRolesUpsertCycle() {
         DataScope admin = adminScope();
-        jdbc.update("INSERT INTO sys_user (username, password, real_name, org_id, status) VALUES (?, 'x', '夹具', ?, 1)",
-                P + "t5", hqOrgId());
+        jdbc.update("INSERT INTO sys_user (username, password, real_name, dept_id, status) VALUES (?, 'x', '夹具', ?, 1)",
+                P + "t5", deptId());
         Long userId = jdbc.queryForObject("SELECT id FROM sys_user WHERE username = ?", Long.class, P + "t5");
 
         List<String> cycleA = List.of("OPERATOR", "ANALYST");
@@ -258,8 +254,8 @@ class LogicalDeleteServiceIntegrationTest {
     @Test
     @DisplayName("LD-T6 删除角色后，持有该角色的用户权限集合**立即**不含该角色权限（防提权）")
     void deletingRoleRemovesItsPermissionsFromAuthPath() {
-        jdbc.update("INSERT INTO sys_user (username, password, real_name, org_id, status) VALUES (?, 'x', '夹具', ?, 1)",
-                P + "t6u", hqOrgId());
+        jdbc.update("INSERT INTO sys_user (username, password, real_name, dept_id, status) VALUES (?, 'x', '夹具', ?, 1)",
+                P + "t6u", deptId());
         Long userId = jdbc.queryForObject("SELECT id FROM sys_user WHERE username = ?", Long.class, P + "t6u");
         jdbc.update("INSERT INTO sys_role (role_code, role_name, status) VALUES (?, 'LD-T6 角色', 1)", P + "t6r");
         Long roleId = jdbc.queryForObject("SELECT id FROM sys_role WHERE role_code = ?", Long.class, P + "t6r");
@@ -326,8 +322,8 @@ class LogicalDeleteServiceIntegrationTest {
     @DisplayName("LD-T9 删除用户与删除角色都会触发令牌撤销（否则旧 JWT 最长可用 12 小时）")
     void deleteRevokesTokens() {
         DataScope admin = adminScope();
-        jdbc.update("INSERT INTO sys_user (username, password, real_name, org_id, status) VALUES (?, 'x', '夹具', ?, 1)",
-                P + "t9u", hqOrgId());
+        jdbc.update("INSERT INTO sys_user (username, password, real_name, dept_id, status) VALUES (?, 'x', '夹具', ?, 1)",
+                P + "t9u", deptId());
         Long userId = jdbc.queryForObject("SELECT id FROM sys_user WHERE username = ?", Long.class, P + "t9u");
         jdbc.update("INSERT INTO sys_role (role_code, role_name, status) VALUES (?, 'LD-T9 角色', 1)", P + "t9r");
         Long roleId = jdbc.queryForObject("SELECT id FROM sys_role WHERE role_code = ?", Long.class, P + "t9r");
@@ -385,8 +381,8 @@ class LogicalDeleteServiceIntegrationTest {
     @DisplayName("LD-T11 禁止删除自己；禁止删除最后一个启用状态的 ADMIN")
     void dangerousDeletesAreRejected() {
         DataScope admin = adminScope();
-        jdbc.update("INSERT INTO sys_user (username, password, real_name, org_id, status) VALUES (?, 'x', '夹具', ?, 1)",
-                P + "t11", hqOrgId());
+        jdbc.update("INSERT INTO sys_user (username, password, real_name, dept_id, status) VALUES (?, 'x', '夹具', ?, 1)",
+                P + "t11", deptId());
         Long fixtureId = jdbc.queryForObject("SELECT id FROM sys_user WHERE username = ?", Long.class, P + "t11");
         Long adminId = adminUserId();
 
@@ -436,15 +432,13 @@ class LogicalDeleteServiceIntegrationTest {
     @DisplayName("LD-T13 部门下只有\"已删除的启用用户\"时允许停用（LD-03）")
     void disableDeptIgnoresDeletedUsers() {
         DataScope admin = adminScope();
-        OrgVO org = orgService.create(orgRequest(P + "t13o", "LD-T13 机构"), admin);
         DepartmentDto.CreateRequest req = new DepartmentDto.CreateRequest();
         req.setDeptCode(P + "t13d");
         req.setDeptName("LD-T13 部门");
-        req.setOrgId(org.getId());
         DepartmentVO dept = departmentService.create(req, admin);
 
-        jdbc.update("INSERT INTO sys_user (username, password, real_name, org_id, dept_id, status) "
-                + "VALUES (?, 'x', '夹具', ?, ?, 1)", P + "t13u", org.getId(), dept.getId());
+        jdbc.update("INSERT INTO sys_user (username, password, real_name, dept_id, status) "
+                + "VALUES (?, 'x', '夹具', ?, 1)", P + "t13u", dept.getId());
 
         assertThatThrownBy(() -> departmentService.changeStatus(dept.getId(), 0, admin))
                 .as("存在启用用户时必须拒绝停用")
@@ -484,15 +478,21 @@ class LogicalDeleteServiceIntegrationTest {
     // ==================================================================
 
     private DataScope adminScope() {
-        return dataScopeService.resolve(adminUserId(), hqOrgId(), List.of(Roles.ADMIN));
+        return dataScopeService.resolve(adminUserId(), List.of(Roles.ADMIN));
     }
 
     private Long adminUserId() {
         return jdbc.queryForObject("SELECT id FROM sys_user WHERE username = 'admin'", Long.class);
     }
 
-    private long hqOrgId() {
-        return jdbc.queryForObject("SELECT id FROM sys_org WHERE org_level = 1", Long.class);
+    /**
+     * 一个真实存在的部门 id（用户夹具用）。
+     *
+     * <p>{@code sys_user.dept_id} 已收紧为 NOT NULL：用户必须属于一个部门，且不再有机构归属。</p>
+     */
+    private long deptId() {
+        return jdbc.queryForObject(
+                "SELECT id FROM sys_department WHERE is_deleted = 0 ORDER BY id LIMIT 1", Long.class);
     }
 
     private static OrgDto.CreateRequest orgRequest(String code, String name) {

@@ -3,13 +3,11 @@
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.guarantee.system.mapper.SysDepartmentMapper">
 
-    <!-- 部门 -> 机构 关联，orgName 直接随列表返回。 -->
+    <!-- 部门是内部组织单元，不挂机构（机构是外部出函机构，服务于订单）。 -->
     <sql id="voCols">
         d.id         AS id,
         d.dept_code  AS deptCode,
         d.dept_name  AS deptName,
-        d.org_id     AS orgId,
-        o.org_name   AS orgName,
         d.parent_id  AS parentId,
         d.status     AS status,
         d.sort_no    AS sortNo,
@@ -21,7 +19,6 @@
 
     <sql id="fromJoin">
         FROM sys_department d
-        LEFT JOIN sys_org o ON o.id = d.org_id
     </sql>
 
     <!-- selectPage 与 countByQuery 共用，保证总数与列表口径一致。 -->
@@ -37,9 +34,6 @@
                     AND d.is_deleted IN (0, 1)
                 </when>
             </choose>
-            <if test="q.orgId != null">
-                AND d.org_id = #{q.orgId}
-            </if>
             <if test="q.deptCode != null and q.deptCode != ''">
                 AND d.dept_code LIKE CONCAT('%', #{q.deptCode}, '%')
             </if>
@@ -47,10 +41,6 @@
             <if test="q.keyword != null and q.keyword != ''">
                 AND (d.dept_name LIKE CONCAT('%', #{q.keyword}, '%')
                      OR d.dept_code LIKE CONCAT('%', #{q.keyword}, '%'))
-            </if>
-            <!-- 按机构名称过滤：工具在 orgId 不可靠时允许传名称（SYS-Q-02） -->
-            <if test="q.orgName != null and q.orgName != ''">
-                AND o.org_name LIKE CONCAT('%', #{q.orgName}, '%')
             </if>
             <if test="q.deptName != null and q.deptName != ''">
                 AND d.dept_name LIKE CONCAT('%', #{q.deptName}, '%')
@@ -64,21 +54,9 @@
             <if test="q.id != null">
                 AND d.id = #{q.id}
             </if>
-            <!-- 数据范围（SYS-P-08）：部门归属机构必须落在可见机构集合内。
-                 用正向属性 q.scope.restricted，避免 OGNL 取反静默失效。 -->
-            <if test="q.scope.restricted">
-                <choose>
-                    <when test="q.scope.orgIds != null and q.scope.orgIds.size() > 0">
-                        AND d.org_id IN
-                        <foreach collection="q.scope.orgIds" item="scopeOrgId" open="(" separator="," close=")">
-                            #{scopeOrgId}
-                        </foreach>
-                    </when>
-                    <otherwise>
-                        AND 1 = 0
-                    </otherwise>
-                </choose>
-            </if>
+            <!-- 阶段一（O3）：部门不再挂机构，原「AND d.org_id IN (可见机构)」过滤已删除。
+                 数据范围恒为全量；授权模型将在阶段二以权限码重建
+                 （见 docs/PLAN-移除用户与部门的机构归属.md）。 -->
         </where>
     </sql>
 
@@ -91,18 +69,18 @@
     </select>
 
     <select id="selectEntityById" resultType="com.guarantee.system.entity.SysDepartment">
-        SELECT id, dept_code, dept_name, org_id, parent_id, status, sort_no, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
+        SELECT id, dept_code, dept_name, parent_id, status, sort_no, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_department WHERE id = #{id}
     </select>
 
-    <!-- 编码唯一性检查：dept_code 是全局唯一键，必须跨机构判定 -->
+    <!-- 编码唯一性检查：dept_code 是全局唯一键 -->
     <select id="selectEntityByCode" resultType="com.guarantee.system.entity.SysDepartment">
-        SELECT id, dept_code, dept_name, org_id, parent_id, status, sort_no, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
+        SELECT id, dept_code, dept_name, parent_id, status, sort_no, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_department WHERE dept_code = #{deptCode}
     </select>
 
     <select id="selectCandidates" resultType="com.guarantee.system.entity.SysDepartment">
-        SELECT d.id, d.dept_code, d.dept_name, d.org_id, d.parent_id, d.status, d.sort_no,
+        SELECT d.id, d.dept_code, d.dept_name, d.parent_id, d.status, d.sort_no,
                d.created_at, d.updated_at, d.is_deleted AS isDeleted,
                d.deleted_at AS deletedAt, d.deleted_by AS deletedBy
         FROM sys_department d
@@ -111,24 +89,8 @@
                 AND (d.dept_name LIKE CONCAT('%', #{keyword}, '%')
                      OR d.dept_code LIKE CONCAT('%', #{keyword}, '%'))
             </if>
-            <if test="orgId != null">
-                AND d.org_id = #{orgId}
-            </if>
-            <if test="scope.restricted">
-                <choose>
-                    <when test="scope.orgIds != null and scope.orgIds.size() > 0">
-                        AND d.org_id IN
-                        <foreach collection="scope.orgIds" item="scopeOrgId" open="(" separator="," close=")">
-                            #{scopeOrgId}
-                        </foreach>
-                    </when>
-                    <otherwise>
-                        AND 1 = 0
-                    </otherwise>
-                </choose>
-            </if>
         </where>
-        ORDER BY d.org_id ASC, d.sort_no ASC, d.id ASC
+        ORDER BY d.sort_no ASC, d.id ASC
         LIMIT #{limit}
     </select>
 
@@ -140,8 +102,8 @@
 
     <insert id="insert" parameterType="com.guarantee.system.entity.SysDepartment"
             useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO sys_department (dept_code, dept_name, org_id, parent_id, status, sort_no)
-        VALUES (#{deptCode}, #{deptName}, #{orgId}, #{parentId}, #{status}, #{sortNo})
+        INSERT INTO sys_department (dept_code, dept_name, parent_id, status, sort_no)
+        VALUES (#{deptCode}, #{deptName}, #{parentId}, #{status}, #{sortNo})
     </insert>
 
     <update id="updateById" parameterType="com.guarantee.system.entity.SysDepartment">
@@ -177,26 +139,22 @@
       ① **必须** <include refid="queryWhere"/>，与列表共用口径。另写一套 WHERE 会造出
          "列表有、树上没有"这类最难排查的不一致。
       ② 不分页（分页会让树静默缺节点），用 TREE_LIMIT 设上限，触顶由 Service 告警。
-      ③ 排序按 org_id 在前：前端以机构为顶级分组节点，同机构部门必须连续且父在子前
+      ③ 排序按 sort_no：部门已不挂机构，前端呈现为一棵**纯部门树**
          （MySQL 不保证父行先于子行返回，前端组树时本身不依赖顺序，但稳定顺序便于对比排查）。
     -->
     <select id="selectTree" resultType="com.guarantee.system.vo.DepartmentVO">
         SELECT <include refid="voCols"/>
         <include refid="fromJoin"/>
         <include refid="queryWhere"/>
-        ORDER BY d.org_id ASC, d.sort_no ASC, d.id ASC
+        ORDER BY d.sort_no ASC, d.id ASC
         LIMIT #{limit}
     </select>
 
     <select id="selectEnabledOptions" resultType="com.guarantee.system.vo.DepartmentOptionVO">
         SELECT d.id        AS id,
-               d.dept_name AS deptName,
-               d.org_id    AS orgId
+               d.dept_name AS deptName
         FROM sys_department d
         WHERE d.status = 1
-        <if test="orgId != null">
-            AND d.org_id = #{orgId}
-        </if>
         ORDER BY d.sort_no ASC, d.id ASC
     </select>
 
@@ -225,7 +183,7 @@
 
     <!-- 恢复前的读取（IncludingDeleted 后缀 → 拦截器豁免） -->
     <select id="selectEntityByIdIncludingDeleted" resultType="com.guarantee.system.entity.SysDepartment">
-        SELECT id, dept_code, dept_name, org_id, parent_id, status, sort_no, created_at, updated_at,
+        SELECT id, dept_code, dept_name, parent_id, status, sort_no, created_at, updated_at,
                is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_department WHERE id = #{id}
     </select>

@@ -31,7 +31,8 @@ class LogicalDeletePermissionsTest {
     }
 
     private static void loginWith(List<String> permissions) {
-        CurrentUser.set(new CurrentUser.Principal(1L, "tester", "测试", 1L,
+        // 机构已从用户上移除：Principal 不再携带 orgId
+        CurrentUser.set(new CurrentUser.Principal(1L, "tester", "测试",
                 List.of(Roles.ANALYST), permissions));
     }
 

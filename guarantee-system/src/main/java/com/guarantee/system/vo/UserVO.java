@@ -6,9 +6,10 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * 用户配置响应对象（MyBatis 结果类型，机构/部门名称来自关联表）。
+ * 用户配置响应对象（MyBatis 结果类型，部门名称来自关联表）。
  *
  * <p>注意：任何读路径都不查询、不返回 password 字段。</p>
+ * <p>注意：用户不挂机构 —— 机构是外部出函机构，服务于订单，不是人的归属属性。</p>
  */
 @Data
 public class UserVO {
@@ -16,9 +17,6 @@ public class UserVO {
     private Long id;
     private String username;
     private String realName;
-    private Long orgId;
-    /** 所属机构名称，关联 sys_org */
-    private String orgName;
     private Long deptId;
     /** 所属部门名称，关联 sys_department */
     private String deptName;

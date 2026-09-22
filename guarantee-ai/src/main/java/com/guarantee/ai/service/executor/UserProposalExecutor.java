@@ -61,7 +61,6 @@ public class UserProposalExecutor implements ProposalExecutor {
         dto.setPhone(request.phone());
         dto.setEmail(request.email());
         dto.setDeptId(request.deptId());
-        dto.setClearDept(request.clearDept());
         // 执行期重新预检（危险动作保护 + 格式校验 + 不得改自己的部门）
         userService.validateUpdateProfile(proposal.getTargetId(), dto, context.scope(), context.userId());
         var updated = userService.updateProfile(proposal.getTargetId(), dto, context.scope(), context.userId());
@@ -77,7 +76,7 @@ public class UserProposalExecutor implements ProposalExecutor {
         after.put("realName", updated.getRealName());
         after.put("phone", dto.getPhone());
         after.put("email", dto.getEmail());
-        after.put("deptId", Boolean.TRUE.equals(dto.getClearDept()) ? null : dto.getDeptId());
+        after.put("deptId", dto.getDeptId());
         return ProposalExecutionResult.ok("用户「" + updated.getUsername() + "」资料已更新", before, after);
     }
 
@@ -147,7 +146,7 @@ public class UserProposalExecutor implements ProposalExecutor {
         List<String> notes = new ArrayList<>();
         notes.add("该用户持有的 JWT 已被立即撤销，需重新登录");
         notes.add("删除不改变启用/停用状态，恢复后回到删除前的状态（LD-02）；"
-                + "恢复时要求其所属机构与部门已恢复");
+                + "恢复时要求其所属部门已恢复");
         notes.add("删除后账号无法登录，且登录失败提示与密码错误完全一致（防账号枚举，LD-05）");
         return ProposalExecutionResult.ok(
                 "用户「" + deleted.getUsername() + "」已删除（默认不再出现在列表中，"

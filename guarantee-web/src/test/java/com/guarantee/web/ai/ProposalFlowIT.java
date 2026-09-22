@@ -212,7 +212,7 @@ class ProposalFlowIT {
     @DisplayName("TEST-06：停用自己 / 停用最后一个 ADMIN / 给自己加 ADMIN 均被拒绝")
     void dangerousUserActionsShouldBeRejected() {
         long adminId = userId("admin");
-        DataScope adminScope = dataScopeService.resolve(adminId, orgId("admin"), List.of(Roles.ADMIN));
+        DataScope adminScope = dataScopeService.resolve(adminId, List.of(Roles.ADMIN));
 
         // ① 停用自己
         assertThatThrownBy(() -> userService.validateStatusChange(
@@ -249,11 +249,12 @@ class ProposalFlowIT {
         long typeId = insuranceTypeId("投标保函（小额）");
         ProposalPayload created = createDisableInsuranceProposal(adminId, typeId, "投标保函（小额）");
 
-        // 模拟"权限已变更"：确认时提供的权限集不含提案所需权限
+        // 模拟"权限已变更"：确认时提供的权限集不含提案所需权限。
+        // 机构已从用户上移除，执行上下文里的 orgId 与 AiController 一致地传 null。
         ProposalExecutionContext withoutPermission = new ProposalExecutionContext(
-                adminId, "admin", "超级管理员", orgId("admin"),
+                adminId, "admin", "超级管理员", null,
                 List.of(Roles.ADMIN), List.of(Permissions.AI_CHAT, Permissions.INSURANCE_VIEW),
-                dataScopeService.resolve(adminId, orgId("admin"), List.of(Roles.ADMIN)), "trace-it-4");
+                dataScopeService.resolve(adminId, List.of(Roles.ADMIN)), "trace-it-4");
 
         assertThatThrownBy(() -> proposalService.confirm(created.proposalId(), withoutPermission))
                 .isInstanceOf(com.guarantee.common.exception.BizException.class)
@@ -275,9 +276,9 @@ class ProposalFlowIT {
 
         long analystId = userId("analyst");
         ProposalExecutionContext analyst = new ProposalExecutionContext(
-                analystId, "analyst", "数据分析师", orgId("analyst"),
+                analystId, "analyst", "数据分析师", null,
                 List.of(Roles.ANALYST), List.of(Permissions.AI_CHAT, Permissions.INSURANCE_VIEW),
-                dataScopeService.resolve(analystId, orgId("analyst"), List.of(Roles.ANALYST)), "trace-it-5");
+                dataScopeService.resolve(analystId, List.of(Roles.ANALYST)), "trace-it-5");
 
         assertThatThrownBy(() -> proposalService.confirm(created.proposalId(), analyst))
                 .isInstanceOf(com.guarantee.common.exception.BizException.class)
@@ -441,7 +442,7 @@ class ProposalFlowIT {
         jdbcTemplate.update("UPDATE sys_user SET status = 1 WHERE id = ?", targetUserId);
 
         com.guarantee.common.security.CurrentUser.set(new com.guarantee.common.security.CurrentUser.Principal(
-                adminId, "admin", "超级管理员", orgId("admin"), List.of(Roles.ADMIN),
+                adminId, "admin", "超级管理员", List.of(Roles.ADMIN),
                 userService.listPermissionCodesByUserId(adminId)));
         try {
             userService.changeStatus(targetUserId, 0, adminScopeFor(adminId), adminId);
@@ -473,7 +474,7 @@ class ProposalFlowIT {
     }
 
     private com.guarantee.system.scope.DataScope adminScopeFor(long adminId) {
-        return dataScopeService.resolve(adminId, orgId("admin"), List.of(Roles.ADMIN));
+        return dataScopeService.resolve(adminId, List.of(Roles.ADMIN));
     }
 
     // ==================================================================
@@ -505,7 +506,7 @@ class ProposalFlowIT {
         // 注意：不设置 CurrentUser 直接调 Service 会被审计层拒绝（"缺少操作者身份"）——
         // 那是对"绕过 Controller 的调用"的正确防护，不是本用例要验证的行为。
         com.guarantee.common.security.CurrentUser.set(new com.guarantee.common.security.CurrentUser.Principal(
-                adminId, "admin", "超级管理员", orgId("admin"), List.of(Roles.ADMIN),
+                adminId, "admin", "超级管理员", List.of(Roles.ADMIN),
                 userService.listPermissionCodesByUserId(adminId)));
         try {
             // ① 有启用用户 → 拒绝，且文案给出条数（页面据此在点击前提示影响面）
@@ -561,9 +562,10 @@ class ProposalFlowIT {
 
     private ProposalExecutionContext adminContext(String traceId) {
         long adminId = userId("admin");
-        return new ProposalExecutionContext(adminId, "admin", "超级管理员", orgId("admin"),
+        // orgId 传 null：机构已从用户与部门上移除，AiController 也是这么构造的
+        return new ProposalExecutionContext(adminId, "admin", "超级管理员", null,
                 List.of(Roles.ADMIN), userService.listPermissionCodesByUserId(adminId),
-                dataScopeService.resolve(adminId, orgId("admin"), List.of(Roles.ADMIN)), traceId);
+                dataScopeService.resolve(adminId, List.of(Roles.ADMIN)), traceId);
     }
 
     /**
@@ -581,10 +583,6 @@ class ProposalFlowIT {
 
     private long userId(String username) {
         return jdbcTemplate.queryForObject("SELECT id FROM sys_user WHERE username = ?", Long.class, username);
-    }
-
-    private long orgId(String username) {
-        return jdbcTemplate.queryForObject("SELECT org_id FROM sys_user WHERE username = ?", Long.class, username);
     }
 
     private long insuranceTypeId(String typeName) {

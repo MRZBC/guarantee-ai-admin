@@ -178,7 +178,7 @@ public class AiController {
         query.setSource(source);
         query.setLimit(limit);
         CurrentUser.Principal principal = requirePrincipal();
-        DataScope scope = dataScopeService.resolve(principal.userId(), principal.orgId(), principal.roles());
+        DataScope scope = dataScopeService.resolve(principal.userId(), principal.roles());
         return Result.ok(auditService.query(query, principal.isAdmin(), scope));
     }
 
@@ -211,9 +211,9 @@ public class AiController {
     /** 执行上下文：权限来自**当前 token**，这是 SYS-C-04 复核的输入。 */
     private ProposalExecutionContext executionContext() {
         CurrentUser.Principal principal = requirePrincipal();
-        DataScope scope = dataScopeService.resolve(principal.userId(), principal.orgId(), principal.roles());
+        DataScope scope = dataScopeService.resolve(principal.userId(), principal.roles());
         return new ProposalExecutionContext(principal.userId(), principal.username(), principal.realName(),
-                principal.orgId(), principal.roles(), principal.permissions(), scope,
+                null, principal.roles(), principal.permissions(), scope,
                 TraceContext.currentTraceId());
     }
 

@@ -85,7 +85,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             // 权限码与角色必须一并写入 Principal：AI 工具线程拿不到 SecurityContext，
             // 只能依赖随 ToolContext 下传的这份快照（SYS-P-02 / SYS-P-03）。
             CurrentUser.set(new CurrentUser.Principal(userId, username,
-                    JwtTokenProvider.realName(claims), JwtTokenProvider.orgId(claims),
+                    JwtTokenProvider.realName(claims),
                     JwtTokenProvider.roles(claims), JwtTokenProvider.permissions(claims)));
 
             List<SimpleGrantedAuthority> authorities = JwtTokenProvider.permissions(claims).stream()

@@ -82,7 +82,7 @@ public class RoleController {
         if (principal == null) {
             return DataScope.of(null, null, List.of(), "未登录（无可见范围）");
         }
-        return dataScopeService.resolve(principal.userId(), principal.orgId(), principal.roles());
+        return dataScopeService.resolve(principal.userId(), principal.roles());
     }
     /**
      * 逻辑删除（设计 §7.1）。删除不是物理删除：记录仍在库中，可在「显示已删除」中恢复。

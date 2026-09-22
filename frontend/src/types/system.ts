@@ -68,8 +68,6 @@ export interface OrgItem {
   orgLevel: number | null
   parentId: number | null
   parentName?: string | null
-  deptCount?: number | null
-  userCount?: number | null
   /** 后端 TINYINT：1 启用 / 0 停用 */
   status: number | null
   sortNo: number | null
@@ -113,8 +111,6 @@ export interface DepartmentItem {
   id: number
   deptCode: string
   deptName: string
-  orgId: number | null
-  orgName: string | null
   parentId: number | null
   /** 后端 TINYINT：1 启用 / 0 停用 */
   status: number | null
@@ -131,11 +127,9 @@ export interface DepartmentItem {
 export interface DepartmentOption {
   id: number
   deptName: string
-  orgId: number | null
 }
 
 export interface DepartmentQuery extends PageQuery {
-  orgId?: number | null
   deptName?: string
   status?: number | null
 }
@@ -147,7 +141,6 @@ export interface DepartmentQuery extends PageQuery {
  * （SYS-C-22 同构自机构树的 SYS-C-24）。过滤在服务端按同一 `queryWhere` 生效。</p>
  */
 export interface DepartmentTreeQuery {
-  orgId?: number | null
   deptName?: string
   deptCode?: string
   status?: number | null
@@ -156,13 +149,9 @@ export interface DepartmentTreeQuery {
 /**
  * 部门树节点的**数据契约**（对应 `GET /system/departments/tree` 的返回行）。
  *
- * <p><b>这一棵树里只有部门。</b>机构（出函机构，`sys_org`）与部门（公司内部组织，`sys_department`）
- * 是两个不同实体：机构有自己的三级层级（`org_level`），部门靠 `parent_id` 成树，
- * `org_id` 只是部门的**归属属性**。因此机构**不是**本树的层级，只以两种形式出现：
- * 筛选条件（`orgId`）与 `orgName` 字段（页面用「所属机构」列与根节点上的机构标签呈现）。</p>
- *
- * <p>曾经出现过的 `ORG` 伪节点方案已废弃——它把机构塞进部门层级，既让机构在树上"位置是虚的"，
- * 又把部门真实的父子层级压成平级。</p>
+ * <p><b>这一棵树里只有部门。</b>机构（出函机构，`sys_org`）与部门（公司内部组织，
+ * `sys_department`）是两个不同实体，且**用户与部门都不再有任何机构归属属性**：
+ * `sys_department.org_id` 已随重构删除，部门树只按 `parent_id` 成树。</p>
  */
 export interface DepartmentTreeNode {
   /** 恒为 `'DEPT'`：保留该字段是为了让"本树只含部门"在类型上可见 */
@@ -170,10 +159,7 @@ export interface DepartmentTreeNode {
   id: number
   deptCode: string | null
   deptName: string
-  /** 归属机构 id（`sys_department.org_id`） */
-  orgId: number | null
-  orgName: string | null
-  /** 上级部门 id；0 表示该机构内的顶级部门 */
+  /** 上级部门 id；0 表示顶级部门 */
   parentId: number | null
   /** 后端 TINYINT：1 启用 / 0 停用 */
   status: number | null
@@ -199,8 +185,6 @@ export interface UserItem {
   id: number
   username: string
   realName: string
-  orgId: number | null
-  orgName: string | null
   deptId: number | null
   deptName: string | null
   phone: string | null
@@ -222,7 +206,6 @@ export interface UserItem {
 export interface UserQuery extends PageQuery {
   username?: string
   realName?: string
-  orgId?: number | null
   status?: number | null
 }
 

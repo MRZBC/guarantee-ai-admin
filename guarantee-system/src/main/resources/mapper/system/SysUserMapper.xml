@@ -11,8 +11,6 @@
         u.id            AS id,
         u.username      AS username,
         u.real_name     AS realName,
-        u.org_id        AS orgId,
-        o.org_name      AS orgName,
         u.dept_id       AS deptId,
         d.dept_name     AS deptName,
         u.phone         AS phone,
@@ -27,7 +25,6 @@
 
     <sql id="fromJoin">
         FROM sys_user u
-        LEFT JOIN sys_org o ON o.id = u.org_id
         LEFT JOIN sys_department d ON d.id = u.dept_id
     </sql>
 
@@ -55,9 +52,6 @@
                 AND (u.username LIKE CONCAT('%', #{q.keyword}, '%')
                      OR u.real_name LIKE CONCAT('%', #{q.keyword}, '%'))
             </if>
-            <if test="q.orgId != null">
-                AND u.org_id = #{q.orgId}
-            </if>
             <if test="q.deptId != null">
                 AND u.dept_id = #{q.deptId}
             </if>
@@ -81,21 +75,9 @@
             <if test="q.id != null">
                 AND u.id = #{q.id}
             </if>
-            <!-- 数据范围（SYS-P-08）：机构过滤必须由服务端强制注入。
-                 用正向属性 q.scope.restricted，避免 OGNL 取反静默失效。 -->
-            <if test="q.scope.restricted">
-                <choose>
-                    <when test="q.scope.orgIds != null and q.scope.orgIds.size() > 0">
-                        AND u.org_id IN
-                        <foreach collection="q.scope.orgIds" item="scopeOrgId" open="(" separator="," close=")">
-                            #{scopeOrgId}
-                        </foreach>
-                    </when>
-                    <otherwise>
-                        AND 1 = 0
-                    </otherwise>
-                </choose>
-            </if>
+            <!-- 阶段一（O3）：用户不再挂机构，原「AND u.org_id IN (可见机构)」过滤已删除。
+                 数据范围恒为全量；授权模型将在阶段二以权限码重建
+                 （见 docs/PLAN-移除用户与部门的机构归属.md）。 -->
         </where>
     </sql>
 
@@ -143,14 +125,14 @@
     </select>
 
     <select id="selectEntityById" resultType="com.guarantee.system.entity.SysUser">
-        SELECT id, username, password, real_name, org_id, dept_id, phone, email,
+        SELECT id, username, password, real_name, dept_id, phone, email,
                status, last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_user
         WHERE id = #{id}
     </select>
 
     <select id="selectEntitiesByIds" resultType="com.guarantee.system.entity.SysUser">
-        SELECT id, username, password, real_name, org_id, dept_id, phone, email,
+        SELECT id, username, password, real_name, dept_id, phone, email,
                status, last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_user
         WHERE id IN
@@ -203,7 +185,7 @@
 
     <!-- 仅登录校验使用：返回包含 password 散列的实体，禁止用于任何响应。 -->
     <select id="selectByUsername" resultType="com.guarantee.system.entity.SysUser">
-        SELECT id, username, password, real_name, org_id, dept_id, phone, email,
+        SELECT id, username, password, real_name, dept_id, phone, email,
                status, last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_user
         WHERE username = #{username}
@@ -260,7 +242,7 @@
 
     <!--
       用户资料修改（SYS-W-04 UPDATE 动作）。
-      刻意**不接受** username / org_id：换机构或改账号请停用后重建，避免历史归属失真。
+      刻意**不接受** username / org_id：改账号请停用后重建，避免历史归属失真。
       phone / email 允许置空，因此这里用"是否显式传入"而不是"值是否为 null"判断——
       由 Service 层在构造 options 时决定包含哪些字段。
     -->
@@ -273,11 +255,6 @@
             <if test="deptId != null">dept_id = #{deptId},</if>
         </set>
         WHERE id = #{id}
-    </update>
-
-    <!-- 更新资料，并把 dept_id 显式置空（模型要求清空部门） -->
-    <update id="clearDept">
-        UPDATE sys_user SET dept_id = NULL WHERE id = #{id}
     </update>
 
     <!-- 条件更新状态：只有当前状态与预期一致时才改，防并发覆盖（T-08） -->
@@ -354,7 +331,7 @@
       方法名以 IncludingDeleted 结尾 → 拦截器豁免注入（设计 §5.2 的豁免约定）。
     -->
     <select id="selectEntityByIdIncludingDeleted" resultType="com.guarantee.system.entity.SysUser">
-        SELECT id, username, password, real_name, org_id, dept_id, phone, email,
+        SELECT id, username, password, real_name, dept_id, phone, email,
                status, last_login_at, created_at, updated_at,
                is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_user WHERE id = #{id}

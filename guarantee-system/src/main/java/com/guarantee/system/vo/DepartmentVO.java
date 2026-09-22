@@ -5,7 +5,9 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 /**
- * 部门配置响应对象（MyBatis 结果类型，orgName 来自 sys_org 关联）。
+ * 部门配置响应对象（MyBatis 结果类型）。
+ *
+ * <p>部门是内部组织单元，不挂机构 —— 机构是外部出函机构，服务于订单。</p>
  */
 @Data
 public class DepartmentVO {
@@ -13,9 +15,6 @@ public class DepartmentVO {
     private Long id;
     private String deptCode;
     private String deptName;
-    private Long orgId;
-    /** 所属机构名称，关联 sys_org */
-    private String orgName;
     private Long parentId;
     /** 状态 1启用 0停用 */
     private Integer status;

@@ -34,7 +34,6 @@ public record ProposalRequest(
         String phone,
         String email,
         Long deptId,
-        Boolean clearDept,
         Integer status,
         List<String> roleCodes,
 
@@ -50,7 +49,6 @@ public record ProposalRequest(
         // ---------------- 部门 ----------------
         String deptCode,
         String deptName,
-        Long orgId,
 
         // ---------------- 角色 ----------------
         String roleCode,
@@ -102,7 +100,6 @@ public record ProposalRequest(
         private String phone;
         private String email;
         private Long deptId;
-        private Boolean clearDept;
         private Integer status;
         private List<String> roleCodes;
         private String orgCode;
@@ -114,7 +111,6 @@ public record ProposalRequest(
         private Integer sortNo;
         private String deptCode;
         private String deptName;
-        private Long orgId;
         private String roleCode;
         private List<String> permCodes;
         private String typeCode;
@@ -137,7 +133,6 @@ public record ProposalRequest(
             this.phone = source.phone();
             this.email = source.email();
             this.deptId = source.deptId();
-            this.clearDept = source.clearDept();
             this.status = source.status();
             this.roleCodes = source.roleCodes();
             this.orgCode = source.orgCode();
@@ -149,7 +144,6 @@ public record ProposalRequest(
             this.sortNo = source.sortNo();
             this.deptCode = source.deptCode();
             this.deptName = source.deptName();
-            this.orgId = source.orgId();
             this.roleCode = source.roleCode();
             this.permCodes = source.permCodes();
             this.typeCode = source.typeCode();
@@ -196,11 +190,6 @@ public record ProposalRequest(
 
         public Builder deptId(Long value) {
             this.deptId = value;
-            return this;
-        }
-
-        public Builder clearDept(Boolean value) {
-            this.clearDept = value;
             return this;
         }
 
@@ -256,11 +245,6 @@ public record ProposalRequest(
 
         public Builder deptName(String value) {
             this.deptName = value;
-            return this;
-        }
-
-        public Builder orgId(Long value) {
-            this.orgId = value;
             return this;
         }
 
@@ -324,8 +308,8 @@ public record ProposalRequest(
 
         public ProposalRequest build() {
             return new ProposalRequest(id, targetName, userText, realName, phone, email, deptId,
-                    clearDept, status, roleCodes, orgCode, orgName, regionCode, regionName, orgLevel,
-                    parentId, sortNo, deptCode, deptName, orgId, roleCode, permCodes, typeCode,
+                    status, roleCodes, orgCode, orgName, regionCode, regionName, orgLevel,
+                    parentId, sortNo, deptCode, deptName, roleCode, permCodes, typeCode,
                     typeName, category, baseRate, minAmount, maxAmount, description,
                     java.util.Collections.unmodifiableMap(extra));
         }

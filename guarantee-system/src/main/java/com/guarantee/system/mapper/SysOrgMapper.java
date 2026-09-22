@@ -87,15 +87,6 @@ public interface SysOrgMapper {
     /** 启用中的下级机构数（递归，含多级）。 */
     long countEnabledDescendants(@Param("id") Long id);
 
-    long countEnabledUserByOrg(@Param("orgId") Long orgId);
-
-    long countDepartmentByOrg(@Param("orgId") Long orgId);
-
+    /** 机构下的订单数（订单仍带机构维度）。 */
     long countOrderByOrg(@Param("orgId") Long orgId);
-
-    /** 删除前置检查：机构下未删除的用户数（含停用用户）。 */
-    long countUserByOrg(@Param("orgId") Long orgId);
-
-    /** 机构下的部门数与启用用户数（批量，避免 N+1）。 */
-    List<com.guarantee.system.dto.OrgCountRef> selectOrgCounts(@Param("orgIds") List<Long> orgIds);
 }
