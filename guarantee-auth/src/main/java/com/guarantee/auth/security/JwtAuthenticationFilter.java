@@ -33,11 +33,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider tokenProvider;
     private final TokenRevocationService revocationService;
+    private final UserTokenRevocation userTokenRevocation;
 
     public JwtAuthenticationFilter(JwtTokenProvider tokenProvider,
-                                   TokenRevocationService revocationService) {
+                                   TokenRevocationService revocationService,
+                                   UserTokenRevocation userTokenRevocation) {
         this.tokenProvider = tokenProvider;
         this.revocationService = revocationService;
+        this.userTokenRevocation = userTokenRevocation;
     }
 
     @Override
@@ -70,12 +73,20 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 return;
             }
             Long userId = JwtTokenProvider.userId(claims);
+            // 用户级撤销：停用用户 / 调整角色或权限后，其**全部**已签发令牌立即失效（SYS-C-07 / AC-21）
+            if (!userTokenRevocation.issuedAfterRevocation(userId, JwtTokenProvider.issuedAtMillis(claims))) {
+                log.debug("令牌已失效（用户 {} 的权限或状态已变更，需重新登录）", userId);
+                return;
+            }
             String username = claims.getSubject();
             if (userId == null || !StringUtils.hasText(username)) {
                 return;
             }
+            // 权限码与角色必须一并写入 Principal：AI 工具线程拿不到 SecurityContext，
+            // 只能依赖随 ToolContext 下传的这份快照（SYS-P-02 / SYS-P-03）。
             CurrentUser.set(new CurrentUser.Principal(userId, username,
-                    JwtTokenProvider.realName(claims), JwtTokenProvider.orgId(claims)));
+                    JwtTokenProvider.realName(claims), JwtTokenProvider.orgId(claims),
+                    JwtTokenProvider.roles(claims), JwtTokenProvider.permissions(claims)));
 
             List<SimpleGrantedAuthority> authorities = JwtTokenProvider.permissions(claims).stream()
                     .map(SimpleGrantedAuthority::new)

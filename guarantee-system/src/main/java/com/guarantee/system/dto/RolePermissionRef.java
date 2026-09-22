@@ -10,5 +10,6 @@ public class RolePermissionRef {
 
     private Long roleId;
     private Long permissionId;
+    private String permissionCode;
     private String permissionName;
 }

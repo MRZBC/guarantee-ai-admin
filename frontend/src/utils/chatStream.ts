@@ -16,6 +16,21 @@ export interface ChatStreamHandlers {
   onMeta?: (payload: Record<string, unknown>) => void
   onDelta?: (payload: Record<string, unknown>) => void
   onToolCall?: (payload: Record<string, unknown>) => void
+  /**
+   * 丢弃本轮已显示的正文。
+   * 模型在发起工具调用前会先说一句「我这就去查…」式前言，这段文字已实时流式显示，
+   * 但不属于最终回答，后端会在进入下一轮前让前端清掉它。
+   */
+  onReset?: () => void
+  /**
+   * 写工具成功生成变更提案（5.3.1）。
+   *
+   * 后端已把提案的结构化载荷（changes / impact / warnings / expiresAt）一并推来，
+   * 前端只负责渲染，**不允许自行拼装参数**（SYS-C-11）。
+   */
+  onProposal?: (payload: Record<string, unknown>) => void
+  /** 提案被确认/拒绝/过期/失效后的结果（5.3.1）。 */
+  onProposalResult?: (payload: Record<string, unknown>) => void
   onDone?: (payload: Record<string, unknown>) => void
   onError?: (payload: Record<string, unknown>) => void
   /** 任何无法归类的事件（含缺少事件名的裸 data） */
@@ -112,6 +127,21 @@ export async function streamChat(
         case 'tool_call':
         case 'toolcall':
           handlers.onToolCall?.(data)
+          break
+        case 'reset':
+          handlers.onReset?.()
+          break
+        /*
+          新增事件必须显式分支：下面 default 会把未知事件丢给 onUnknown 静默忽略，
+          漏改就会出现「后端推了 proposal、界面毫无反应」（SYS-NF-10 只保证旧前端不崩溃，
+          不代表新前端可以漏接）。
+        */
+        case 'proposal':
+          handlers.onProposal?.(data)
+          break
+        case 'proposal_result':
+        case 'proposalresult':
+          handlers.onProposalResult?.(data)
           break
         case 'done':
           handlers.onDone?.(data)

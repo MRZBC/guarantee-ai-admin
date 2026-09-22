@@ -1,0 +1,59 @@
+# guarantee-system 模块的集成测试配置。
+#
+# 只保留 MyBatis + 数据源 + 建表脚本；不引入 Redis / Spring AI，
+# 使本模块的 IT 可以在"只有 MySQL"的环境下独立跑（mvn verify）。
+server:
+  port: 0
+
+spring:
+  application:
+    name: guarantee-system-it
+
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3307}/${DB_NAME:guarantee_ai_admin}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${DB_USER:guarantee}
+    password: ${DB_PASSWORD:guarantee@2026}
+    hikari:
+      maximum-pool-size: 5
+      pool-name: guarantee-system-it-pool
+
+  # schema.sql 全部使用 CREATE TABLE IF NOT EXISTS，可重复执行；
+  # 集成测试依赖它保证新表（ai_operation_*）存在。
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/schema.sql
+      continue-on-error: false
+      encoding: UTF-8
+
+mybatis:
+  mapper-locations: classpath*:mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    default-statement-timeout: 30
+    jdbc-type-for-null: NULL
+
+# 逻辑删除查询过滤拦截器开关（设计文档 §5.2）。
+# 默认 true；LD-T14 断言"关闭开关后默认查询不再过滤"，用于验证回滚路径。
+guarantee:
+  logical-delete:
+    enabled: true
+
+# ---------------------------------------------------------------------
+# 演示数据由 guarantee-web 的 DataInitializer 生成（固定种子 20260920）。
+#
+# 为什么这里不打开它：DataInitializer 属于 guarantee-web，而本模块的测试只装配
+# guarantee-system，测不到那个类。数据范围/层级断言需要真实的演示数据，因此约定为：
+#   1. 先 `pwsh scripts/reset-demo-data.ps1` 清表；
+#   2. 再启动一次后端（guarantee-web）让 DataInitializer 重新生成；
+#   3. 然后 `mvn -pl guarantee-system verify`。
+#
+# 这样做的另一个好处：层级数据本身就是被测对象（SYS-P-15~17），
+# 由真实初始化器生成的数据比测试里手工插入的更有验证价值。
+# ---------------------------------------------------------------------
+
+logging:
+  level:
+    root: warn
+    com.guarantee: info

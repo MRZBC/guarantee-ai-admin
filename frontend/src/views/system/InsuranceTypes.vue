@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import {
   createInsuranceType,
+  deleteInsuranceType,
   pageInsuranceTypes,
   updateInsuranceType
 } from '@/api/system'
+import { useUserStore } from '@/stores/user'
 import { formatAmount, formatDateTime, formatPercent } from '@/utils/format'
 import {
   dictLabel,
@@ -27,6 +29,8 @@ const loading = ref(false)
 const rows = ref<InsuranceTypeItem[]>([])
 const total = ref(0)
 
+const userStore = useUserStore()
+
 const query = reactive<InsuranceTypeQuery>({
   pageNum: 1,
   pageSize: 10,
@@ -34,6 +38,9 @@ const query = reactive<InsuranceTypeQuery>({
   category: '',
   status: null
 })
+
+/** 无 system:insurance:delete 时不渲染删除入口（后端仍是安全边界，SYS-NF-04） */
+const canDelete = computed(() => userStore.permissions.includes('system:insurance:delete'))
 
 const categoryMap: Record<string, string> = {
   TENDER: '投标担保',
@@ -122,7 +129,7 @@ async function loadData(): Promise<void> {
       pageSize: query.pageSize,
       typeName: query.typeName || undefined,
       category: query.category || undefined,
-      status: statusParam(query.status)
+      status: statusParam(query.status),
     })
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
@@ -146,6 +153,7 @@ function handleReset(): void {
   query.pageNum = 1
   void loadData()
 }
+
 
 function handlePageChange(page: number): void {
   query.pageNum = page
@@ -241,6 +249,31 @@ async function handleSubmit(): Promise<void> {
   }
 }
 
+/* ---------------- 逻辑删除 / 恢复（权限：system:insurance:delete） ---------------- */
+
+async function handleDelete(row: InsuranceTypeItem): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除险种「${row.typeName}」？`
+        + '① 删除后该险种不再出现在默认列表中；'
+        + '② 删除后该记录不再出现在列表中，且页面不提供恢复入口——如只是暂停业务，请改用「停用」；'
+        + '③ 若该险种已被其它数据引用，删除会被拒绝并给出引用数量。',
+      '删除险种',
+      { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await deleteInsuranceType(row.id)
+    ElMessage.success(`已删除险种「${row.typeName}」`)
+    await loadData()
+  } catch {
+    // 失败原因（如「该险种不能删除：存在 3 个启用中的产品」）已由响应拦截器统一提示
+  }
+}
+
+
 onMounted(loadData)
 </script>
 
@@ -299,7 +332,14 @@ onMounted(loadData)
         <el-button type="primary" icon="Plus" @click="openCreate">新增险种</el-button>
       </div>
 
-      <el-table v-loading="loading" :data="rows" border stripe height="520" row-key="id">
+      <el-table
+        v-loading="loading"
+        :data="rows"
+        border
+        stripe
+        height="520"
+        row-key="id"
+      >
         <el-table-column type="index" label="#" width="52" align="center" fixed />
         <el-table-column prop="typeCode" label="险种编码" width="150" fixed show-overflow-tooltip />
         <el-table-column prop="typeName" label="险种名称" min-width="180" show-overflow-tooltip />
@@ -331,9 +371,14 @@ onMounted(loadData)
         <el-table-column prop="updatedAt" label="更新时间" width="170" align="center">
           <template #default="{ row }">{{ formatDateTime(row.updatedAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="90" align="center" fixed="right">
+        <el-table-column label="操作" :width="canDelete ? 130 : 90" align="center" fixed="right">
           <template #default="{ row }">
+            <!-- 已删除险种不进列表，因此这里只有编辑与删除；
+                 恢复入口已随「显示已删除」开关撤除（2026-09-22 评审决定） -->
             <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button v-if="canDelete" link type="danger" @click="handleDelete(row)">
+              删除
+            </el-button>
           </template>
         </el-table-column>
         <template #empty>
@@ -444,4 +489,7 @@ onMounted(loadData)
   font-size: 12px;
   line-height: 1.6;
 }
+
+
+
 </style>

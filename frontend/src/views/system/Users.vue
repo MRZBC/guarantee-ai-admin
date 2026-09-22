@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
-import { listOrgOptions, pageUsers } from '@/api/system'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { deleteUser, listOrgOptions, pageUsers } from '@/api/system'
+import { useUserStore } from '@/stores/user'
 import { formatDateTime } from '@/utils/format'
 import { isEnabled, statusLabel, statusParam, STATUS_OPTIONS } from '@/utils/status'
 import type { OrgOption, UserItem, UserQuery } from '@/types/system'
+
+const userStore = useUserStore()
 
 const loading = ref(false)
 const rows = ref<UserItem[]>([])
@@ -19,6 +23,14 @@ const query = reactive<UserQuery>({
   status: null
 })
 
+/** 无 system:user:delete 时不渲染删除入口（后端仍是安全边界，SYS-NF-04） */
+const canDelete = computed(() => userStore.permissions.includes('system:user:delete'))
+
+/** 删除提示中的用户称谓：优先姓名，退回用户名 */
+function userLabel(row: UserItem): string {
+  return row.realName || row.username
+}
+
 async function loadData(): Promise<void> {
   loading.value = true
   try {
@@ -28,7 +40,7 @@ async function loadData(): Promise<void> {
       username: query.username || undefined,
       realName: query.realName || undefined,
       orgId: query.orgId ?? undefined,
-      status: statusParam(query.status)
+      status: statusParam(query.status),
     })
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
@@ -62,6 +74,7 @@ function handleReset(): void {
   void loadData()
 }
 
+
 function handlePageChange(page: number): void {
   query.pageNum = page
   void loadData()
@@ -72,6 +85,32 @@ function handleSizeChange(size: number): void {
   query.pageNum = 1
   void loadData()
 }
+
+/* ---------------- 逻辑删除 / 恢复（权限：system:user:delete） ---------------- */
+
+async function handleDelete(row: UserItem): Promise<void> {
+  const label = userLabel(row)
+  try {
+    await ElMessageBox.confirm(
+      `确认删除用户「${label}」？`
+        + '① 删除后该用户不再出现在默认列表中；'
+        + '② 删除后该记录不再出现在列表中，且页面不提供恢复入口——如只是暂停业务，请改用「停用」；'
+        + '③ 若该用户已被其它数据引用，删除会被拒绝并给出引用数量。',
+      '删除用户',
+      { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await deleteUser(row.id)
+    ElMessage.success(`已删除用户「${label}」`)
+    await loadData()
+  } catch {
+    // 失败原因（如「该用户不能删除：存在 2 条在办业务」）已由响应拦截器统一提示
+  }
+}
+
 
 onMounted(() => {
   void loadOrgOptions()
@@ -138,7 +177,14 @@ onMounted(() => {
         <span class="table-toolbar__title">用户列表 · 共 {{ total }} 条</span>
       </div>
 
-      <el-table v-loading="loading" :data="rows" border stripe height="520" row-key="id">
+      <el-table
+        v-loading="loading"
+        :data="rows"
+        border
+        stripe
+        height="520"
+        row-key="id"
+      >
         <el-table-column type="index" label="#" width="52" align="center" fixed />
         <el-table-column prop="username" label="用户名" width="140" fixed show-overflow-tooltip />
         <el-table-column prop="realName" label="姓名" width="120" show-overflow-tooltip />
@@ -184,6 +230,12 @@ onMounted(() => {
         <el-table-column prop="createdAt" label="创建时间" width="170" align="center">
           <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
         </el-table-column>
+        <el-table-column v-if="canDelete" label="操作" width="90" align="center" fixed="right">
+          <template #default="{ row }">
+            <!-- 已删除用户不进列表，因此只有「删除」；恢复入口已随「显示已删除」开关撤除（2026-09-22） -->
+            <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
+          </template>
+        </el-table-column>
         <template #empty>
           <el-empty description="暂无用户数据" :image-size="80" />
         </template>
@@ -214,4 +266,7 @@ onMounted(() => {
 .tag-gap {
   margin: 2px 4px 2px 0;
 }
+
+
+
 </style>

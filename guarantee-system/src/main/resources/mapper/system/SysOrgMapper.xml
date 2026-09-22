@@ -7,6 +7,30 @@
       VO 列显式取 camelCase 别名：MySQL 返回的列标签大小写不保证，
       显式别名可稳定映射到 VO 字段。实体查询依赖全局 map-underscore-to-camel-case。
     -->
+    <!--
+      数据范围公共片段（SYS-P-07 / SYS-P-08 / SYS-P-10）。
+
+      语义：${alias} 指定的机构列必须落在 scopeOrgIds 中；scopeOrgIds 为空列表时
+      结果集必为空（由 <choose> 显式写成 1 = 0，而不是依赖 SQL 语义碰巧为空）。
+      调用方必须在 scope.unrestricted 为 true 时**不**传入本片段。
+
+      用 ${alias} 而不是固定的表别名，是因为 sys_org 自身、sys_user.org_id、
+      sys_department.org_id、tender_order.org_id 都要复用同一份过滤逻辑。
+    -->
+    <sql id="scopeOrgFilter">
+        <choose>
+            <when test="q.scope.orgIds != null and q.scope.orgIds.size() > 0">
+                AND ${alias} IN
+                <foreach collection="q.scope.orgIds" item="scopeOrgId" open="(" separator="," close=")">
+                    #{scopeOrgId}
+                </foreach>
+            </when>
+            <otherwise>
+                AND 1 = 0
+            </otherwise>
+        </choose>
+    </sql>
+
     <sql id="voCols">
         id          AS id,
         org_code    AS orgCode,
@@ -17,24 +41,54 @@
         parent_id   AS parentId,
         status      AS status,
         sort_no     AS sortNo,
-        created_at  AS createdAt
+        created_at  AS createdAt,
+        is_deleted  AS isDeleted,
+        deleted_at  AS deletedAt,
+        deleted_by  AS deletedBy
     </sql>
 
     <sql id="entityCols">
         id, org_code, org_name, region_code, region_name, org_level, parent_id,
-        status, sort_no, created_at, updated_at
+        status, sort_no, created_at, updated_at,
+        is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
     </sql>
 
     <sql id="queryWhere">
         <where>
+            <choose>
+                <when test="q.includeDeleted != null and q.includeDeleted">
+                    <!--
+                      「显示已删除」视图（LD-04b）：显式放行 0/1 两种状态。
+                      本语句已含 is_deleted，拦截器按约定跳过（避免重复条件），
+                      因此默认视图的过滤责任仍在拦截器与显式条件上。
+                    -->
+                    AND is_deleted IN (0, 1)
+                </when>
+            </choose>
             <if test="q.orgName != null and q.orgName != ''">
                 AND org_name LIKE CONCAT('%', #{q.orgName}, '%')
+            </if>
+            <if test="q.orgCode != null and q.orgCode != ''">
+                AND org_code LIKE CONCAT('%', #{q.orgCode}, '%')
             </if>
             <if test="q.regionCode != null and q.regionCode != ''">
                 AND region_code = #{q.regionCode}
             </if>
+            <if test="q.orgLevel != null">
+                AND org_level = #{q.orgLevel}
+            </if>
             <if test="q.status != null">
                 AND status = #{q.status}
+            </if>
+            <!--
+              数据范围（SYS-P-08）。注意条件写法：MyBatis 的 OGNL 对
+              `!q.scope.unrestricted` 这种"取反 + 嵌套属性"会**静默判定为 false**，
+              过滤条件整段不生效且没有任何报错。必须用正向属性 q.scope.restricted。
+            -->
+            <if test="q.scope.restricted">
+                <include refid="scopeOrgFilter">
+                    <property name="alias" value="id"/>
+                </include>
             </if>
         </where>
     </sql>
@@ -50,6 +104,37 @@
     <select id="countByQuery" resultType="long">
         SELECT COUNT(*) FROM sys_org
         <include refid="queryWhere"/>
+    </select>
+
+    <!--
+      树形数据源（SYS-C-21 / SYS-C-24）：必须返回数据范围内的**全量**机构。
+      沿用分页接口会让机构数超过一页时树静默缺节点，属于必须避免的错误展示。
+      上限由 Service 层控制（TREE_LIMIT），此处只保证排序稳定。
+    -->
+    <select id="selectTree" resultType="com.guarantee.system.vo.OrgVO">
+        SELECT <include refid="voCols"/>
+        FROM sys_org
+        <include refid="queryWhere"/>
+        ORDER BY org_level ASC, sort_no ASC, id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      数据范围解析：给定机构，返回它自身 + 全部下级机构 id（SYS-P-07）。
+      递归 CTE 显式限制 depth &lt; 10 并去重，避免脏 parent_id 形成环时无限递归。
+      MySQL 8.0 起支持，与 schema.sql 的版本要求一致。
+    -->
+    <select id="selectVisibleOrgIds" resultType="java.lang.Long">
+        WITH RECURSIVE org_tree (id, depth) AS (
+            <!-- 起手与递归都必须带 is_deleted = 0，否则范围会穿过已删除机构继续向下展开（越权，LD-T7） -->
+            SELECT id, 1 FROM sys_org WHERE id = #{orgId} AND is_deleted = 0
+            UNION ALL
+            SELECT o.id, t.depth + 1
+            FROM sys_org o
+            INNER JOIN org_tree t ON o.parent_id = t.id AND o.is_deleted = 0
+            WHERE t.depth &lt; 10
+        )
+        SELECT DISTINCT id FROM org_tree
     </select>
 
     <select id="selectVoById" resultType="com.guarantee.system.vo.OrgVO">
@@ -75,6 +160,143 @@
 
     <select id="selectEntityById" resultType="com.guarantee.system.entity.SysOrg">
         SELECT <include refid="entityCols"/> FROM sys_org WHERE id = #{id}
+    </select>
+
+    <select id="selectEntityByCode" resultType="com.guarantee.system.entity.SysOrg">
+        SELECT <include refid="entityCols"/> FROM sys_org WHERE org_code = #{orgCode}
+    </select>
+
+    <!--
+      按名称/编码模糊匹配，供写操作的目标解析使用（SYS-W-10）。
+      必须带 scope 过滤：能停用但看不到的目标就是越权（SYS-P-14）。
+      刻意不限制数量上限，让调用方能拿到全部候选并要求用户澄清歧义。
+    -->
+    <select id="selectCandidates" resultType="com.guarantee.system.entity.SysOrg">
+        SELECT <include refid="entityCols"/>
+        FROM sys_org
+        <where>
+            <if test="keyword != null and keyword != ''">
+                AND (org_name LIKE CONCAT('%', #{keyword}, '%')
+                     OR org_code LIKE CONCAT('%', #{keyword}, '%'))
+            </if>
+            <if test="scope.restricted">
+                <include refid="scopeOrgFilter">
+                    <property name="alias" value="id"/>
+                </include>
+            </if>
+        </where>
+        ORDER BY org_level ASC, sort_no ASC, id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="countChildren" resultType="long">
+        SELECT COUNT(*) FROM sys_org WHERE parent_id = #{id} AND is_deleted = 0
+    </select>
+
+    <!-- 启用中的下级机构数（递归，含多级，SYS-W-02 停用前置检查） -->
+    <select id="countEnabledDescendants" resultType="long">
+        WITH RECURSIVE org_tree (id, depth) AS (
+            SELECT id, 1 FROM sys_org WHERE parent_id = #{id} AND is_deleted = 0
+            UNION ALL
+            SELECT o.id, t.depth + 1
+            FROM sys_org o
+            INNER JOIN org_tree t ON o.parent_id = t.id AND o.is_deleted = 0
+            WHERE t.depth &lt; 10
+        )
+        SELECT COUNT(*) FROM sys_org
+        WHERE status = 1 AND is_deleted = 0 AND id IN (SELECT id FROM org_tree)
+    </select>
+
+    <select id="countEnabledUserByOrg" resultType="long">
+        <!-- LD-03：停用前置检查只统计未删除的启用用户 -->
+        SELECT COUNT(*) FROM sys_user WHERE org_id = #{orgId} AND status = 1 AND is_deleted = 0
+    </select>
+
+    <select id="countDepartmentByOrg" resultType="long">
+        SELECT COUNT(*) FROM sys_department WHERE org_id = #{orgId} AND is_deleted = 0
+    </select>
+
+    <select id="countOrderByOrg" resultType="long">
+        SELECT (SELECT COUNT(*) FROM tender_order WHERE org_id = #{orgId} AND is_deleted = 0)
+             + (SELECT COUNT(*) FROM performance_order WHERE org_id = #{orgId} AND is_deleted = 0)
+    </select>
+
+    <!--
+      机构下的部门数与启用用户数（SYS-Q-01 出参 deptCount / userCount）。
+      一次批量取回，避免逐机构查询造成 N+1；部门数含停用部门（体现"铺设情况"），
+      用户数只算启用用户（停用用户不属于有效人力）。
+    -->
+    <select id="selectOrgCounts" resultType="com.guarantee.system.dto.OrgCountRef">
+        SELECT o.id AS orgId,
+               (SELECT COUNT(*) FROM sys_department d
+                 WHERE d.org_id = o.id AND d.is_deleted = 0) AS deptCount,
+               (SELECT COUNT(*) FROM sys_user u
+                 WHERE u.org_id = o.id AND u.status = 1 AND u.is_deleted = 0) AS userCount
+        FROM sys_org o
+        WHERE o.id IN
+        <foreach collection="orgIds" item="orgId" open="(" separator="," close=")">
+            #{orgId}
+        </foreach>
+    </select>
+
+    <insert id="insert" parameterType="com.guarantee.system.entity.SysOrg" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO sys_org (org_code, org_name, region_code, region_name, org_level, parent_id, status, sort_no)
+        VALUES (#{orgCode}, #{orgName}, #{regionCode}, #{regionName}, #{orgLevel}, #{parentId}, #{status}, #{sortNo})
+    </insert>
+
+    <update id="updateById" parameterType="com.guarantee.system.entity.SysOrg">
+        UPDATE sys_org
+        <set>
+            <if test="orgName != null">org_name = #{orgName},</if>
+            <if test="regionCode != null">region_code = #{regionCode},</if>
+            <if test="regionName != null">region_name = #{regionName},</if>
+            <if test="orgLevel != null">org_level = #{orgLevel},</if>
+            <if test="parentId != null">parent_id = #{parentId},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="sortNo != null">sort_no = #{sortNo},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <!-- 条件更新：只有当前状态与预期一致时才改，防止并发覆盖（T-08/T-09 的基础）。 -->
+    <update id="updateStatus">
+        UPDATE sys_org SET status = #{status} WHERE id = #{id} AND status = #{expectedStatus}
+    </update>
+
+    <!--
+      逻辑删除（设计 §9.4.1）：三列必须在**同一条语句**里写全。
+      只写一半会让唯一键判定错乱，且现象与原因看起来无关，极难排查（风险 LD-R10）。
+      deleted_at 必须用 NOW(6)（微秒精度），否则同一秒内"删除→重建→再删除"会撞唯一键；
+      AND is_deleted = 0 让重复删除的 ROW_COUNT() 为 0，调用方据此判定并发冲突。
+    -->
+    <update id="softDelete">
+        UPDATE sys_org
+        SET is_deleted = 1,
+            deleted_at = NOW(6),
+            deleted_by = COALESCE(#{operatorId}, 'DB')
+        WHERE id = #{id} AND is_deleted = 0
+    </update>
+
+    <!-- 恢复（设计 §9.4.2 / LD-04）：三列一起归零，只允许从"已删除"恢复 -->
+    <update id="restore">
+        UPDATE sys_org
+        SET is_deleted = 0,
+            deleted_at = NULL,
+            deleted_by = 'DB'
+        WHERE id = #{id} AND is_deleted = 1
+    </update>
+
+    <!--
+      恢复前的读取：必须能看到已删除行。
+      方法名以 IncludingDeleted 结尾 → 拦截器豁免注入（设计 §5.2 的豁免约定）。
+    -->
+    <select id="selectEntityByIdIncludingDeleted" resultType="com.guarantee.system.entity.SysOrg">
+        SELECT <include refid="entityCols"/> FROM sys_org WHERE id = #{id}
+    </select>
+
+    <!-- 删除前置检查：机构下**未删除**的用户数（含停用用户，与停用检查的"启用用户"口径不同，§6.2） -->
+    <select id="countUserByOrg" resultType="long">
+        SELECT COUNT(*) FROM sys_user WHERE org_id = #{orgId} AND is_deleted = 0
     </select>
 
 </mapper>

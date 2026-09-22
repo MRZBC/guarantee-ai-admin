@@ -21,6 +21,8 @@
     <!-- 动态条件片段：selectPage 与 countByQuery 共用，保证总数与列表口径一致 -->
     <sql id="queryWhere">
         <where>
+            <!-- 显式过滤：项目可被逻辑删除（§6.2） -->
+            AND p.is_deleted = 0
             <if test="q.projectName != null and q.projectName != ''">
                 AND p.project_name LIKE CONCAT('%', #{q.projectName}, '%')
             </if>
@@ -74,11 +76,11 @@
         FROM (
             SELECT 'TENDER' AS order_kind, project_id, guarantee_amount, premium_amount
             FROM tender_order
-            WHERE project_id = #{id}
+            WHERE project_id = #{id} AND is_deleted = 0
             UNION ALL
             SELECT 'PERFORMANCE' AS order_kind, project_id, guarantee_amount, premium_amount
             FROM performance_order
-            WHERE project_id = #{id}
+            WHERE project_id = #{id} AND is_deleted = 0
         ) merged
     </select>
 

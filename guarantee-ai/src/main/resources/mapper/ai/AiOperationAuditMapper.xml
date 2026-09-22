@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.ai.mapper.AiOperationAuditMapper">
+
+    <sql id="cols">
+        id, operated_at, operator_user_id, operator_username, operator_real_name, operator_org_id,
+        source, action, target_type, target_id, target_name, before_value, after_value,
+        changed_fields, truncated, result, error_message, proposal_id, conversation_id, trace_id
+    </sql>
+
+    <!--
+      查询条件。
+      注意 operated_at 区间是**无条件**写进 SQL 的：SYS-A-17 要求查询护栏在接口层拒绝
+      无时间条件的全量扫描，这里再提供一层"SQL 本身只可能命中少量分区"的保证，
+      使分区裁剪一定生效。
+    -->
+    <sql id="queryWhere">
+        <where>
+            <if test="q.startDate != null">
+                AND operated_at &gt;= #{q.startDate}
+            </if>
+            <if test="q.endDate != null">
+                AND operated_at &lt;= #{q.endDate}
+            </if>
+            <if test="q.operatorUsername != null and q.operatorUsername != ''">
+                AND operator_username LIKE CONCAT('%', #{q.operatorUsername}, '%')
+            </if>
+            <if test="q.targetType != null and q.targetType != ''">
+                AND target_type = #{q.targetType}
+            </if>
+            <if test="q.action != null and q.action != ''">
+                AND action = #{q.action}
+            </if>
+            <if test="q.result != null and q.result != ''">
+                AND result = #{q.result}
+            </if>
+            <if test="q.source != null and q.source != ''">
+                AND source = #{q.source}
+            </if>
+            <if test="q.targetId != null">
+                AND target_id = #{q.targetId}
+            </if>
+            <if test="q.traceId != null and q.traceId != ''">
+                AND trace_id = #{q.traceId}
+            </if>
+            <!-- 目标类型白名单：非 ADMIN 只能看 USER/ORG/DEPT 类（SYS-A-10） -->
+            <if test="q.allowedTargetTypes != null and q.allowedTargetTypes.size() > 0">
+                AND target_type IN
+                <foreach collection="q.allowedTargetTypes" item="type" open="(" separator="," close=")">
+                    #{type}
+                </foreach>
+            </if>
+            <!--
+              机构范围（SYS-A-10）：仅对 USER/ORG/DEPT 类目标成立。
+              ROLE/PERMISSION/INSURANCE_TYPE 类记录没有机构归属，无法用 org_id 收敛，
+              因此由 Service 层直接禁止非 ADMIN 查询这些类型（而不是在这里"过滤成空"，
+              否则结果残缺且会误导）。
+            -->
+            <if test="q.restrictByOrg">
+                <choose>
+                    <when test="q.visibleOrgIds != null and q.visibleOrgIds.size() > 0">
+                        AND operator_org_id IN
+                        <foreach collection="q.visibleOrgIds" item="orgId" open="(" separator="," close=")">
+                            #{orgId}
+                        </foreach>
+                    </when>
+                    <otherwise>
+                        AND 1 = 0
+                    </otherwise>
+                </choose>
+            </if>
+        </where>
+    </sql>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO ai_operation_audit
+            (operated_at, operator_user_id, operator_username, operator_real_name, operator_org_id,
+             source, action, target_type, target_id, target_name, before_value, after_value,
+             changed_fields, truncated, result, error_message, proposal_id, conversation_id, trace_id)
+        VALUES
+            (#{operatedAt}, #{operatorUserId}, #{operatorUsername}, #{operatorRealName}, #{operatorOrgId},
+             #{source}, #{action}, #{targetType}, #{targetId}, #{targetName}, #{beforeValue}, #{afterValue},
+             #{changedFields}, #{truncated}, #{result}, #{errorMessage}, #{proposalId}, #{conversationId}, #{traceId})
+    </insert>
+
+    <select id="countByQuery" resultType="long">
+        SELECT COUNT(*) FROM ai_operation_audit
+        <include refid="queryWhere"/>
+    </select>
+
+    <select id="selectPage" resultType="com.guarantee.ai.entity.AiOperationAudit">
+        SELECT <include refid="cols"/>
+        FROM ai_operation_audit
+        <include refid="queryWhere"/>
+        ORDER BY operated_at DESC, id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countAll" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM ai_operation_audit
+    </select>
+
+    <select id="selectOldestOperatedAt" resultType="java.time.LocalDateTime">
+        SELECT MIN(operated_at) FROM ai_operation_audit
+    </select>
+
+    <!--
+      兜底清理：按月分区表应以 DROP PARTITION 归档（SYS-A-14），这里只提供
+      "非分区形态的存量库"退路，并同样受时间条件限制。
+    -->
+    <delete id="deleteBefore">
+        DELETE FROM ai_operation_audit WHERE operated_at &lt; #{before}
+    </delete>
+
+</mapper>

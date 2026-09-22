@@ -34,15 +34,17 @@
     <!-- 关联链：项目 -> 企业，险种，承保机构。 -->
     <sql id="fromJoin">
         FROM tender_order o
-        LEFT JOIN project p ON p.id = o.project_id
-        LEFT JOIN enterprise e ON e.id = o.enterprise_id
-        LEFT JOIN insurance_type it ON it.id = o.insurance_type_id
-        LEFT JOIN sys_org so ON so.id = o.org_id
+        LEFT JOIN project p ON p.id = o.project_id AND p.is_deleted = 0
+        LEFT JOIN enterprise e ON e.id = o.enterprise_id AND e.is_deleted = 0
+        LEFT JOIN insurance_type it ON it.id = o.insurance_type_id AND it.is_deleted = 0
+        LEFT JOIN sys_org so ON so.id = o.org_id AND so.is_deleted = 0
     </sql>
 
     <!-- selectPage 与 countByQuery 共用，保证总数与列表口径永远一致。 -->
     <sql id="queryWhere">
         <where>
+            <!-- 显式过滤（LD-01）：订单主表；LEFT JOIN 维度表条件写在 ON 里以保持外连接语义 -->
+            AND o.is_deleted = 0
             <if test="q.orderNo != null and q.orderNo != ''">
                 AND o.order_no LIKE CONCAT('%', #{q.orderNo}, '%')
             </if>
@@ -92,7 +94,7 @@
         SELECT
         <include refid="cols"/>
         <include refid="fromJoin"/>
-        WHERE o.id = #{id}
+        WHERE o.id = #{id} AND o.is_deleted = 0
     </select>
 
 </mapper>

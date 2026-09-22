@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.ai.mapper.AiOperationProposalMapper">
+
+    <sql id="cols">
+        id, proposal_no, conversation_id, user_id, tool_name, action, target_type, target_id,
+        target_name, request_payload, preview_payload, target_fingerprint, required_perms,
+        status, reject_reason, result_message, confirmed_at, executed_at, expires_at,
+        audit_id, trace_id, created_at, updated_at
+    </sql>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO ai_operation_proposal
+            (proposal_no, conversation_id, user_id, tool_name, action, target_type, target_id,
+             target_name, request_payload, preview_payload, target_fingerprint, required_perms,
+             status, expires_at, trace_id)
+        VALUES
+            (#{proposalNo}, #{conversationId}, #{userId}, #{toolName}, #{action}, #{targetType},
+             #{targetId}, #{targetName}, #{requestPayload}, #{previewPayload}, #{targetFingerprint},
+             #{requiredPerms}, #{status}, #{expiresAt}, #{traceId})
+    </insert>
+
+    <select id="selectById" resultType="com.guarantee.ai.entity.AiOperationProposal">
+        SELECT <include refid="cols"/> FROM ai_operation_proposal WHERE id = #{id}
+    </select>
+
+    <select id="selectByNo" resultType="com.guarantee.ai.entity.AiOperationProposal">
+        SELECT <include refid="cols"/> FROM ai_operation_proposal WHERE proposal_no = #{proposalNo}
+    </select>
+
+    <select id="selectByUserId" resultType="com.guarantee.ai.entity.AiOperationProposal">
+        SELECT <include refid="cols"/>
+        FROM ai_operation_proposal
+        WHERE user_id = #{userId}
+        <if test="status != null and status != ''">
+            AND status = #{status}
+        </if>
+        ORDER BY id DESC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      同一会话内是否已存在同目标同动作的 PENDING 提案（SYS-W-12）。
+
+      ⚠️ 不能写成 `(#{targetId} IS NULL OR target_id = #{targetId})`：
+      MySQL 驱动在参数值为 null 且**无法推断类型**时会抛
+      NPE（Cannot invoke "Object.hashCode()" because "key" is null），
+      因为 PreparedStatement 需要 jdbcType 才能绑定 null。
+      改用 <choose> 显式分支：null 时只匹配 target_id IS NULL（新建动作）。
+    -->
+    <select id="selectPendingSameTarget" resultType="com.guarantee.ai.entity.AiOperationProposal">
+        SELECT <include refid="cols"/>
+        FROM ai_operation_proposal
+        WHERE conversation_id = #{conversationId}
+          AND target_type = #{targetType}
+          AND action = #{action}
+          AND status = 'PENDING'
+          AND expires_at &gt; NOW()
+        <choose>
+            <when test="targetId != null">
+                AND target_id = #{targetId}
+            </when>
+            <otherwise>
+                AND target_id IS NULL
+            </otherwise>
+        </choose>
+        ORDER BY id DESC
+        LIMIT 5
+    </select>
+
+    <!--
+      抢占执行权（SYS-C-03 / SYS-NF-06）：
+      条件更新保证"同一提案只有一个请求能从 PENDING 走到 EXECUTING"，
+      affectedRows=1 才继续，否则说明已被他人（或另一次点击）抢占。
+    -->
+    <update id="claimForExecution">
+        UPDATE ai_operation_proposal
+        SET status = 'EXECUTING', confirmed_at = #{confirmedAt}
+        WHERE id = #{id} AND status = 'PENDING'
+    </update>
+
+    <update id="updateResult">
+        UPDATE ai_operation_proposal
+        SET status = #{status},
+            result_message = #{resultMessage},
+            <if test="rejectReason != null">reject_reason = #{rejectReason},</if>
+            <if test="executedAt != null">executed_at = #{executedAt},</if>
+            <if test="auditId != null">audit_id = #{auditId},</if>
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateFingerprint">
+        UPDATE ai_operation_proposal
+        SET target_fingerprint = #{fingerprint}
+        WHERE id = #{id}
+    </update>
+
+    <select id="selectOverdue" resultType="com.guarantee.ai.entity.AiOperationProposal">
+        SELECT <include refid="cols"/>
+        FROM ai_operation_proposal
+        WHERE status = 'PENDING' AND expires_at &lt;= #{now}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="expireOverdue">
+        UPDATE ai_operation_proposal
+        SET status = 'EXPIRED',
+            result_message = '提案已过期（有效期 15 分钟）',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE status = 'PENDING' AND expires_at &lt;= #{now}
+        LIMIT #{limit}
+    </update>
+
+</mapper>

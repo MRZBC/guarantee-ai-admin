@@ -112,6 +112,12 @@ public class JwtTokenProvider {
         return claims.getExpiration();
     }
 
+    /** 令牌签发时间（毫秒）；缺失时返回 0，由调用方按"最保守"处理。 */
+    public static long issuedAtMillis(Claims claims) {
+        Date issuedAt = claims.getIssuedAt();
+        return issuedAt == null ? 0L : issuedAt.getTime();
+    }
+
     @SuppressWarnings("unchecked")
     public static List<String> roles(Claims claims) {
         Object value = claims.get(CLAIM_ROLES);

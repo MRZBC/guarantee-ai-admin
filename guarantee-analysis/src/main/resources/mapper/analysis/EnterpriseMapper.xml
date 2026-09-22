@@ -18,9 +18,11 @@
         FROM (
             SELECT 'TENDER' AS order_kind, enterprise_id, project_id, guarantee_amount, premium_amount
             FROM tender_order
+            WHERE is_deleted = 0
             UNION ALL
             SELECT 'PERFORMANCE' AS order_kind, enterprise_id, project_id, guarantee_amount, premium_amount
             FROM performance_order
+            WHERE is_deleted = 0
         ) merged
         GROUP BY merged.enterprise_id
     </sql>
@@ -28,6 +30,8 @@
     <!-- 动态条件片段：selectPage 与 countByQuery 共用，保证总数与列表口径一致 -->
     <sql id="queryWhere">
         <where>
+            <!-- 显式过滤：企业可被逻辑删除（§6.2），列表/计数必须排除已删除企业 -->
+            AND en.is_deleted = 0
             <if test="q.entName != null and q.entName != ''">
                 AND en.ent_name LIKE CONCAT('%', #{q.entName}, '%')
             </if>
@@ -99,11 +103,11 @@
         FROM (
             SELECT 'TENDER' AS order_kind, project_id, premium_amount
             FROM tender_order
-            WHERE enterprise_id = #{id}
+            WHERE enterprise_id = #{id} AND is_deleted = 0
             UNION ALL
             SELECT 'PERFORMANCE' AS order_kind, project_id, premium_amount
             FROM performance_order
-            WHERE enterprise_id = #{id}
+            WHERE enterprise_id = #{id} AND is_deleted = 0
         ) merged
     </select>
 

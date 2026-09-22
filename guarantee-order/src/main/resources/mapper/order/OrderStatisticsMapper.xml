@@ -8,6 +8,8 @@
       金额使用 DECIMAL 聚合，COALESCE 保证空结果返回 0 而不是 NULL。
     -->
     <sql id="branchFilter">
+        <!-- 逻辑删除过滤（LD-01）：订单本身不提供删除入口，此处保证口径与全库一致 -->
+        AND is_deleted = 0
         <if test="c.startDate != null">
             AND apply_date &gt;= #{c.startDate}
         </if>

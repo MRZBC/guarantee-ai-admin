@@ -10,6 +10,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -27,11 +28,16 @@ import java.util.List;
 /**
  * Spring Security 配置（无状态 JWT）。
  *
- * <p>只做「是否登录」的判定；细粒度权限由权限编码承载，后续可在业务层用
- * {@code @PreAuthorize} 扩展。</p>
+ * <p>URL 层只做「是否登录」的判定；细粒度权限由权限编码承载，通过
+ * {@link EnableMethodSecurity} 开启的方法级鉴权（{@code @PreAuthorize("hasAuthority('xxx')")}）
+ * 在 Service / Controller 上落地——这才是真正的安全边界（SYS-P-01、SYS-NF-04、RK-02）。</p>
+ *
+ * <p>方法级鉴权使用 JWT 中下发的权限码快照；权限变更后的实时性由
+ * {@code TokenRevocationService} 撤销令牌保证（SYS-P-05）。</p>
  */
 @Configuration(proxyBeanMethods = false)
 @EnableWebSecurity
+@EnableMethodSecurity
 @EnableConfigurationProperties({JwtProperties.class, CorsProperties.class})
 public class SecurityConfig {
 
@@ -44,6 +50,7 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtTokenProvider tokenProvider,
                                                    TokenRevocationService revocationService,
+                                                   com.guarantee.auth.security.UserTokenRevocation userTokenRevocation,
                                                    CorsConfigurationSource corsConfigurationSource,
                                                    ObjectMapper objectMapper) throws Exception {
         RestAuthErrorHandlers errorHandlers = new RestAuthErrorHandlers(objectMapper);
@@ -68,7 +75,7 @@ public class SecurityConfig {
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(errorHandlers)
                         .accessDeniedHandler(errorHandlers))
-                .addFilterBefore(new JwtAuthenticationFilter(tokenProvider, revocationService),
+                .addFilterBefore(new JwtAuthenticationFilter(tokenProvider, revocationService, userTokenRevocation),
                         UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

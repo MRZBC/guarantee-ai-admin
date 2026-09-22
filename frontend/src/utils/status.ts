@@ -47,6 +47,34 @@ export function statusLabel(status: unknown): string {
   )
 }
 
+/** 数据库直连删除的哨兵值（后端 deleted_by 的 DEFAULT 'DB'）。 */
+export const DELETED_BY_DB = 'DB'
+
+/**
+ * 格式化「删除人标识」。
+ *
+ * <p>后端 `deleted_by` 是 `VARCHAR(64) NOT NULL DEFAULT 'DB'`，一个字段承载两种来源：
+ * - 应用删除 → `sys_user.id` 的字符串（例如 `"1"`）
+ * - 数据库直连删除 → `"DB"`（列默认值）
+ *
+ * <p><b>必须集中在这里判断，不允许各页面自己写</b>：该字段混存两种形态，
+ * 直接拿去 `JOIN sys_user` 或当数字用会**静默**出错（设计文档 §2.1a / 风险 LD-R11）。
+ *
+ * <p>本函数只做"值 → 可读文案"的映射，不查用户表。若后续要显示账号名，
+ * 应新增一个按 `target_type + target_id` 查审计的接口，而不是在这里发请求。
+ *
+ * <p><b>当前未被任何页面调用</b>（2026-09-22 起，5 个系统管理页面不再展示删除审计列）。
+ * 保留它是因为：后端接口仍返回 `deletedBy`，页面一旦要展示删除人，必须走这里而不是各自解析
+ * （混存字段自行判断会静默出错）。若长期无展示需求，可连同 `DELETED_BY_DB` 一起删除。
+ */
+export function formatDeletedBy(deletedBy: unknown): string {
+  if (deletedBy === null || deletedBy === undefined || deletedBy === '') return '--'
+  if (deletedBy === DELETED_BY_DB) return '数据库直连'
+  // 数字字符串 = 应用删除，展示为 user#id；带出 id 便于人工回溯
+  if (/^\d+$/.test(String(deletedBy))) return `用户#${deletedBy}`
+  return String(deletedBy)
+}
+
 /** 是否启用。同样兼容数字与字符串两种表示。 */
 export function isEnabled(status: unknown): boolean {
   if (typeof status === 'number') return status === STATUS_ENABLED

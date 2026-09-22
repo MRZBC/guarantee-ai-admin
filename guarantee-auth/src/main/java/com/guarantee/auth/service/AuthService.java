@@ -51,6 +51,13 @@ public class AuthService {
             log.warn("登录失败 username={}", request.getUsername());
             throw new BizException(ResultCode.LOGIN_FAILED);
         }
+        // LD-05：已删除用户不可登录，且必须返回**与密码错误完全相同**的提示，避免账号枚举。
+        // 注意顺序：删除校验放在停用校验之前——"已删除且已停用"的账号也必须只说"用户名或密码错误"。
+        // 另外 selectByUsername 已加 is_deleted = 0（LD-05b），这里是第二道保险。
+        if (user.getIsDeleted() != null && user.getIsDeleted() == 1) {
+            log.warn("登录失败（账号已逻辑删除） username={}", request.getUsername());
+            throw new BizException(ResultCode.LOGIN_FAILED);
+        }
         if (user.getStatus() == null || user.getStatus() != 1) {
             throw new BizException(ResultCode.ACCOUNT_DISABLED);
         }

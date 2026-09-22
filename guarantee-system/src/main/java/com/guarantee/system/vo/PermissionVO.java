@@ -1,5 +1,7 @@
 package com.guarantee.system.vo;
 
+import java.time.LocalDateTime;
+
 import lombok.Data;
 
 /**
@@ -19,4 +21,9 @@ public class PermissionVO {
     private String component;
     private String icon;
     private Integer sortNo;
+    /** 逻辑删除 0正常 1已删除 */
+    private Integer isDeleted;
+    /** 删除时间（DATETIME(6)，未删除为 null） */
+    private LocalDateTime deletedAt;
+
 }

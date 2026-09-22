@@ -30,4 +30,47 @@
         WHERE conversation_id = #{conversationId} AND message_id IS NULL
     </update>
 
+    <!--
+      queryMyToolCalls 的数据源（SYS-Q-06a）。
+
+      范围**固定为当前用户自己**：用 `c.user_id = #{userId}` 关联会话表强制收敛，
+      而不是接受一个可选的用户参数——可选参数意味着模型可以传别人的 id（TEST-17）。
+      以 ai_conversation 为主表驱动（EXISTS 子查询），确保能利用
+      idx_ai_conv_user(user_id, updated_at) 索引，避免全表扫描。
+    -->
+    <sql id="mineWhere">
+        <where>
+            c.user_id = #{userId}
+            <if test="startDate != null">
+                AND t.created_at &gt;= #{startDate}
+            </if>
+            <if test="endDate != null">
+                AND t.created_at &lt;= #{endDate}
+            </if>
+            <if test="toolName != null and toolName != ''">
+                AND t.tool_name LIKE CONCAT('%', #{toolName}, '%')
+            </if>
+            <if test="status != null and status != ''">
+                AND t.status = #{status}
+            </if>
+        </where>
+    </sql>
+
+    <select id="countMine" resultType="long">
+        SELECT COUNT(*)
+        FROM ai_tool_call t
+        INNER JOIN ai_conversation c ON c.id = t.conversation_id
+        <include refid="mineWhere"/>
+    </select>
+
+    <select id="selectMine" resultType="com.guarantee.ai.entity.AiToolCall">
+        SELECT t.id, t.conversation_id, t.message_id, t.tool_name, t.tool_type,
+               t.arguments, t.result, t.status, t.duration_ms, t.error_message, t.created_at
+        FROM ai_tool_call t
+        INNER JOIN ai_conversation c ON c.id = t.conversation_id
+        <include refid="mineWhere"/>
+        ORDER BY t.id DESC
+        LIMIT #{limit}
+    </select>
+
 </mapper>

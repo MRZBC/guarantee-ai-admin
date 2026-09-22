@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
-import { pageRoles } from '@/api/system'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { deleteRole, pageRoles } from '@/api/system'
+import { useUserStore } from '@/stores/user'
 import { formatDateTime } from '@/utils/format'
 import { isEnabled, statusLabel } from '@/utils/status'
 import type { RoleItem, RoleQuery } from '@/types/system'
+
+const userStore = useUserStore()
 
 const loading = ref(false)
 const rows = ref<RoleItem[]>([])
@@ -16,6 +20,9 @@ const query = reactive<RoleQuery>({
   roleName: ''
 })
 
+/** 无 system:role:delete 时不渲染删除入口（后端仍是安全边界，SYS-NF-04） */
+const canDelete = computed(() => userStore.permissions.includes('system:role:delete'))
+
 async function loadData(): Promise<void> {
   loading.value = true
   try {
@@ -23,7 +30,7 @@ async function loadData(): Promise<void> {
       pageNum: query.pageNum,
       pageSize: query.pageSize,
       roleCode: query.roleCode || undefined,
-      roleName: query.roleName || undefined
+      roleName: query.roleName || undefined,
     })
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
@@ -47,6 +54,7 @@ function handleReset(): void {
   void loadData()
 }
 
+
 function handlePageChange(page: number): void {
   query.pageNum = page
   void loadData()
@@ -57,6 +65,31 @@ function handleSizeChange(size: number): void {
   query.pageNum = 1
   void loadData()
 }
+
+/* ---------------- 逻辑删除 / 恢复（权限：system:role:delete） ---------------- */
+
+async function handleDelete(row: RoleItem): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除角色「${row.roleName}」？`
+        + '① 删除后该角色不再出现在默认列表中；'
+        + '② 删除后该记录不再出现在列表中，且页面不提供恢复入口——如只是暂停业务，请改用「停用」；'
+        + '③ 若该角色已被其它数据引用，删除会被拒绝并给出引用数量。',
+      '删除角色',
+      { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await deleteRole(row.id)
+    ElMessage.success(`已删除角色「${row.roleName}」`)
+    await loadData()
+  } catch {
+    // 失败原因（如「该角色不能删除：已分配给 5 个用户」）已由响应拦截器统一提示
+  }
+}
+
 
 onMounted(loadData)
 </script>
@@ -96,7 +129,14 @@ onMounted(loadData)
         <span class="table-toolbar__title">角色列表 · 共 {{ total }} 条</span>
       </div>
 
-      <el-table v-loading="loading" :data="rows" border stripe height="520" row-key="id">
+      <el-table
+        v-loading="loading"
+        :data="rows"
+        border
+        stripe
+        height="520"
+        row-key="id"
+      >
         <el-table-column type="index" label="#" width="52" align="center" fixed />
         <el-table-column prop="roleCode" label="角色编码" width="160" fixed show-overflow-tooltip />
         <el-table-column prop="roleName" label="角色名称" width="160" show-overflow-tooltip />
@@ -130,6 +170,12 @@ onMounted(loadData)
         <el-table-column prop="createdAt" label="创建时间" width="170" align="center">
           <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
         </el-table-column>
+        <el-table-column v-if="canDelete" label="操作" width="90" align="center" fixed="right">
+          <template #default="{ row }">
+            <!-- 已删除角色不进列表，因此只有「删除」；恢复入口已随「显示已删除」开关撤除（2026-09-22） -->
+            <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
+          </template>
+        </el-table-column>
         <template #empty>
           <el-empty description="暂无角色数据" :image-size="80" />
         </template>
@@ -160,4 +206,7 @@ onMounted(loadData)
 .tag-gap {
   margin: 2px 4px 2px 0;
 }
+
+
+
 </style>

@@ -1,18 +1,31 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getConversation, listConversations, listToolCalls, streamChat } from '@/api/ai'
+import {
+  confirmProposal as confirmProposalApi,
+  getConversation,
+  listConversations,
+  listProposals,
+  listToolCalls,
+  rejectProposal as rejectProposalApi,
+  streamChat
+} from '@/api/ai'
+import ProposalCard from '@/components/ProposalCard.vue'
 import type {
   ChatMessage,
+  ChatRole,
   ConversationItem,
+  ProposalPayload,
   SseDeltaPayload,
   SseDonePayload,
   SseErrorPayload,
   SseMetaPayload,
+  SseProposalResultPayload,
   SseToolCallPayload,
   ToolCallItem
 } from '@/types/ai'
 import { formatDateTime, prettyJson } from '@/utils/format'
+import { renderMarkdown } from '@/utils/markdown'
 
 /** 界面上渲染的消息：id 为负数表示本地尚未落库的临时消息 */
 interface DisplayMessage extends ChatMessage {
@@ -35,12 +48,27 @@ const messages = ref<DisplayMessage[]>([])
 const toolCalls = ref<ToolCallMap>({})
 const conversations = ref<ConversationItem[]>([])
 
+/**
+ * 变更提案卡片（二期）。
+ *
+ * 按 proposalId 去重：SSE 可能重复推送同一提案（同一会话内同目标同动作时后端会复用既有提案），
+ * 刷新页面/切换会话时还会通过 GET /api/ai/proposals 再拉一次，必须避免渲染出两张卡。
+ */
+const proposals = ref<ProposalPayload[]>([])
+/** 正在执行中的提案 id：用于"一张执行完成后才能操作下一张"的串行约束（SYS-C-13）。 */
+const executingProposalId = ref<number | null>(null)
+
 const listRef = ref<HTMLElement | null>(null)
 let abortController: AbortController | null = null
 let localIdSeed = -1
 
 const canSend = computed(() => !streaming.value && input.value.trim().length > 0)
 const hasMessages = computed(() => messages.value.length > 0)
+
+/** 待确认的提案（用于会话内提示与角标）。 */
+const pendingProposals = computed(() =>
+  proposals.value.filter((item) => (item.status || 'PENDING').toUpperCase() === 'PENDING')
+)
 
 function nextLocalId(): number {
   const id = localIdSeed
@@ -54,6 +82,90 @@ function toolCallsOf(messageId: number): ToolCallItem[] {
 
 function hasToolCalls(messageId: number): boolean {
   return toolCallsOf(messageId).length > 0
+}
+
+/* ---------------- 提案状态维护 ---------------- */
+
+function upsertProposal(payload: ProposalPayload): void {
+  const index = proposals.value.findIndex((item) => item.proposalId === payload.proposalId)
+  if (index >= 0) {
+    proposals.value.splice(index, 1, { ...proposals.value[index], ...payload })
+    proposals.value = [...proposals.value]
+  } else {
+    proposals.value = [...proposals.value, payload]
+  }
+}
+
+function applyProposalResult(payload: SseProposalResultPayload): void {
+  const index = proposals.value.findIndex((item) => item.proposalId === payload.proposalId)
+  if (index < 0) return
+  proposals.value.splice(index, 1, {
+    ...proposals.value[index],
+    status: payload.status
+  })
+  proposals.value = [...proposals.value]
+}
+
+async function refreshProposals(): Promise<void> {
+  try {
+    const list = await listProposals('PENDING')
+    const byId = new Map<number, ProposalPayload>()
+    for (const item of proposals.value) {
+      byId.set(item.proposalId, item)
+    }
+    // 待确认列表是权威来源：以它为准合并，同时保留本次会话内已终态的卡片
+    for (const item of list ?? []) {
+      byId.set(item.proposalId, { ...byId.get(item.proposalId), ...item })
+    }
+    proposals.value = [...byId.values()].sort((a, b) => a.proposalId - b.proposalId)
+  } catch {
+    // 错误提示已由响应拦截器统一处理
+  }
+}
+
+async function handleConfirm(proposalId: number): Promise<void> {
+  executingProposalId.value = proposalId
+  try {
+    const updated = await confirmProposalApi(proposalId)
+    upsertProposal(updated)
+    if ((updated.status || '').toUpperCase() === 'EXECUTED') {
+      ElMessage.success('变更已执行')
+    } else {
+      ElMessage.warning(updated.summary || '变更未成功执行')
+    }
+  } catch {
+    // 失败原因（已过期 / 权限已变更 / 已执行过）由拦截器提示；
+    // 这里同步一次状态，避免界面停留在"待确认"
+    await refreshProposals()
+  } finally {
+    executingProposalId.value = null
+  }
+}
+
+async function handleReject(proposalId: number, reason: string): Promise<void> {
+  executingProposalId.value = proposalId
+  try {
+    const updated = await rejectProposalApi(proposalId, reason || undefined)
+    upsertProposal(updated)
+    ElMessage.info('已拒绝，系统未做任何变更')
+  } catch {
+    await refreshProposals()
+  } finally {
+    executingProposalId.value = null
+  }
+}
+
+/**
+ * 归一化消息角色。
+ *
+ * <p>后端与数据库存的是大写 {@code USER} / {@code ASSISTANT}，而模板按小写比较
+ * （{@code message.role === 'user'}）。不归一化的话，历史会话里的用户提问会被渲染成
+ * 助手气泡（带 AI 头像、左侧、多一个时间戳），只有刚发出、尚未重新加载的那一条才是对的。</p>
+ */
+function normalizeRole(role: string | null | undefined): ChatRole {
+  const value = (role ?? '').toLowerCase()
+  if (value === 'user' || value === 'system') return value
+  return 'assistant'
 }
 
 function appendToolCall(messageId: number, payload: SseToolCallPayload): void {
@@ -150,10 +262,19 @@ async function loadConversation(id: number): Promise<void> {
     const detail = await getConversation(id)
     conversationId.value = detail.conversation.id
     conversationTitle.value = detail.conversation.title || '历史会话'
-    messages.value = detail.messages.map((message) => ({ ...message }))
+    messages.value = detail.messages.map((message) => ({
+      ...message,
+      role: normalizeRole(message.role)
+    }))
     historyVisible.value = false
     visible.value = true
     await loadToolCalls(id)
+    // 刷新页面/切回历史会话时恢复 PENDING 确认卡（SYS-C-14）：
+    // 只保留当前会话的卡片，避免不同会话的确认卡混在一起
+    await refreshProposals()
+    proposals.value = proposals.value.filter(
+      (item) => item.conversationId === undefined || item.conversationId === id
+    )
     await scrollToBottom()
   } catch {
     // 拦截器已提示
@@ -171,6 +292,7 @@ function startNewConversation(): void {
   conversationTitle.value = '新会话'
   messages.value = []
   toolCalls.value = {}
+  proposals.value = []
   input.value = ''
   historyVisible.value = false
 }
@@ -216,6 +338,14 @@ async function send(): Promise<void> {
     streaming: true
   }
   messages.value.push(placeholder)
+  /*
+    必须取回「数组里的响应式代理」再修改。
+    push 进 reactive 数组的是原始对象，而局部变量 placeholder 始终指向那个原始对象；
+    直接改 placeholder.content 会绕过 Proxy 的 set 拦截、不触发依赖更新，
+    表现就是回答完全不流式、直到结束时才一次性出现
+    （只有 streaming.value 等其它响应式变化才顺带触发一次渲染）。
+  */
+  const streamingMessage = messages.value[messages.value.length - 1]
   await scrollToBottom()
 
   const controller = new AbortController()
@@ -232,7 +362,7 @@ async function send(): Promise<void> {
           const meta = payload as unknown as SseMetaPayload
           if (typeof meta.conversationId === 'number') {
             conversationId.value = meta.conversationId
-            placeholder.conversationId = meta.conversationId
+            streamingMessage.conversationId = meta.conversationId
             localStorage.setItem(HISTORY_KEY, String(meta.conversationId))
           }
           if (meta.title) conversationTitle.value = meta.title
@@ -242,13 +372,40 @@ async function send(): Promise<void> {
         onDelta: (payload) => {
           const delta = payload as unknown as SseDeltaPayload
           if (typeof delta.content === 'string') {
-            placeholder.content += delta.content
+            streamingMessage.content += delta.content
             void scrollToBottom()
           }
         },
         onToolCall: (payload) => {
-          appendToolCall(placeholder.id, payload as unknown as SseToolCallPayload)
+          appendToolCall(streamingMessage.id, payload as unknown as SseToolCallPayload)
           void scrollToBottom()
+        },
+        onReset: () => {
+          // 本轮正文是模型调用工具前的前言（如 "I'll query ..."），
+          // 已实时显示过，但不属于最终回答，这里清掉，由下一轮重新流式输出正文
+          streamingMessage.content = ''
+        },
+        /*
+          提案事件：后端的写工具只产出提案，这里立即渲染确认卡。
+          卡片数据完全来自后端载荷，前端不拼装任何参数（SYS-C-11）。
+        */
+        onProposal: (payload) => {
+          const proposal = payload as unknown as ProposalPayload
+          if (typeof proposal?.proposalId !== 'number') return
+          upsertProposal({
+            ...proposal,
+            // SSE 载荷没有 status（它只会在生成时推送），补成 PENDING 以便卡片可操作
+            status: 'PENDING'
+          })
+          void scrollToBottom()
+        },
+        onProposalResult: (payload) => {
+          const result = payload as unknown as SseProposalResultPayload
+          if (typeof result?.proposalId !== 'number') return
+          applyProposalResult(result)
+          if (result.message) {
+            ElMessage.info(result.message)
+          }
         },
         onDone: (payload) => {
           const done = payload as unknown as SseDonePayload
@@ -258,16 +415,16 @@ async function send(): Promise<void> {
           }
           if (typeof done.messageId === 'number' && done.messageId > 0) {
             // 落库后用真实 messageId 替换临时 id，保证工具调用仍能对应
-            const calls = toolCalls.value[placeholder.id]
+            const calls = toolCalls.value[streamingMessage.id]
             if (calls) {
               toolCalls.value = { ...toolCalls.value, [done.messageId]: calls }
-              delete toolCalls.value[placeholder.id]
+              delete toolCalls.value[streamingMessage.id]
               toolCalls.value = { ...toolCalls.value }
             }
-            placeholder.id = done.messageId
+            streamingMessage.id = done.messageId
             replacedPlaceholder = true
           }
-          placeholder.streaming = false
+          streamingMessage.streaming = false
         },
         onError: (payload) => {
           const err = payload as unknown as SseErrorPayload
@@ -284,16 +441,16 @@ async function send(): Promise<void> {
   } finally {
     abortController = null
     streaming.value = false
-    placeholder.streaming = false
+    streamingMessage.streaming = false
 
     if (streamError) {
       ElMessage.error(streamError)
-      if (!placeholder.content.trim() && !hasToolCalls(placeholder.id)) {
-        messages.value = messages.value.filter((message) => message !== placeholder)
+      if (!streamingMessage.content.trim() && !hasToolCalls(streamingMessage.id)) {
+        messages.value = messages.value.filter((message) => message !== streamingMessage)
       }
-    } else if (!placeholder.content.trim() && !hasToolCalls(placeholder.id)) {
+    } else if (!streamingMessage.content.trim() && !hasToolCalls(streamingMessage.id)) {
       // 流被中断且没有任何内容
-      messages.value = messages.value.filter((message) => message !== placeholder)
+      messages.value = messages.value.filter((message) => message !== streamingMessage)
     } else if (!replacedPlaceholder && conversationId.value) {
       // 补充拉取一次工具调用，避免流式事件丢失
       void loadToolCalls(conversationId.value)
@@ -321,6 +478,11 @@ function statusTagType(status: string): 'success' | 'danger' | 'info' {
 
 watch(messages, () => void scrollToBottom(), { deep: true })
 
+onMounted(() => {
+  // 待办提示：进入页面即拉一次待确认提案（Q-8：仅会话内提示起步，不做全局角标）
+  void refreshProposals()
+})
+
 onBeforeUnmount(() => {
   abortController?.abort()
   abortController = null
@@ -344,12 +506,23 @@ onBeforeUnmount(() => {
       </el-badge>
     </el-tooltip>
 
+    <!--
+      说明（两个属性缺一不可）：
+      :modal="false"     —— 不加深色遮罩，打开助手时页面内容依然可见。
+      modal-penetrable   —— 关键。Element Plus 在 mask=false 时**并非不渲染遮罩**，
+                            而是改为渲染一个 position:fixed; inset:0 的全屏容器
+                            （见其 ElOverlay 实现），该容器默认 pointer-events: auto，
+                            会把抽屉以外所有区域的点击全部吃掉，表现为「页面点不动」。
+                            modal-penetrable 会为其加上 .is-penetrable，
+                            使其 pointer-events:none、而内部 .el-drawer 仍为 auto。
+    -->
     <el-drawer
       v-model="visible"
       :with-header="false"
       size="600px"
       direction="rtl"
       :modal="false"
+      modal-penetrable
       class="ai-copilot__drawer"
     >
       <div class="ai-panel">
@@ -359,6 +532,10 @@ onBeforeUnmount(() => {
             <span>业务分析助手</span>
             <el-tag v-if="conversationTitle" size="small" type="info" effect="plain">
               {{ conversationTitle }}
+            </el-tag>
+            <!-- 会话内待办提示（RK-05：避免提案被遗忘在 PENDING） -->
+            <el-tag v-if="pendingProposals.length" size="small" type="warning" effect="dark">
+              {{ pendingProposals.length }} 个待确认变更
             </el-tag>
           </div>
           <div class="ai-panel__actions">
@@ -397,9 +574,16 @@ onBeforeUnmount(() => {
                   <el-icon><MagicStick /></el-icon>
                 </el-avatar>
                 <div class="ai-message__main">
-                  <div class="ai-bubble ai-bubble--assistant">
-                    <span class="ai-bubble__text">{{ message.content }}</span>
-                    <span v-if="message.streaming" class="ai-cursor">▌</span>
+                  <div
+                    class="ai-bubble ai-bubble--assistant"
+                    :class="{ 'is-streaming': message.streaming }"
+                  >
+                    <!--
+                      助手回答是 Markdown，交给 renderMarkdown 渲染成 HTML。
+                      安全性由 markdown-it 的 html:false（转义原生 HTML）+ 默认的
+                      validateLink（拦截 javascript: 等协议）保证，故此处可用 v-html。
+                    -->
+                    <div class="markdown-body" v-html="renderMarkdown(message.content)"></div>
                     <span v-if="message.streaming && !message.content" class="text-muted">
                       正在思考…
                     </span>
@@ -450,6 +634,23 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </template>
+          </div>
+
+          <!--
+            变更确认卡（二期）：挂在消息流末尾而不是某条消息内部。
+            原因：提案与消息没有强绑定关系，而且刷新页面后消息是重新拉取的、
+            提案是另一条接口恢复的（SYS-C-14），绑到消息上会导致恢复不到。
+          -->
+          <div v-if="proposals.length" class="ai-proposals">
+            <ProposalCard
+              v-for="item in proposals"
+              :key="item.proposalId"
+              :proposal="item"
+              :busy="executingProposalId !== null"
+              :disabled="executingProposalId !== null && executingProposalId !== item.proposalId"
+              @confirm="handleConfirm"
+              @reject="handleReject"
+            />
           </div>
         </div>
 
@@ -617,17 +818,141 @@ onBeforeUnmount(() => {
   background: #fff;
   border: 1px solid #e4e7ed;
   color: #303133;
-  white-space: pre-wrap;
-  /* 纯文本渲染，保留换行 */
+  /*
+    内容已交给 Markdown 渲染，换行由 markdown-it 的 breaks 选项负责。
+    这里不能再用 pre-wrap：生成的 HTML 中标签之间存在缩进与换行，
+    pre-wrap 会把它们渲染成多余空行。
+  */
+  white-space: normal;
 }
 
-.ai-bubble__text {
-  white-space: pre-wrap;
+/* ---------------- Markdown 内容样式 ---------------- */
+/* v-html 插入的节点不带 scoped 属性，必须用 :deep 穿透 */
+
+.markdown-body {
+  font-size: 14px;
+  line-height: 1.7;
+  word-break: break-word;
 }
 
-.ai-cursor {
-  animation: ai-blink 1s steps(2, start) infinite;
+.markdown-body :deep(> :first-child) {
+  margin-top: 0;
+}
+
+.markdown-body :deep(> :last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3),
+.markdown-body :deep(h4) {
+  margin: 14px 0 8px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #303133;
+}
+
+.markdown-body :deep(h1) {
+  font-size: 19px;
+}
+
+.markdown-body :deep(h2) {
+  font-size: 17px;
+}
+
+.markdown-body :deep(h3) {
+  font-size: 15px;
+}
+
+.markdown-body :deep(h4) {
+  font-size: 14px;
+}
+
+.markdown-body :deep(p) {
+  margin: 8px 0;
+}
+
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+
+.markdown-body :deep(li) {
+  margin: 3px 0;
+}
+
+.markdown-body :deep(table) {
+  width: 100%;
+  margin: 10px 0;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  border: 1px solid #e4e7ed;
+  padding: 6px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-body :deep(th) {
+  background: #f5f7fa;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.markdown-body :deep(code) {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #f5f7fa;
+  font-family: Consolas, Monaco, 'Courier New', monospace;
+  font-size: 12.5px;
+}
+
+.markdown-body :deep(pre) {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 4px;
+  background: #f5f7fa;
+  overflow-x: auto;
+}
+
+.markdown-body :deep(pre code) {
+  padding: 0;
+  background: transparent;
+}
+
+.markdown-body :deep(blockquote) {
+  margin: 10px 0;
+  padding: 4px 12px;
+  border-left: 3px solid #dcdfe6;
+  color: #606266;
+  background: #fafafa;
+}
+
+.markdown-body :deep(a) {
+  color: #409eff;
+  text-decoration: none;
+}
+
+.markdown-body :deep(a:hover) {
+  text-decoration: underline;
+}
+
+.markdown-body :deep(hr) {
+  margin: 14px 0;
+  border: none;
+  border-top: 1px solid #e4e7ed;
+}
+
+/* 流式输出时，把光标追加到最后一个块级元素内部文字的末尾 */
+.ai-bubble--assistant.is-streaming .markdown-body > :last-child::after {
+  content: '▌';
   margin-left: 2px;
+  animation: ai-blink 1s steps(2, start) infinite;
 }
 
 @keyframes ai-blink {
@@ -724,6 +1049,10 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.ai-proposals {
+  margin-top: 10px;
 }
 </style>
 

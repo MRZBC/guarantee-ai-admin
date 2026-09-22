@@ -26,8 +26,12 @@ CREATE TABLE IF NOT EXISTS sys_org (
     sort_no     INT          NOT NULL DEFAULT 0 COMMENT '排序号',
     created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_sys_org_code (org_code),
+    KEY idx_sys_org_deleted (is_deleted),
+    UNIQUE KEY uk_sys_org_code (org_code, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
     KEY idx_sys_org_region (region_code)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '机构配置';
 
@@ -41,8 +45,12 @@ CREATE TABLE IF NOT EXISTS sys_department (
     sort_no    INT         NOT NULL DEFAULT 0,
     created_at DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_sys_dept_code (dept_code),
+    KEY idx_sys_department_deleted (is_deleted),
+    UNIQUE KEY uk_sys_dept_code (dept_code, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
     KEY idx_sys_dept_org (org_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '部门配置';
 
@@ -59,8 +67,12 @@ CREATE TABLE IF NOT EXISTS sys_user (
     last_login_at DATETIME     NULL COMMENT '最近登录时间',
     created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_sys_user_username (username),
+    KEY idx_sys_user_deleted (is_deleted),
+    UNIQUE KEY uk_sys_user_username (username, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
     KEY idx_sys_user_org (org_id),
     KEY idx_sys_user_dept (dept_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户配置';
@@ -73,8 +85,12 @@ CREATE TABLE IF NOT EXISTS sys_role (
     status      TINYINT      NOT NULL DEFAULT 1,
     created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_sys_role_code (role_code)
+    KEY idx_sys_role_deleted (is_deleted),
+    UNIQUE KEY uk_sys_role_code (role_code, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000')))
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '角色配置';
 
 CREATE TABLE IF NOT EXISTS sys_permission (
@@ -88,8 +104,12 @@ CREATE TABLE IF NOT EXISTS sys_permission (
     icon       VARCHAR(64)  NULL,
     sort_no    INT         NOT NULL DEFAULT 0,
     created_at DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_sys_perm_code (perm_code)
+    KEY idx_sys_permission_deleted (is_deleted),
+    UNIQUE KEY uk_sys_perm_code (perm_code, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000')))
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '权限配置';
 
 CREATE TABLE IF NOT EXISTS sys_user_role (
@@ -97,7 +117,11 @@ CREATE TABLE IF NOT EXISTS sys_user_role (
     user_id    BIGINT   NOT NULL,
     role_id    BIGINT   NOT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
+    KEY idx_sys_user_role_deleted (is_deleted),
     UNIQUE KEY uk_sys_user_role (user_id, role_id),
     KEY idx_sys_user_role_role (role_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户-角色';
@@ -107,7 +131,11 @@ CREATE TABLE IF NOT EXISTS sys_role_permission (
     role_id       BIGINT   NOT NULL,
     permission_id BIGINT   NOT NULL,
     created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
+    KEY idx_sys_role_permission_deleted (is_deleted),
     UNIQUE KEY uk_sys_role_perm (role_id, permission_id),
     KEY idx_sys_role_perm_perm (permission_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '角色-权限';
@@ -124,8 +152,12 @@ CREATE TABLE IF NOT EXISTS insurance_type (
     description VARCHAR(255)  NULL,
     created_at  DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_insurance_type_code (type_code),
+    KEY idx_insurance_type_deleted (is_deleted),
+    UNIQUE KEY uk_insurance_type_code (type_code, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
     KEY idx_insurance_type_category (category)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '险种配置';
 
@@ -147,9 +179,13 @@ CREATE TABLE IF NOT EXISTS enterprise (
     status        TINYINT      NOT NULL DEFAULT 1,
     created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_enterprise_code (ent_code),
-    UNIQUE KEY uk_enterprise_credit (credit_code),
+    KEY idx_enterprise_deleted (is_deleted),
+    UNIQUE KEY uk_enterprise_code (ent_code, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
+    UNIQUE KEY uk_enterprise_credit (credit_code, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
     KEY idx_enterprise_region (region_code)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '企业';
 
@@ -166,8 +202,12 @@ CREATE TABLE IF NOT EXISTS project (
     tender_date   DATE          NOT NULL COMMENT '招标日期',
     created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_project_code (project_code),
+    KEY idx_project_deleted (is_deleted),
+    UNIQUE KEY uk_project_code (project_code, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
     KEY idx_project_enterprise (enterprise_id),
     KEY idx_project_region (region_code),
     KEY idx_project_tender_date (tender_date)
@@ -195,8 +235,12 @@ CREATE TABLE IF NOT EXISTS tender_order (
     expire_date       DATE          NULL,
     created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_tender_order_no (order_no),
+    KEY idx_tender_order_deleted (is_deleted),
+    UNIQUE KEY uk_tender_order_no (order_no, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
     KEY idx_tender_apply_date (apply_date),
     KEY idx_tender_region (region_code),
     KEY idx_tender_org (org_id),
@@ -225,8 +269,12 @@ CREATE TABLE IF NOT EXISTS performance_order (
     expire_date       DATE          NULL,
     created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_perf_order_no (order_no),
+    KEY idx_performance_order_deleted (is_deleted),
+    UNIQUE KEY uk_perf_order_no (order_no, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
     KEY idx_perf_apply_date (apply_date),
     KEY idx_perf_region (region_code),
     KEY idx_perf_org (org_id),
@@ -250,8 +298,12 @@ CREATE TABLE IF NOT EXISTS ai_conversation (
     message_count   INT          NOT NULL DEFAULT 0,
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_ai_conv_no (conversation_no),
+    KEY idx_ai_conversation_deleted (is_deleted),
+    UNIQUE KEY uk_ai_conv_no (conversation_no, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
     KEY idx_ai_conv_user (user_id, updated_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'AI 会话';
 
@@ -262,7 +314,11 @@ CREATE TABLE IF NOT EXISTS ai_message (
     content         MEDIUMTEXT  NOT NULL,
     token_count     INT         NOT NULL DEFAULT 0,
     created_at      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
+    KEY idx_ai_message_deleted (is_deleted),
     KEY idx_ai_msg_conv (conversation_id, id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'AI 消息';
 
@@ -278,7 +334,11 @@ CREATE TABLE IF NOT EXISTS ai_tool_call (
     duration_ms     BIGINT       NOT NULL DEFAULT 0 COMMENT '执行耗时(ms)',
     error_message   VARCHAR(512) NULL,
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
+    KEY idx_ai_tool_call_deleted (is_deleted),
     KEY idx_ai_tool_conv (conversation_id, id),
     KEY idx_ai_tool_name (tool_name)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'AI Tool Call 记录';
@@ -287,11 +347,168 @@ CREATE TABLE IF NOT EXISTS ai_audit_log (
     id              BIGINT       NOT NULL AUTO_INCREMENT,
     conversation_id BIGINT       NULL,
     user_id         BIGINT       NULL,
-    action          VARCHAR(32)  NOT NULL COMMENT 'CHAT/TOOL_CALL/ERROR',
+    action          VARCHAR(32)  NOT NULL COMMENT 'CHAT/TOOL_CALL/ERROR/PROPOSAL_CREATED/PROPOSAL_CONFIRMED/PROPOSAL_REJECTED/PROPOSAL_EXPIRED/OPERATION_EXECUTED/OPERATION_FAILED',
     detail          TEXT         NULL,
     trace_id        VARCHAR(64)  NULL,
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
     PRIMARY KEY (id),
+    KEY idx_ai_audit_log_deleted (is_deleted),
     KEY idx_ai_audit_conv (conversation_id),
     KEY idx_ai_audit_user (user_id, created_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'AI 审计日志';
+
+-- ---------------------------------------------------------------------
+-- 二期：变更提案（写工具只产出提案，执行走独立的确认接口）
+-- ---------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS ai_operation_proposal (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    proposal_no     VARCHAR(40)  NOT NULL COMMENT '提案编号 OP+时间+随机',
+    conversation_id BIGINT       NULL COMMENT '来源会话',
+    user_id         BIGINT       NOT NULL COMMENT '提案发起人',
+    tool_name       VARCHAR(64)  NOT NULL,
+    action          VARCHAR(32)  NOT NULL COMMENT 'CREATE/UPDATE/ENABLE/DISABLE/ASSIGN_ROLES/ASSIGN_PERMISSIONS',
+    target_type     VARCHAR(32)  NOT NULL COMMENT 'USER/ORG/DEPT/ROLE/INSURANCE_TYPE',
+    target_id       BIGINT       NULL COMMENT '新建时为空',
+    target_name     VARCHAR(128) NULL COMMENT '目标展示名，便于确认卡标题',
+    request_payload TEXT         NULL COMMENT '模型解析后的参数（已脱敏）',
+    preview_payload TEXT         NULL COMMENT 'changes[] + impact + warnings[]',
+    target_fingerprint VARCHAR(64) NULL COMMENT '目标版本指纹，执行前比对防并发修改（T-09）',
+    required_perms  VARCHAR(512) NOT NULL COMMENT '所需权限码，逗号分隔，确认时复核用',
+    status          VARCHAR(16)  NOT NULL COMMENT 'PENDING/EXECUTING/EXECUTED/REJECTED/EXPIRED/INVALIDATED/FAILED',
+    reject_reason   VARCHAR(255) NULL,
+    result_message  VARCHAR(512) NULL,
+    confirmed_at    DATETIME     NULL,
+    executed_at     DATETIME     NULL,
+    expires_at      DATETIME     NOT NULL,
+    audit_id        BIGINT       NULL COMMENT '关联 ai_operation_audit.id',
+    trace_id        VARCHAR(64)  NULL,
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
+    PRIMARY KEY (id),
+    KEY idx_ai_operation_proposal_deleted (is_deleted),
+    UNIQUE KEY uk_proposal_no (proposal_no, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
+    KEY idx_user_status (user_id, status),
+    KEY idx_conversation (conversation_id),
+    KEY idx_expires (status, expires_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'AI 变更提案';
+
+-- ---------------------------------------------------------------------
+-- 二期：操作审计（助手确认 + 页面直连统一追溯）
+--
+-- 保留期（D-5 / SYS-A-14）：按月 RANGE 分区，在线 24 个月 + 归档 36 个月，
+-- 到期分区以 DROP PARTITION 清理（元数据操作、无长事务）。
+--
+-- 分区键约束：MySQL 要求分区列必须包含在**每一个**唯一键中。本表无业务唯一键，
+-- 因此主键改为复合主键 (id, operated_at)——否则建表脚本会直接失败（5.7.1）。
+-- ---------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS ai_operation_audit (
+    id                 BIGINT       NOT NULL AUTO_INCREMENT,
+    operated_at        DATETIME     NOT NULL COMMENT '操作时间（分区键）',
+    operator_user_id   BIGINT       NULL,
+    operator_username  VARCHAR(64)  NULL,
+    operator_real_name VARCHAR(64)  NULL,
+    operator_org_id    BIGINT       NULL COMMENT '操作人机构，供数据范围过滤',
+    source             VARCHAR(16)  NOT NULL COMMENT 'AI（助手确认）/ WEB（页面直连）',
+    action             VARCHAR(32)  NOT NULL,
+    target_type        VARCHAR(32)  NOT NULL,
+    target_id          BIGINT       NULL,
+    target_name        VARCHAR(128) NULL,
+    before_value       TEXT         NULL COMMENT '变更前结构化快照（敏感字段已脱敏）',
+    after_value        TEXT         NULL COMMENT '变更后结构化快照（敏感字段已脱敏）',
+    changed_fields     VARCHAR(512) NULL,
+    truncated          TINYINT      NOT NULL DEFAULT 0 COMMENT '快照超 8KB 被截断',
+    result             VARCHAR(16)  NOT NULL COMMENT 'SUCCESS/FAILED/REJECTED/EXPIRED/PARTIAL',
+    error_message      VARCHAR(512) NULL,
+    proposal_id        BIGINT       NULL,
+    conversation_id    BIGINT       NULL,
+    trace_id           VARCHAR(64)  NULL,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
+    PRIMARY KEY (id, operated_at),
+    KEY idx_ai_operation_audit_deleted (is_deleted),
+    KEY idx_operated_at (operated_at),
+    KEY idx_operator (operator_user_id, operated_at),
+    KEY idx_target (target_type, target_id),
+    KEY idx_result (result)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '操作审计'
+PARTITION BY RANGE (TO_DAYS(operated_at)) (
+    PARTITION p202601 VALUES LESS THAN (739648),
+    PARTITION p202602 VALUES LESS THAN (739676),
+    PARTITION p202603 VALUES LESS THAN (739707),
+    PARTITION p202604 VALUES LESS THAN (739737),
+    PARTITION p202605 VALUES LESS THAN (739768),
+    PARTITION p202606 VALUES LESS THAN (739798),
+    PARTITION p202607 VALUES LESS THAN (739829),
+    PARTITION p202608 VALUES LESS THAN (739860),
+    PARTITION p202609 VALUES LESS THAN (739890),
+    PARTITION p202610 VALUES LESS THAN (739921),
+    PARTITION p202611 VALUES LESS THAN (739951),
+    PARTITION p202612 VALUES LESS THAN (739982),
+    PARTITION p202701 VALUES LESS THAN (740013),
+    PARTITION p202702 VALUES LESS THAN (740041),
+    PARTITION p202703 VALUES LESS THAN (740072),
+    PARTITION p202704 VALUES LESS THAN (740102),
+    PARTITION p202705 VALUES LESS THAN (740133),
+    PARTITION p202706 VALUES LESS THAN (740163),
+    PARTITION p202707 VALUES LESS THAN (740194),
+    PARTITION p202708 VALUES LESS THAN (740225),
+    PARTITION p202709 VALUES LESS THAN (740255),
+    PARTITION p202710 VALUES LESS THAN (740286),
+    PARTITION p202711 VALUES LESS THAN (740316),
+    PARTITION p202712 VALUES LESS THAN (740347),
+    PARTITION p202801 VALUES LESS THAN (740378),
+    PARTITION p202802 VALUES LESS THAN (740407),
+    PARTITION p202803 VALUES LESS THAN (740438),
+    PARTITION p202804 VALUES LESS THAN (740468),
+    PARTITION p202805 VALUES LESS THAN (740499),
+    PARTITION p202806 VALUES LESS THAN (740529),
+    PARTITION p202807 VALUES LESS THAN (740560),
+    PARTITION p202808 VALUES LESS THAN (740591),
+    PARTITION p202809 VALUES LESS THAN (740621),
+    PARTITION p202810 VALUES LESS THAN (740652),
+    PARTITION p202811 VALUES LESS THAN (740682),
+    PARTITION p202812 VALUES LESS THAN (740713),
+    PARTITION pmax VALUES LESS THAN MAXVALUE
+);
+
+-- 存量库兜底：若 ai_operation_audit 已以非分区形态存在（历史环境），
+-- 上面的 CREATE TABLE IF NOT EXISTS 不会生效。这里显式提示需要人工按 D-5 重建，
+-- 避免"以为已分区、实际永久在线"的静默退化（RK-14）。
+-- 巡检 SQL（可放入巡检作业）：
+--   SELECT PARTITION_NAME FROM information_schema.PARTITIONS
+--    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_operation_audit';
+
+-- ---------------------------------------------------------------------
+-- 二期：提案敏感参数的一次性加密暂存（D-4 与"提案可执行"之间的取舍）
+--
+-- 背景：D-4 / SYS-A-09 要求 ai_operation_proposal.request_payload 与
+-- ai_operation_audit 中不得出现敏感字段明文；但"把手机号改成 X"这类提案
+-- 必须在确认时知道 X 才能执行，否则功能不成立。
+--
+-- 解法：敏感值不写进提案表，而是单独加密成密文存本表，只在**确认执行的那一刻**
+-- 解密一次用于执行；执行完成或提案过期即删除。AES-GCM 密文即使被 SQL 直查也读不出明文，
+-- 因此"审计/提案表不得出现明文"与功能可用性同时成立。
+-- ---------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS ai_operation_secret (
+    id          BIGINT   NOT NULL AUTO_INCREMENT,
+    proposal_id BIGINT   NOT NULL COMMENT '关联提案',
+    cipher_text TEXT     NOT NULL COMMENT 'AES-256-GCM 密文（Base64），密钥由 guarantee.auth.jwt.secret 派生',
+    key_version INT      NOT NULL DEFAULT 1 COMMENT '密钥版本，便于轮换',
+    expires_at  DATETIME NOT NULL COMMENT '与提案同生命周期',
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ai_secret_proposal (proposal_id),
+    KEY idx_ai_secret_expires (expires_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '提案敏感参数加密暂存';
+
+

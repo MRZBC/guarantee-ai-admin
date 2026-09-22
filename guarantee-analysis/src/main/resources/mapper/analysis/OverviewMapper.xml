@@ -25,9 +25,11 @@
         FROM (
             SELECT 'TENDER' AS order_kind, guarantee_amount, premium_amount, apply_date
             FROM tender_order
+            WHERE is_deleted = 0
             UNION ALL
             SELECT 'PERFORMANCE' AS order_kind, guarantee_amount, premium_amount, apply_date
             FROM performance_order
+            WHERE is_deleted = 0
         ) merged
     </select>
 
@@ -35,18 +37,18 @@
     <select id="selectOverviewCount" resultType="com.guarantee.analysis.vo.OverviewCountVO">
         SELECT
             (SELECT COUNT(*) FROM (
-                SELECT enterprise_id FROM tender_order
+                SELECT enterprise_id FROM tender_order WHERE is_deleted = 0
                 UNION
-                SELECT enterprise_id FROM performance_order
+                SELECT enterprise_id FROM performance_order WHERE is_deleted = 0
             ) e)                                                              AS enterpriseCount,
             (SELECT COUNT(*) FROM (
-                SELECT project_id FROM tender_order
+                SELECT project_id FROM tender_order WHERE is_deleted = 0
                 UNION
-                SELECT project_id FROM performance_order
+                SELECT project_id FROM performance_order WHERE is_deleted = 0
             ) p)                                                              AS projectCount,
-            (SELECT COUNT(*) FROM sys_org)                                    AS orgCount,
-            (SELECT COUNT(*) FROM tender_order WHERE status = 'EFFECTIVE')
-              + (SELECT COUNT(*) FROM performance_order WHERE status = 'EFFECTIVE')
+            (SELECT COUNT(*) FROM sys_org WHERE is_deleted = 0)                                    AS orgCount,
+            (SELECT COUNT(*) FROM tender_order WHERE status = 'EFFECTIVE' AND is_deleted = 0)
+              + (SELECT COUNT(*) FROM performance_order WHERE status = 'EFFECTIVE' AND is_deleted = 0)
                                                                               AS effectiveOrderCount
     </select>
 

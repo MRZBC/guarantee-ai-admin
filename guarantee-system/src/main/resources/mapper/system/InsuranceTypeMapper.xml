@@ -5,13 +5,31 @@
 
     <sql id="cols">
         id, type_code, type_name, category, base_rate, min_amount, max_amount,
-        status, description, created_at, updated_at
+        status, description, created_at, updated_at,
+        is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
     </sql>
 
     <sql id="queryWhere">
         <where>
+            <choose>
+                <when test="q.includeDeleted != null and q.includeDeleted">
+                    <!--
+                      「显示已删除」视图（LD-04b）：显式放行 0/1 两种状态。
+                      本语句已含 is_deleted，拦截器按约定跳过（避免重复条件），
+                      因此默认视图的过滤责任仍在拦截器与显式条件上。
+                    -->
+                    AND is_deleted IN (0, 1)
+                </when>
+            </choose>
             <if test="q.typeName != null and q.typeName != ''">
                 AND type_name LIKE CONCAT('%', #{q.typeName}, '%')
+            </if>
+            <if test="q.typeCode != null and q.typeCode != ''">
+                AND type_code LIKE CONCAT('%', #{q.typeCode}, '%')
+            </if>
+            <if test="q.keyword != null and q.keyword != ''">
+                AND (type_name LIKE CONCAT('%', #{q.keyword}, '%')
+                     OR type_code LIKE CONCAT('%', #{q.keyword}, '%'))
             </if>
             <if test="q.category != null and q.category != ''">
                 AND category = #{q.category}
@@ -68,5 +86,59 @@
         </set>
         WHERE id = #{id}
     </update>
+
+    <!-- 条件更新状态：只有当前状态与预期一致时才改（T-08） -->
+    <update id="updateStatus">
+        UPDATE insurance_type SET status = #{status} WHERE id = #{id} AND status = #{expectedStatus}
+    </update>
+
+    <select id="selectCandidates" resultType="com.guarantee.system.entity.InsuranceType">
+        SELECT <include refid="cols"/>
+        FROM insurance_type
+        <where>
+            <if test="keyword != null and keyword != ''">
+                AND (type_name LIKE CONCAT('%', #{keyword}, '%')
+                     OR type_code LIKE CONCAT('%', #{keyword}, '%'))
+            </if>
+        </where>
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 停用前置检查：该险种被多少条订单引用（含投标与履约） -->
+    <select id="countOrderByType" resultType="long">
+        SELECT (SELECT COUNT(*) FROM tender_order
+                 WHERE insurance_type_id = #{id} AND is_deleted = 0)
+             + (SELECT COUNT(*) FROM performance_order
+                 WHERE insurance_type_id = #{id} AND is_deleted = 0)
+    </select>
+
+    <!--
+      逻辑删除（设计 §9.4.1）：三列必须在**同一条语句**里写全。
+      只写一半会让唯一键判定错乱，且现象与原因看起来无关，极难排查（风险 LD-R10）。
+      deleted_at 必须用 NOW(6)（微秒精度），否则同一秒内"删除→重建→再删除"会撞唯一键；
+      AND is_deleted = 0 让重复删除的 ROW_COUNT() 为 0，调用方据此判定并发冲突。
+    -->
+    <update id="softDelete">
+        UPDATE insurance_type
+        SET is_deleted = 1,
+            deleted_at = NOW(6),
+            deleted_by = COALESCE(#{operatorId}, 'DB')
+        WHERE id = #{id} AND is_deleted = 0
+    </update>
+
+    <!-- 恢复（设计 §9.4.2 / LD-04）：三列一起归零，只允许从"已删除"恢复 -->
+    <update id="restore">
+        UPDATE insurance_type
+        SET is_deleted = 0,
+            deleted_at = NULL,
+            deleted_by = 'DB'
+        WHERE id = #{id} AND is_deleted = 1
+    </update>
+
+    <!-- 恢复前的读取（IncludingDeleted 后缀 → 拦截器豁免） -->
+    <select id="selectByIdIncludingDeleted" resultType="com.guarantee.system.entity.InsuranceType">
+        SELECT <include refid="cols"/> FROM insurance_type WHERE id = #{id}
+    </select>
 
 </mapper>

@@ -30,5 +30,55 @@
             <artifactId>mysql-connector-j</artifactId>
             <scope>runtime</scope>
         </dependency>
+
+        <!--
+          方法级鉴权注解（@PreAuthorize / hasAuthority）。
+          SYS-P-01 要求 system:* 接口的权限校验点是**服务端强制**的，而系统管理域的
+          Controller 与 Service 都在本模块。这里直接引入 spring-security-core，
+          而不是把校验挪到上层 web 模块——后者会让"绕过 Controller 直接调用 Service"
+          成为越权缺口（RK-02）。
+        -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-core</artifactId>
+        </dependency>
+
+        <!--
+          数据范围与写操作的集成测试需要 Spring 上下文 + 真实 MySQL
+          （TEST-03 / TEST-06 / TEST-13 都在这一层验证）。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
+    <build>
+        <testResources>
+            <testResource>
+                <directory>src/test/resources</directory>
+            </testResource>
+            <!--
+              schema.sql 的唯一来源是 guarantee-web；这里在构建期把它复制进测试资源，
+              而不是在 guarantee-system/src/test/resources 里维护第二份副本。
+
+              两份定义会漂移：一旦新表（例如 ai_operation_audit 的分区定义）只加在
+              guarantee-web，本模块的集成测试就会在"表不存在"上失败，而且失败原因看起来
+              与 schema 无关。用构建期复制把"重复定义"变成不可能。
+            -->
+            <testResource>
+                <directory>${project.basedir}/../guarantee-web/src/main/resources/db</directory>
+                <targetPath>db</targetPath>
+                <includes>
+                    <include>schema.sql</include>
+                </includes>
+            </testResource>
+        </testResources>
+    </build>
 </project>

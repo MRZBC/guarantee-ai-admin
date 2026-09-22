@@ -107,6 +107,8 @@ export interface TypedHttp {
   get<T>(url: string, config?: AxiosRequestConfig): Promise<T>
   post<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
   put<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  /** 局部更新（系统管理域的启停接口都用 PATCH /{id}/status） */
+  patch<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
   delete<T>(url: string, config?: AxiosRequestConfig): Promise<T>
 }
 
@@ -114,5 +116,6 @@ export const http: TypedHttp = {
   get: (url, config) => service.get(url, config) as unknown as Promise<unknown>,
   post: (url, data, config) => service.post(url, data, config) as unknown as Promise<unknown>,
   put: (url, data, config) => service.put(url, data, config) as unknown as Promise<unknown>,
+  patch: (url, data, config) => service.patch(url, data, config) as unknown as Promise<unknown>,
   delete: (url, config) => service.delete(url, config) as unknown as Promise<unknown>
 } as TypedHttp

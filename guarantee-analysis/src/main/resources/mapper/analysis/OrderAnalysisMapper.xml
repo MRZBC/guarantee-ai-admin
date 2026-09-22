@@ -8,6 +8,8 @@
       保证 orderType=ALL 的统计口径与单类型完全一致。
     -->
     <sql id="criteriaFilter">
+        <!-- 显式过滤（LD-01）：作用于 UNION ALL 的每个分支 -->
+        AND is_deleted = 0
         <if test="c.startDate != null">
             AND apply_date &gt;= #{c.startDate}
         </if>
@@ -67,7 +69,7 @@
                        insurance_type_id, org_id, region_code, region_name,
                        guarantee_amount, premium_amount, apply_date
                 FROM tender_order
-                WHERE 1 = 0
+                WHERE 1 = 0 AND is_deleted = 0
             </otherwise>
         </choose>
     </sql>
@@ -106,6 +108,7 @@
             <include refid="orderSource"/>
         ) o
         LEFT JOIN enterprise et ON et.id = o.enterprise_id AND et.region_code = o.region_code
+            AND et.is_deleted = 0
         GROUP BY o.region_code
         ORDER BY `orderCount` DESC
         LIMIT #{limit}
@@ -124,7 +127,7 @@
         FROM (
             <include refid="orderSource"/>
         ) o
-        LEFT JOIN insurance_type t ON t.id = o.insurance_type_id AND t.status = 1
+        LEFT JOIN insurance_type t ON t.id = o.insurance_type_id AND t.status = 1 AND t.is_deleted = 0
         GROUP BY o.insurance_type_id
         ORDER BY `orderCount` DESC, o.insurance_type_id ASC
     </select>
@@ -144,7 +147,7 @@
         FROM (
             <include refid="orderSource"/>
         ) o
-        LEFT JOIN sys_org g ON g.id = o.org_id AND g.status = 1
+        LEFT JOIN sys_org g ON g.id = o.org_id AND g.status = 1 AND g.is_deleted = 0
         GROUP BY o.org_id, o.region_code
         ORDER BY `orderCount` DESC, o.org_id ASC
         LIMIT #{limit}

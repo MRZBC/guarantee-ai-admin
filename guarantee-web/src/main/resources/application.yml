@@ -95,6 +95,15 @@ guarantee:
     enabled: true
     seed: 20260920
 
+  # ---------------------------------------------------------------------
+  # 逻辑删除（设计文档 §5.2 / 任务书 §4.1 的"开关"）
+  #   true （默认）：LogicalDeleteInnerInterceptor 为 18 张受管表注入 is_deleted = 0
+  #   false        ：关闭拦截器。**仅用于故障应急**——关闭后已删除数据会重新出现在
+  #                  默认查询结果里（鉴权路径的显式过滤不依赖本开关，因此不会提权）。
+  # ---------------------------------------------------------------------
+  logical-delete:
+    enabled: true
+
 management:
   endpoints:
     web:
@@ -104,7 +113,7 @@ management:
 logging:
   level:
     root: info
-    com.guarantee: info
+    com.guarantee: debug
     org.springframework.ai: info
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] [%X{traceId:-}] %logger{36} - %msg%n"

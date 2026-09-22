@@ -19,7 +19,10 @@
         u.email         AS email,
         u.status        AS status,
         u.last_login_at AS lastLoginAt,
-        u.created_at    AS createdAt
+        u.created_at    AS createdAt,
+        u.is_deleted    AS isDeleted,
+        u.deleted_at    AS deletedAt,
+        u.deleted_by AS deletedBy
     </sql>
 
     <sql id="fromJoin">
@@ -31,17 +34,67 @@
     <!-- selectPage 与 countByQuery 共用，保证总数与列表口径一致。 -->
     <sql id="queryWhere">
         <where>
+            <choose>
+                <when test="q.includeDeleted != null and q.includeDeleted">
+                    <!--
+                      「显示已删除」视图（LD-04b）：显式放行 0/1 两种状态。
+                      本语句已含 is_deleted，拦截器按约定跳过（避免重复条件），
+                      因此默认视图的过滤责任仍在拦截器与显式条件上。
+                    -->
+                    AND u.is_deleted IN (0, 1)
+                </when>
+            </choose>
             <if test="q.username != null and q.username != ''">
                 AND u.username LIKE CONCAT('%', #{q.username}, '%')
             </if>
             <if test="q.realName != null and q.realName != ''">
                 AND u.real_name LIKE CONCAT('%', #{q.realName}, '%')
             </if>
+            <!-- keyword：账号或姓名的统一模糊词（工具入参），与字段级过滤是"与"关系 -->
+            <if test="q.keyword != null and q.keyword != ''">
+                AND (u.username LIKE CONCAT('%', #{q.keyword}, '%')
+                     OR u.real_name LIKE CONCAT('%', #{q.keyword}, '%'))
+            </if>
             <if test="q.orgId != null">
                 AND u.org_id = #{q.orgId}
             </if>
+            <if test="q.deptId != null">
+                AND u.dept_id = #{q.deptId}
+            </if>
+            <if test="q.roleCode != null and q.roleCode != ''">
+                AND EXISTS (
+                    SELECT 1 FROM sys_user_role ur2
+                    INNER JOIN sys_role r2 ON r2.id = ur2.role_id
+                    WHERE ur2.user_id = u.id AND r2.role_code = #{q.roleCode}
+                      AND ur2.is_deleted = 0 AND r2.is_deleted = 0
+                )
+            </if>
             <if test="q.status != null">
                 AND u.status = #{q.status}
+            </if>
+            <if test="q.lastLoginBefore != null">
+                AND (u.last_login_at IS NULL OR u.last_login_at &lt; #{q.lastLoginBefore})
+            </if>
+            <if test="q.neverLoggedIn != null and q.neverLoggedIn">
+                AND u.last_login_at IS NULL
+            </if>
+            <if test="q.id != null">
+                AND u.id = #{q.id}
+            </if>
+            <!-- 数据范围（SYS-P-08）：机构过滤必须由服务端强制注入。
+                 用正向属性 q.scope.restricted，避免 OGNL 取反静默失效。 -->
+            <if test="q.scope.restricted">
+                <choose>
+                    <when test="q.scope.orgIds != null and q.scope.orgIds.size() > 0">
+                        AND u.org_id IN
+                        <foreach collection="q.scope.orgIds" item="scopeOrgId" open="(" separator="," close=")">
+                            #{scopeOrgId}
+                        </foreach>
+                    </when>
+                    <otherwise>
+                        AND 1 = 0
+                    </otherwise>
+                </choose>
             </if>
         </where>
     </sql>
@@ -60,23 +113,107 @@
         <include refid="queryWhere"/>
     </select>
 
+    <!--
+      明细查询也走同一套 queryWhere：SYS-P-14 要求数据范围覆盖列表与明细两类查询，
+      否则会出现"能停用但看不到"的越权。
+    -->
     <select id="selectVoById" resultType="com.guarantee.system.vo.UserVO">
         SELECT <include refid="voCols"/>
         <include refid="fromJoin"/>
         WHERE u.id = #{id}
     </select>
 
+    <select id="selectVoScoped" resultType="com.guarantee.system.vo.UserVO">
+        SELECT <include refid="voCols"/>
+        <include refid="fromJoin"/>
+        <include refid="queryWhere"/>
+        ORDER BY u.id ASC
+        LIMIT 1
+    </select>
+
+    <!-- 批量按 id 取（写操作的执行结果回读），不做范围过滤：调用方已完成范围校验 -->
+    <select id="selectVoByIds" resultType="com.guarantee.system.vo.UserVO">
+        SELECT <include refid="voCols"/>
+        <include refid="fromJoin"/>
+        WHERE u.id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        ORDER BY u.id ASC
+    </select>
+
+    <select id="selectEntityById" resultType="com.guarantee.system.entity.SysUser">
+        SELECT id, username, password, real_name, org_id, dept_id, phone, email,
+               status, last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
+        FROM sys_user
+        WHERE id = #{id}
+    </select>
+
+    <select id="selectEntitiesByIds" resultType="com.guarantee.system.entity.SysUser">
+        SELECT id, username, password, real_name, org_id, dept_id, phone, email,
+               status, last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
+        FROM sys_user
+        WHERE id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+
+    <!-- 统计：某角色下启用状态用户数（写操作危险保护用） -->
+    <select id="countEnabledUsersByRoleCode" resultType="long">
+        SELECT COUNT(DISTINCT u.id)
+        FROM sys_user u
+        INNER JOIN sys_user_role ur ON ur.user_id = u.id
+        INNER JOIN sys_role r ON r.id = ur.role_id
+        WHERE r.role_code = #{roleCode} AND u.status = 1
+          AND u.is_deleted = 0 AND r.is_deleted = 0 AND ur.is_deleted = 0
+    </select>
+
+    <!--
+      统计：持有 ADMIN 角色且启用状态的用户数，排除指定用户。
+      用于"禁止停用最后一个 ADMIN""禁止移除最后一个 ADMIN 的 ADMIN 角色"两项关键保护（SYS-W-04）。
+    -->
+    <select id="countOtherEnabledAdmins" resultType="long">
+        SELECT COUNT(DISTINCT u.id)
+        FROM sys_user u
+        INNER JOIN sys_user_role ur ON ur.user_id = u.id
+        INNER JOIN sys_role r ON r.id = ur.role_id
+        WHERE r.role_code = 'ADMIN' AND u.status = 1 AND u.id &lt;&gt; #{excludeUserId}
+          AND u.is_deleted = 0 AND r.is_deleted = 0 AND ur.is_deleted = 0
+    </select>
+
+    <select id="listRoleIdsByUserId" resultType="java.lang.Long">
+        SELECT ur.role_id
+        FROM sys_user_role ur
+        INNER JOIN sys_role r ON r.id = ur.role_id
+        WHERE ur.user_id = #{userId}
+          AND ur.is_deleted = 0
+          AND r.is_deleted = 0
+        ORDER BY ur.role_id ASC
+    </select>
+
+    <select id="listUserIdsByRoleCode" resultType="java.lang.Long">
+        SELECT DISTINCT ur.user_id
+        FROM sys_user_role ur
+        INNER JOIN sys_role r ON r.id = ur.role_id
+        WHERE r.role_code = #{roleCode}
+          AND ur.is_deleted = 0 AND r.is_deleted = 0
+        ORDER BY ur.user_id ASC
+    </select>
+
     <!-- 仅登录校验使用：返回包含 password 散列的实体，禁止用于任何响应。 -->
     <select id="selectByUsername" resultType="com.guarantee.system.entity.SysUser">
         SELECT id, username, password, real_name, org_id, dept_id, phone, email,
-               status, last_login_at, created_at, updated_at
+               status, last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_user
         WHERE username = #{username}
+          AND is_deleted = 0
     </select>
 
     <select id="selectRoleRefsByUserIds" resultType="com.guarantee.system.dto.UserRoleRef">
         SELECT ur.user_id  AS userId,
                r.id        AS roleId,
+               r.role_code AS roleCode,
                r.role_name AS roleName
         FROM sys_user_role ur
         INNER JOIN sys_role r ON r.id = ur.role_id
@@ -84,6 +221,8 @@
         <foreach collection="userIds" item="userId" open="(" separator="," close=")">
             #{userId}
         </foreach>
+          AND ur.is_deleted = 0
+          AND r.is_deleted = 0
         ORDER BY ur.user_id ASC, r.id ASC
     </select>
 
@@ -94,6 +233,8 @@
         INNER JOIN sys_role r ON r.id = ur.role_id
         WHERE ur.user_id = #{userId}
           AND r.status = 1
+          AND ur.is_deleted = 0
+          AND r.is_deleted = 0
         ORDER BY r.role_code ASC
     </select>
 
@@ -105,6 +246,10 @@
         INNER JOIN sys_role_permission rp ON rp.role_id = r.id
         INNER JOIN sys_permission p ON p.id = rp.permission_id
         WHERE ur.user_id = #{userId}
+          AND ur.is_deleted = 0
+          AND r.is_deleted = 0
+          AND rp.is_deleted = 0
+          AND p.is_deleted = 0
         ORDER BY p.perm_code ASC
     </select>
 
@@ -112,5 +257,107 @@
     <update id="updateLastLoginAt">
         UPDATE sys_user SET last_login_at = CURRENT_TIMESTAMP WHERE id = #{id}
     </update>
+
+    <!--
+      用户资料修改（SYS-W-04 UPDATE 动作）。
+      刻意**不接受** username / org_id：换机构或改账号请停用后重建，避免历史归属失真。
+      phone / email 允许置空，因此这里用"是否显式传入"而不是"值是否为 null"判断——
+      由 Service 层在构造 options 时决定包含哪些字段。
+    -->
+    <update id="updateProfile">
+        UPDATE sys_user
+        <set>
+            <if test="realName != null">real_name = #{realName},</if>
+            <if test="phone != null">phone = #{phone},</if>
+            <if test="email != null">email = #{email},</if>
+            <if test="deptId != null">dept_id = #{deptId},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <!-- 更新资料，并把 dept_id 显式置空（模型要求清空部门） -->
+    <update id="clearDept">
+        UPDATE sys_user SET dept_id = NULL WHERE id = #{id}
+    </update>
+
+    <!-- 条件更新状态：只有当前状态与预期一致时才改，防并发覆盖（T-08） -->
+    <update id="updateStatus">
+        UPDATE sys_user SET status = #{status} WHERE id = #{id} AND status = #{expectedStatus}
+    </update>
+
+    <!--
+      角色分配：从"先清后插"改为 UPSERT（设计 §4.2）。
+      逻辑删除后已绑定的行仍在表里，(user_id, role_id) 唯一键会拒绝新的 INSERT，
+      因此必须用"标记不在目标集合中的绑定 + 命中唯一键则复活"两条语句表达最终状态。
+      **两条语句顺序无关**，比原来的先清后插更稳健（原来插入失败会清空用户角色且无法恢复）。
+    -->
+    <update id="softDeleteUserRolesNotIn">
+        UPDATE sys_user_role
+        SET is_deleted = 1,
+            deleted_at = NOW(6),
+            deleted_by = COALESCE(#{operatorId}, 'DB')
+        WHERE user_id = #{userId}
+          AND is_deleted = 0
+        <if test="roleIds != null and roleIds.size() > 0">
+            AND role_id NOT IN
+            <foreach collection="roleIds" item="roleId" open="(" separator="," close=")">
+                #{roleId}
+            </foreach>
+        </if>
+    </update>
+
+    <insert id="upsertUserRoles">
+        INSERT INTO sys_user_role (user_id, role_id, is_deleted) VALUES
+        <foreach collection="roleIds" item="roleId" separator=",">
+            (#{userId}, #{roleId}, 0)
+        </foreach>
+        ON DUPLICATE KEY UPDATE is_deleted = 0, deleted_at = NULL, deleted_by = 'DB'
+    </insert>
+
+    <!-- 按角色编码解绑（软删除，保留历史；deleted_by 记录操作者） -->
+    <update id="softDeleteUserRoleByCode">
+        UPDATE sys_user_role ur
+        INNER JOIN sys_role r ON r.id = ur.role_id
+        SET ur.is_deleted = 1,
+            ur.deleted_at = NOW(6),
+            ur.deleted_by = COALESCE(#{operatorId}, 'DB')
+        WHERE ur.user_id = #{userId}
+          AND r.role_code = #{roleCode}
+          AND ur.is_deleted = 0
+    </update>
+
+    <!--
+      逻辑删除（设计 §9.4.1）：三列必须在**同一条语句**里写全。
+      只写一半会让唯一键判定错乱，且现象与原因看起来无关，极难排查（风险 LD-R10）。
+      deleted_at 必须用 NOW(6)（微秒精度），否则同一秒内"删除→重建→再删除"会撞唯一键；
+      AND is_deleted = 0 让重复删除的 ROW_COUNT() 为 0，调用方据此判定并发冲突。
+    -->
+    <update id="softDelete">
+        UPDATE sys_user
+        SET is_deleted = 1,
+            deleted_at = NOW(6),
+            deleted_by = COALESCE(#{operatorId}, 'DB')
+        WHERE id = #{id} AND is_deleted = 0
+    </update>
+
+    <!-- 恢复（设计 §9.4.2 / LD-04）：三列一起归零，只允许从"已删除"恢复 -->
+    <update id="restore">
+        UPDATE sys_user
+        SET is_deleted = 0,
+            deleted_at = NULL,
+            deleted_by = 'DB'
+        WHERE id = #{id} AND is_deleted = 1
+    </update>
+
+    <!--
+      恢复前的读取：必须能看到已删除行。
+      方法名以 IncludingDeleted 结尾 → 拦截器豁免注入（设计 §5.2 的豁免约定）。
+    -->
+    <select id="selectEntityByIdIncludingDeleted" resultType="com.guarantee.system.entity.SysUser">
+        SELECT id, username, password, real_name, org_id, dept_id, phone, email,
+               status, last_login_at, created_at, updated_at,
+               is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
+        FROM sys_user WHERE id = #{id}
+    </select>
 
 </mapper>

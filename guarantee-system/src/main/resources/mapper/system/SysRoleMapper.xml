@@ -4,45 +4,141 @@
 <mapper namespace="com.guarantee.system.mapper.SysRoleMapper">
 
     <sql id="voCols">
-        id          AS id,
-        role_code   AS roleCode,
-        role_name   AS roleName,
-        description AS description,
-        status      AS status,
-        created_at  AS createdAt
+        r.id          AS id,
+        r.role_code   AS roleCode,
+        r.role_name   AS roleName,
+        r.description AS description,
+        r.status      AS status,
+        r.created_at  AS createdAt,
+        r.is_deleted  AS isDeleted,
+        r.deleted_at  AS deletedAt,
+        r.deleted_by AS deletedBy
     </sql>
 
     <sql id="queryWhere">
         <where>
+            <choose>
+                <when test="q.includeDeleted != null and q.includeDeleted">
+                    <!--
+                      「显示已删除」视图（LD-04b）：显式放行 0/1 两种状态。
+                      本语句已含 is_deleted，拦截器按约定跳过（避免重复条件），
+                      因此默认视图的过滤责任仍在拦截器与显式条件上。
+                    -->
+                    AND r.is_deleted IN (0, 1)
+                </when>
+            </choose>
             <if test="q.roleCode != null and q.roleCode != ''">
-                AND role_code LIKE CONCAT('%', #{q.roleCode}, '%')
+                AND r.role_code LIKE CONCAT('%', #{q.roleCode}, '%')
             </if>
             <if test="q.roleName != null and q.roleName != ''">
-                AND role_name LIKE CONCAT('%', #{q.roleName}, '%')
+                AND r.role_name LIKE CONCAT('%', #{q.roleName}, '%')
+            </if>
+            <!-- keyword：角色编码或名称的统一模糊词 -->
+            <if test="q.keyword != null and q.keyword != ''">
+                AND (r.role_code LIKE CONCAT('%', #{q.keyword}, '%')
+                     OR r.role_name LIKE CONCAT('%', #{q.keyword}, '%'))
+            </if>
+            <if test="q.status != null">
+                AND r.status = #{q.status}
+            </if>
+            <if test="q.id != null">
+                AND r.id = #{q.id}
+            </if>
+            <!--
+              角色归属机构（SYS-A-10）：ROLE 类审计与角色列表的机构范围收敛。
+              角色不是机构强相关的实体，因此只在"限定到某个机构"时过滤；
+              未指定 orgId 时不按机构收窄，由 Service 层决定是否要求 ADMIN（SYS-Q-04）。
+            -->
+            <if test="q.orgId != null">
+                AND EXISTS (
+                    SELECT 1 FROM sys_user_role ur3
+                    INNER JOIN sys_user u3 ON u3.id = ur3.user_id
+                    WHERE ur3.role_id = r.id AND u3.org_id = #{q.orgId}
+                      AND ur3.is_deleted = 0 AND u3.is_deleted = 0
+                )
             </if>
         </where>
     </sql>
 
     <select id="selectPage" resultType="com.guarantee.system.vo.RoleVO">
         SELECT <include refid="voCols"/>
-        FROM sys_role
+        FROM sys_role r
         <include refid="queryWhere"/>
-        ORDER BY id ASC
+        ORDER BY r.id ASC
         LIMIT #{limit} OFFSET #{offset}
     </select>
 
     <select id="countByQuery" resultType="long">
-        SELECT COUNT(*) FROM sys_role
+        SELECT COUNT(*) FROM sys_role r
         <include refid="queryWhere"/>
     </select>
 
     <select id="selectVoById" resultType="com.guarantee.system.vo.RoleVO">
-        SELECT <include refid="voCols"/> FROM sys_role WHERE id = #{id}
+        SELECT <include refid="voCols"/> FROM sys_role r WHERE r.id = #{id}
+    </select>
+
+    <select id="selectEntityById" resultType="com.guarantee.system.entity.SysRole">
+        SELECT id, role_code, role_name, description, status, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
+        FROM sys_role WHERE id = #{id} AND is_deleted = 0
+    </select>
+
+    <select id="selectEntityByCode" resultType="com.guarantee.system.entity.SysRole">
+        SELECT id, role_code, role_name, description, status, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
+        FROM sys_role WHERE role_code = #{roleCode} AND is_deleted = 0
+    </select>
+
+    <select id="selectEntityByCodes" resultType="com.guarantee.system.entity.SysRole">
+        SELECT id, role_code, role_name, description, status, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
+        FROM sys_role
+        WHERE role_code IN
+        <foreach collection="roleCodes" item="code" open="(" separator="," close=")">
+            #{code}
+        </foreach>
+        ORDER BY id ASC
+    </select>
+
+    <select id="selectCandidates" resultType="com.guarantee.system.entity.SysRole">
+        SELECT id, role_code, role_name, description, status, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
+        FROM sys_role r
+        <where>
+            <if test="keyword != null and keyword != ''">
+                AND (r.role_code LIKE CONCAT('%', #{keyword}, '%')
+                     OR r.role_name LIKE CONCAT('%', #{keyword}, '%'))
+            </if>
+        </where>
+        ORDER BY r.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 权限计数与用户计数：让 queryRole 一次拿全，避免 N+1 -->
+    <select id="countPermissionsByRoleIds" resultType="com.guarantee.system.dto.RoleCountRef">
+        SELECT rp.role_id AS roleId, COUNT(*) AS cnt
+        FROM sys_role_permission rp
+        WHERE rp.role_id IN
+        <foreach collection="roleIds" item="roleId" open="(" separator="," close=")">
+            #{roleId}
+        </foreach>
+          AND rp.is_deleted = 0
+        GROUP BY rp.role_id
+    </select>
+
+    <select id="countUsersByRoleIds" resultType="com.guarantee.system.dto.RoleCountRef">
+        SELECT ur.role_id AS roleId, COUNT(*) AS cnt
+        FROM sys_user_role ur
+        INNER JOIN sys_user u ON u.id = ur.user_id
+        WHERE ur.role_id IN
+        <foreach collection="roleIds" item="roleId" open="(" separator="," close=")">
+            #{roleId}
+        </foreach>
+          AND ur.is_deleted = 0
+          AND u.is_deleted = 0
+        GROUP BY ur.role_id
     </select>
 
     <select id="selectPermissionRefsByRoleIds" resultType="com.guarantee.system.dto.RolePermissionRef">
         SELECT rp.role_id       AS roleId,
                p.id             AS permissionId,
+               p.perm_code      AS permissionCode,
                p.perm_name      AS permissionName
         FROM sys_role_permission rp
         INNER JOIN sys_permission p ON p.id = rp.permission_id
@@ -50,7 +146,148 @@
         <foreach collection="roleIds" item="roleId" open="(" separator="," close=")">
             #{roleId}
         </foreach>
+          AND rp.is_deleted = 0
+          AND p.is_deleted = 0
         ORDER BY rp.role_id ASC, p.sort_no ASC, p.id ASC
+    </select>
+
+    <insert id="insert" parameterType="com.guarantee.system.entity.SysRole"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO sys_role (role_code, role_name, description, status)
+        VALUES (#{roleCode}, #{roleName}, #{description}, #{status})
+    </insert>
+
+    <update id="updateById" parameterType="com.guarantee.system.entity.SysRole">
+        UPDATE sys_role
+        <set>
+            <if test="roleName != null">role_name = #{roleName},</if>
+            <if test="description != null">description = #{description},</if>
+            <if test="status != null">status = #{status},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <!-- 角色授权同构改造：先清后插 -> UPSERT（设计 §4.2） -->
+    <update id="softDeleteRolePermissionsNotIn">
+        UPDATE sys_role_permission
+        SET is_deleted = 1,
+            deleted_at = NOW(6),
+            deleted_by = COALESCE(#{operatorId}, 'DB')
+        WHERE role_id = #{roleId}
+          AND is_deleted = 0
+        <if test="permissionIds != null and permissionIds.size() > 0">
+            AND permission_id NOT IN
+            <foreach collection="permissionIds" item="permissionId" open="(" separator="," close=")">
+                #{permissionId}
+            </foreach>
+        </if>
+    </update>
+
+    <insert id="upsertRolePermissions">
+        INSERT INTO sys_role_permission (role_id, permission_id, is_deleted) VALUES
+        <foreach collection="permissionIds" item="permissionId" separator=",">
+            (#{roleId}, #{permissionId}, 0)
+        </foreach>
+        ON DUPLICATE KEY UPDATE is_deleted = 0, deleted_at = NULL, deleted_by = 'DB'
+    </insert>
+
+    <select id="selectPermissionIdsByCodes" resultType="java.lang.Long">
+        SELECT id FROM sys_permission
+        WHERE is_deleted = 0
+          AND perm_code IN
+        <foreach collection="permCodes" item="code" open="(" separator="," close=")">
+            #{code}
+        </foreach>
+        ORDER BY id ASC
+    </select>
+
+    <select id="selectPermissionEntitiesByCodes" resultType="com.guarantee.system.entity.SysPermission">
+        SELECT id, perm_code, perm_name, perm_type, parent_id, path, component, icon, sort_no, created_at
+        FROM sys_permission
+        WHERE is_deleted = 0
+          AND perm_code IN
+        <foreach collection="permCodes" item="code" open="(" separator="," close=")">
+            #{code}
+        </foreach>
+        ORDER BY sort_no ASC, id ASC
+    </select>
+
+    <select id="selectPermissionsByIds" resultType="com.guarantee.system.entity.SysPermission">
+        SELECT id, perm_code, perm_name, perm_type, parent_id, path, component, icon, sort_no, created_at
+        FROM sys_permission
+        WHERE id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        ORDER BY sort_no ASC, id ASC
+    </select>
+
+    <select id="selectAllPermissionsOrdered" resultType="com.guarantee.system.entity.SysPermission">
+        SELECT id, perm_code, perm_name, perm_type, parent_id, path, component, icon, sort_no, created_at
+        FROM sys_permission
+        ORDER BY sort_no ASC, id ASC
+    </select>
+
+    <select id="selectIdsByCodes" resultType="java.lang.Long">
+        SELECT id FROM sys_role
+        WHERE is_deleted = 0
+          AND role_code IN
+        <foreach collection="roleCodes" item="code" open="(" separator="," close=")">
+            #{code}
+        </foreach>
+        ORDER BY id ASC
+    </select>
+
+    <select id="selectEnabledCodes" resultType="java.lang.String">
+        SELECT role_code FROM sys_role
+        WHERE status = 1 AND is_deleted = 0 AND role_code IN
+        <foreach collection="roleCodes" item="code" open="(" separator="," close=")">
+            #{code}
+        </foreach>
+        ORDER BY id ASC
+    </select>
+
+    <select id="selectUserIdsByRoleCode" resultType="java.lang.Long">
+        SELECT DISTINCT ur.user_id
+        FROM sys_user_role ur
+        INNER JOIN sys_role r ON r.id = ur.role_id
+        WHERE r.role_code = #{roleCode}
+          AND ur.is_deleted = 0
+          AND r.is_deleted = 0
+        ORDER BY ur.user_id ASC
+    </select>
+
+    <!--
+      逻辑删除（设计 §9.4.1）：三列必须在**同一条语句**里写全。
+      只写一半会让唯一键判定错乱，且现象与原因看起来无关，极难排查（风险 LD-R10）。
+      deleted_at 必须用 NOW(6)（微秒精度），否则同一秒内"删除→重建→再删除"会撞唯一键；
+      AND is_deleted = 0 让重复删除的 ROW_COUNT() 为 0，调用方据此判定并发冲突。
+    -->
+    <update id="softDelete">
+        UPDATE sys_role
+        SET is_deleted = 1,
+            deleted_at = NOW(6),
+            deleted_by = COALESCE(#{operatorId}, 'DB')
+        WHERE id = #{id} AND is_deleted = 0
+    </update>
+
+    <!-- 恢复（设计 §9.4.2 / LD-04）：三列一起归零，只允许从"已删除"恢复 -->
+    <update id="restore">
+        UPDATE sys_role
+        SET is_deleted = 0,
+            deleted_at = NULL,
+            deleted_by = 'DB'
+        WHERE id = #{id} AND is_deleted = 1
+    </update>
+
+    <!--
+      恢复前的读取：必须能看到已删除行。
+      方法名以 IncludingDeleted 结尾 → 拦截器豁免注入（设计 §5.2 的豁免约定）。
+    -->
+    <select id="selectEntityByIdIncludingDeleted" resultType="com.guarantee.system.entity.SysRole">
+        SELECT id, role_code, role_name, description, status, created_at, updated_at,
+               is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
+        FROM sys_role WHERE id = #{id}
     </select>
 
 </mapper>

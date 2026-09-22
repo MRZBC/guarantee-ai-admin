@@ -20,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 /**
  * 演示数据初始化器。
@@ -44,8 +45,35 @@ public class DataInitializer implements ApplicationRunner {
     private static final LocalDate DATA_START = LocalDate.of(2025, 1, 1);
     private static final LocalDate DATA_END = LocalDate.of(2026, 9, 30);
 
-    private static final int ORG_COUNT = 20;
-    private static final int DEPT_COUNT = 80;
+    /**
+     * 总部节点数量（D-3）：不承保业务，只作为机构树的唯一根与 ADMIN 的归属。
+     */
+    private static final int HEADQUARTERS = 1;
+
+    /**
+     * 机构**总数** = 总部 + 区域机构。
+     *
+     * <p>该常量驱动 {@code sys_department} 的分配公式与用户机构分配，机构表新增总部节点后
+     * 必须同步为 21，否则部门/用户会挂到错误的机构（SYS-P-17 / SYS-P-22）。</p>
+     */
+    private static final int ORG_COUNT = HEADQUARTERS + 20;
+
+    /** 总部节点机构编码。 */
+    private static final String HEADQUARTERS_CODE = "ORGHQ";
+
+    /** 总部节点行政区划占位（仅占位，不参与区域统计）。 */
+    private static final String HEADQUARTERS_REGION = "110000";
+
+    /**
+     * 部门**总数** = 机构数 × 每机构部门数。
+     *
+     * <p>在字段初始化处**不做跨常量引用**（Java 常量初始化不允许前向引用，
+     * 而 {@code DEPT_SPEC} 定义在下方便于就近阅读）。此处按规格表长度写死表达式，
+     * 并在 {@link #assertDeptCountConsistent()} 里校验它与规格表一致——
+     * 校验失败会在启动时报错，不会静默失配。</p>
+     */
+    private static final int DEPT_COUNT = ORG_COUNT * 11;
+
     private static final int USER_COUNT = 300;
     private static final int ENTERPRISE_COUNT = 3000;
     private static final int PROJECT_COUNT = 5000;
@@ -79,8 +107,9 @@ public class DataInitializer implements ApplicationRunner {
 
     /**
      * 机构 2026 Q3 相对基线的系数。
-     * 前 7 个机构明显增长，中间 7 个基本持平，最后 6 个明显下降，
-     * 用于让「哪些机构 Q3 在增长/下降」成为可验证结论。
+     *
+     * <p>索引 == 区域机构序号（0..19，**不含总部**）。前 7 个机构明显增长，中间 7 个基本持平，
+     * 最后 6 个明显下降，用于让「哪些机构 Q3 在增长/下降」成为可验证结论。</p>
      */
     private static final double[] ORG_Q3_FACTOR = {
             1.45, 1.38, 1.30, 1.24, 1.18, 1.12, 1.08,
@@ -98,6 +127,18 @@ public class DataInitializer implements ApplicationRunner {
 
     private final JdbcTemplate jdbcTemplate;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+
+    /**
+     * 每个机构**实际创建**的部门 id 列表（机构下标 → 部门 id 列表）。
+     *
+     * <p><b>为什么必须查表而不是算公式</b>：早期实现用
+     * {@code deptId = orgIndex + 1 + ORG_COUNT * slot} 推导，一旦部门总数不能被机构数整除
+     * （当时的 80 就不能被 21 整除），最后一个机构会算出 {@code 85} 这类**并不存在**的部门 id，
+     * 使这批用户的 {@code dept_id} 指向空记录——列表里"所属部门"永远为空，
+     * 且按部门统计用户数时会静默少算。改成规格表驱动后部门数会随规格变化，
+     * 算术推导只会更容易出错，因此坚持查表。</p>
+     */
+    private final Map<Integer, List<Long>> orgDeptIds = new LinkedHashMap<>();
 
     @Value("${guarantee.data-init.seed:20260920}")
     private long seed;
@@ -118,6 +159,7 @@ public class DataInitializer implements ApplicationRunner {
         Random random = new Random(seed);
         log.info("开始初始化演示数据，随机种子={}", seed);
 
+        assertDeptCountConsistent();
         List<OrgRow> orgs = seedOrgs();
         seedDepartments(orgs);
         seedRolesAndPermissions();
@@ -126,8 +168,11 @@ public class DataInitializer implements ApplicationRunner {
         List<EnterpriseRow> enterprises = seedEnterprises(random);
         List<ProjectRow> projects = seedProjects(random, enterprises);
 
-        seedTenderOrders(random, orgs, insuranceTypes, enterprises, projects);
-        seedPerformanceOrders(random, orgs, insuranceTypes, enterprises, projects);
+        // 订单采样只在 20 个区域机构中进行，总部不承保业务（SYS-P-23）。
+        // 必须显式排除，而不是依赖"总部恰好没有订单"。
+        List<OrgRow> orderOrgs = regionOrgs(orgs);
+        seedTenderOrders(random, orderOrgs, insuranceTypes, enterprises, projects);
+        seedPerformanceOrders(random, orderOrgs, insuranceTypes, enterprises, projects);
 
         log.info("演示数据初始化完成，耗时 {} ms", System.currentTimeMillis() - start);
     }
@@ -139,122 +184,211 @@ public class DataInitializer implements ApplicationRunner {
     private record OrgRow(long id, String code, String name, String regionCode, String regionName) {
     }
 
+    /**
+     * 生成机构层级（D-3 / SYS-P-15 / SYS-P-16 / SYS-P-21）。
+     *
+     * <p><b>修复前的缺陷</b>：{@code parent_id} 固定写 0、{@code org_level} 只有 1 与 2，
+     * 层级树实际是平铺的，导致 SYS-P-07 的"省级可见全省 / 市级仅见本市"数据范围无法验证。</p>
+     *
+     * <p><b>修复后的结构</b>：1 个总部（{@code org_level=1}、{@code parent_id=0}）+
+     * 每区域按原数量保留机构（合计 20，区域权重不变，SYS-P-16a），其中区域内第 1 个为省级
+     * （{@code org_level=2}、父级 = 总部）、其余为市级（{@code org_level=3}、父级 = 该区域省级）。</p>
+     *
+     * <p>总部不参与订单采样（SYS-P-23），因此 {@link DaySampler} 只在区域机构中采样，
+     * 调用方必须传入 {@link #regionOrgs(List)} 的结果。</p>
+     */
     private List<OrgRow> seedOrgs() {
         List<OrgRow> orgs = new ArrayList<>(ORG_COUNT);
         List<Object[]> batch = new ArrayList<>(ORG_COUNT);
-        long id = 1;
+
+        // ---- 1. 总部节点：唯一根，ADMIN 归属，不承保业务 ----
+        long headquartersId = 1;
+        batch.add(new Object[]{
+                headquartersId, HEADQUARTERS_CODE, "平台总部", HEADQUARTERS_REGION, "北京市",
+                1, 0L, 1, 1});
+        orgs.add(new OrgRow(headquartersId, HEADQUARTERS_CODE, "平台总部",
+                HEADQUARTERS_REGION, "北京市"));
+
+        // ---- 2. 区域机构：区域内第 1 个为省级，其余为市级 ----
+        long id = headquartersId + 1;
         for (String[] region : REGIONS) {
             int count = Integer.parseInt(region[3]);
+            long provinceId = id; // 区域内第 1 个机构即为该区域省级机构
             for (int i = 1; i <= count; i++) {
                 String code = "ORG" + region[0].substring(0, 2) + String.format("%02d", i);
                 String name = region[1] + "第" + i + "保函运营机构";
-                batch.add(new Object[]{id, code, name, region[0], region[1], i == 1 ? 1 : 2, 0, 1, (int) id});
+                boolean province = i == 1;
+                int level = province ? 2 : 3;
+                long parentId = province ? headquartersId : provinceId;
+                batch.add(new Object[]{id, code, name, region[0], region[1], level, parentId, 1, (int) id});
                 orgs.add(new OrgRow(id, code, name, region[0], region[1]));
                 id++;
             }
         }
+
         jdbcTemplate.batchUpdate("""
                 INSERT INTO sys_org (id, org_code, org_name, region_code, region_name, org_level, parent_id, status, sort_no)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, batch);
-        log.info("已生成机构 {} 个", orgs.size());
+        log.info("已生成机构 {} 个（总部 1 + 区域 20：省级 {} / 市级 {}）",
+                orgs.size(), REGIONS.length, orgs.size() - HEADQUARTERS - REGIONS.length);
         return orgs;
     }
 
+    /** 区域机构（不含总部），供订单采样使用。 */
+    private static List<OrgRow> regionOrgs(List<OrgRow> orgs) {
+        return orgs.subList(HEADQUARTERS, orgs.size());
+    }
+
+    /**
+     * 部门树规格：{@code {部门名, 上级部门名（null = 顶级）}}。
+     *
+     * <p><b>每个机构都套用这同一棵树</b>（机构是出函机构、部门是公司内部部门，二者是不同的实体；
+     * 部门靠 {@code parent_id} 成树，{@code org_id} 只是归属属性）。本机构 11 个部门：
+     * 总部 → 5 个一级部门 → 其中业务部/技术部再分 5 个二级部门。</p>
+     *
+     * <p>为什么用规格表驱动而不是原来的"按 slot 取名字"：原实现的父子关系靠
+     * {@code parentId = orgIndex + 1} 这种 id 算术推导，一旦部门数或顺序变化就会指向错误父节点。
+     * 改为按名字解析父 id，新增/调整部门只需改这张表。</p>
+     */
+    private static final String[][] DEPT_SPEC = {
+            {"总部", null},
+            {"业务部", "总部"},
+            {"财务部", "总部"},
+            {"人事部", "总部"},
+            {"行政部", "总部"},
+            {"技术部", "总部"},
+            {"杭州部", "业务部"},
+            {"台州部", "业务部"},
+            {"温州部", "业务部"},
+            {"大数据部", "技术部"},
+            {"系统部", "技术部"},
+    };
+
+    /** 每机构部门数（= 部门树节点数）。 */
+    private static final int DEPTS_PER_ORG = DEPT_SPEC.length;
+
+    /**
+     * 启动时校验 {@link #DEPT_COUNT} 与规格表一致。
+     *
+     * <p>常量初始化不能前向引用 {@code DEPT_SPEC}，因此 {@code DEPT_COUNT} 里的乘数只能写字面量；
+     * 这个校验把"改了规格忘记改乘数"变成**启动即失败**，而不是悄悄少建/多建部门。</p>
+     */
+    private static void assertDeptCountConsistent() {
+        if (DEPT_COUNT != ORG_COUNT * DEPTS_PER_ORG) {
+            throw new IllegalStateException("部门总数常量与规格表不一致: DEPT_COUNT=" + DEPT_COUNT
+                    + " 但 ORG_COUNT×规格表长度=" + (ORG_COUNT * DEPTS_PER_ORG));
+        }
+    }
+
+    /**
+     * 生成部门（SYS-P-18 / SYS-P-24a / SYS-P-25）。
+     *
+     * <p>每个机构套用 {@link #DEPT_SPEC} 这棵树：第 1 个节点（总部）为顶级，
+     * 其余按规格表指明父节点，因此层级**不是**一层平铺，而是"总部 → 一级部门 → 二级部门"。</p>
+     *
+     * <p>编码用"机构编码 + 短代码"（如 {@code ORGHQ-TECH}）保证全局唯一——
+     * {@code dept_code} 是全局唯一键，而"技术部"这类名字在 21 个机构里都会出现。</p>
+     */
     private void seedDepartments(List<OrgRow> orgs) {
-        String[] deptNames = {"业务受理部", "风险审查部", "承保运营部", "财务结算部", "客户服务部"};
-        List<Object[]> batch = new ArrayList<>(DEPT_COUNT);
+        // 部门名 -> 该机构内的短代码，用于拼 dept_code
+        Map<String, String> shortCodes = Map.ofEntries(
+                Map.entry("总部", "HQ"),
+                Map.entry("业务部", "BIZ"),
+                Map.entry("财务部", "FIN"),
+                Map.entry("人事部", "HR"),
+                Map.entry("行政部", "ADM"),
+                Map.entry("技术部", "TECH"),
+                Map.entry("杭州部", "BIZ-HZ"),
+                Map.entry("台州部", "BIZ-TZ"),
+                Map.entry("温州部", "BIZ-WZ"),
+                Map.entry("大数据部", "TECH-BD"),
+                Map.entry("系统部", "TECH-SYS"));
+
+        List<Object[]> batch = new ArrayList<>(orgs.size() * DEPTS_PER_ORG);
         long id = 1;
-        int orgIdx = 0;
-        while (batch.size() < DEPT_COUNT) {
-            OrgRow org = orgs.get(orgIdx % orgs.size());
-            String base = deptNames[(int) ((id - 1) % deptNames.length)];
-            String name = org.name() + "-" + base;
-            String code = "DEPT" + String.format("%04d", id);
-            batch.add(new Object[]{id, code, name, org.id(), 0, 1, (int) id});
-            id++;
-            orgIdx++;
+        int sortNo = 1;
+        for (int orgIndex = 0; orgIndex < orgs.size(); orgIndex++) {
+            OrgRow org = orgs.get(orgIndex);
+            // 本机构内 部门名 -> 已插入的 id（供规格表解析父 id）
+            Map<String, Long> idByName = new LinkedHashMap<>();
+            for (String[] node : DEPT_SPEC) {
+                String deptName = node[0];
+                String parentName = node[1];
+                String code = org.code() + "-" + shortCodes.get(deptName);
+                Long parentId = parentName == null ? 0L : idByName.get(parentName);
+                if (parentId == null) {
+                    throw new IllegalStateException("部门规格表引用了未定义或不存在的上级部门: " + parentName);
+                }
+                batch.add(new Object[]{id, code, deptName, org.id(), parentId, 1, sortNo});
+
+                // 记录"该机构实际创建了哪些部门"，供 seedUsers 分配用户时查表
+                orgDeptIds.computeIfAbsent(orgIndex, k -> new ArrayList<>()).add(id);
+                idByName.put(deptName, id);
+                id++;
+                sortNo++;
+            }
         }
         jdbcTemplate.batchUpdate("""
                 INSERT INTO sys_department (id, dept_code, dept_name, org_id, parent_id, status, sort_no)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, batch);
-        log.info("已生成部门 {} 个", batch.size());
+        log.info("已生成部门 {} 个（每机构 {} 个：总部 + 5 个一级部门 + 5 个二级部门）",
+                batch.size(), DEPTS_PER_ORG);
     }
 
-    /** 权限编码 -> 名称 -> 路由。 */
-    private static final String[][] PERMISSIONS = {
-            {"dashboard:view", "首页", "/dashboard"},
-            {"order:tender:view", "投标订单", "/orders/tender"},
-            {"order:performance:view", "履约订单", "/orders/performance"},
-            {"analysis:overview:view", "数据概览", "/analysis/overview"},
-            {"project:view", "项目管理", "/projects"},
-            {"enterprise:view", "企业管理", "/enterprises"},
-            {"system:insurance:view", "险种配置", "/system/insurance-types"},
-            {"system:insurance:create", "险种新增", null},
-            {"system:insurance:update", "险种修改", null},
-            {"system:org:view", "机构配置", "/system/orgs"},
-            {"system:dept:view", "部门配置", "/system/departments"},
-            {"system:user:view", "用户配置", "/system/users"},
-            {"system:role:view", "角色配置", "/system/roles"},
-            {"system:permission:view", "权限配置", null},
-            {"ai:chat", "AI 业务助手", null},
-    };
+    /** 权限编码 / 权限名称 / 前端路由。权威定义见 {@link PermissionCatalog}（SYS-P-13）。 */
+    private static final String[][] PERMISSIONS = PermissionCatalog.PERMISSIONS;
 
-    private static final String[][] ROLES = {
-            {"ADMIN", "超级管理员", "拥有全部权限"},
-            {"OPERATOR", "运营人员", "订单与基础配置的日常运营"},
-            {"ANALYST", "数据分析师", "业务分析与 AI 助手"},
-            {"VIEWER", "只读用户", "仅可查看"},
-    };
+    private static final String[][] ROLES = PermissionCatalog.ROLES;
 
+    /** ADMIN：全部权限。 */
+    private static final Set<String> ADMIN_PERMISSIONS = PermissionCatalog.ADMIN_PERMISSIONS;
+
+    /** OPERATOR：除角色/权限管理与操作审计外的全部权限。 */
+    private static final Set<String> OPERATOR_PERMISSIONS = PermissionCatalog.OPERATOR_PERMISSIONS;
+
+    /** ANALYST（D-1）：业务分析 + 系统管理只读。 */
+    private static final Set<String> ANALYST_PERMISSIONS = PermissionCatalog.ANALYST_PERMISSIONS;
+
+    /** VIEWER：显式排除 {@code system:audit:view}（D-1a）。 */
+    private static final Set<String> VIEWER_PERMISSIONS = PermissionCatalog.VIEWER_PERMISSIONS;
+
+    /**
+     * 角色与权限：委托 {@link RolePermissionSeeder} 幂等落库（SYS-P-13 / SYS-P-26）。
+     *
+     * <p>这里**不**再自己拼 id 批量 INSERT。原实现假设"我就是第一个写 sys_permission 的"，
+     * 一旦权限表已有数据（存量库、或上一次启动的补数），就会撞主键并让整个初始化事务回滚，
+     * 表现为空库启动失败。按业务键幂等后，任何执行顺序都收敛到同一矩阵。</p>
+     */
     private void seedRolesAndPermissions() {
-        List<Object[]> perms = new ArrayList<>();
-        long permId = 1;
-        for (String[] p : PERMISSIONS) {
-            perms.add(new Object[]{permId++, p[0], p[1], p[2] == null ? "BUTTON" : "MENU", 0, p[2], (int) permId});
-        }
-        jdbcTemplate.batchUpdate("""
-                INSERT INTO sys_permission (id, perm_code, perm_name, perm_type, parent_id, path, sort_no)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, perms);
+        List<String> added = new RolePermissionSeeder(jdbcTemplate).seed();
+        log.info("角色权限矩阵已就绪：权限码 {} 条、角色 {} 个，本次新增绑定 {} 条",
+                PERMISSIONS.length, ROLES.length, added.size());
+    }
 
-        List<Object[]> roles = new ArrayList<>();
-        long roleId = 1;
-        for (String[] r : ROLES) {
-            roles.add(new Object[]{roleId++, r[0], r[1], r[2], 1});
+    private static long requireRoleId(Map<String, Long> roleIds, String roleCode) {
+        Long id = roleIds.get(roleCode);
+        if (id == null) {
+            throw new IllegalStateException("角色未初始化: " + roleCode);
         }
-        jdbcTemplate.batchUpdate("""
-                INSERT INTO sys_role (id, role_code, role_name, description, status)
-                VALUES (?, ?, ?, ?, ?)
-                """, roles);
-
-        // 角色-权限：ADMIN 全部；OPERATOR 除角色/权限外的全部；ANALYST 分析相关；VIEWER 只读
-        List<Object[]> rolePerms = new ArrayList<>();
-        for (long pid = 1; pid <= PERMISSIONS.length; pid++) {
-            String code = PERMISSIONS[(int) (pid - 1)][0];
-            rolePerms.add(new Object[]{1L, pid});
-            if (!code.equals("system:role:view") && !code.equals("system:permission:view")) {
-                rolePerms.add(new Object[]{2L, pid});
-            }
-            if (code.startsWith("analysis") || code.startsWith("project") || code.startsWith("enterprise")
-                    || code.startsWith("order") || code.equals("dashboard:view") || code.equals("ai:chat")) {
-                rolePerms.add(new Object[]{3L, pid});
-            }
-            if (code.endsWith(":view") || code.equals("ai:chat")) {
-                rolePerms.add(new Object[]{4L, pid});
-            }
-        }
-        jdbcTemplate.batchUpdate("""
-                INSERT INTO sys_role_permission (role_id, permission_id) VALUES (?, ?)
-                """, rolePerms);
-        log.info("已生成权限 {} 条、角色 {} 个、角色权限 {} 条",
-                PERMISSIONS.length, ROLES.length, rolePerms.size());
+        return id;
     }
 
     private void seedUsers(Random random, List<OrgRow> orgs) {
         String[] surnames = {"张", "王", "李", "赵", "陈", "刘", "杨", "黄", "周", "吴", "徐", "孙", "马", "朱", "胡"};
         String[] givenNames = {"伟", "芳", "娜", "敏", "静", "磊", "强", "军", "洋", "勇", "艳", "杰", "娟", "涛", "明"};
+
+        // 按角色编码解析主键，而不是硬编码 1/2/3/4：
+        // 角色表可能已由幂等补数创建，其自增 id 不保证等于目录顺序。
+        Map<String, Long> roleIds = new LinkedHashMap<>();
+        jdbcTemplate.query("SELECT id, role_code FROM sys_role", rs -> {
+            roleIds.put(rs.getString("role_code"), rs.getLong("id"));
+        });
+        long adminRoleId = requireRoleId(roleIds, "ADMIN");
+        long operatorRoleId = requireRoleId(roleIds, "OPERATOR");
+        long analystRoleId = requireRoleId(roleIds, "ANALYST");
+        long viewerRoleId = requireRoleId(roleIds, "VIEWER");
 
         List<Object[]> batch = new ArrayList<>(USER_COUNT);
         List<Object[]> userRoles = new ArrayList<>();
@@ -267,31 +401,53 @@ public class DataInitializer implements ApplicationRunner {
         for (int i = 1; i <= USER_COUNT; i++) {
             int orgIndex = i % orgs.size();
             OrgRow org = orgs.get(orgIndex);
-            // 每个机构恰好 4 个部门：部门 id 满足 (id-1) % ORG_COUNT == orgIndex
-            long deptId = orgIndex + 1L + (long) ORG_COUNT * (i % 4);
+            // 从"该机构实际创建的部门"里取一个：用户必须挂在真实存在的部门上。
+            // 不能用 id 算术推导——部门树由 DEPT_SPEC 驱动，部门数与顺序都可能变，
+            // 推导出来的 id 一旦失配就会指向不存在的部门（列表里"所属部门"永远为空）。
+            List<Long> deptIds = orgDeptIds.getOrDefault(orgIndex, List.of());
+            Long deptId = deptIds.isEmpty() ? null : deptIds.get(i % deptIds.size());
             String username;
             String hash;
             long roleId;
             if (i == 1) {
                 username = "admin";
                 hash = adminHash;
-                roleId = 1;
+                roleId = adminRoleId;
+                // SYS-P-24：admin → 总部（全量数据范围），不挂部门
+                org = orgs.get(0);
+                deptId = null;
             } else if (i == 2) {
                 username = "operator";
                 hash = operatorHash;
-                roleId = 2;
+                roleId = operatorRoleId;
+                // SYS-P-24：operator → 浙江省省级（org_id=2，省级数据范围）
+                org = orgs.get(1);
+                orgIndex = 1;
+                deptId = pickDeptId(orgIndex, i);
             } else if (i == 3) {
                 username = "analyst";
                 hash = analystHash;
-                roleId = 3;
+                roleId = analystRoleId;
+                // SYS-P-24：analyst → 浙江省第2保函运营机构（org_id=3，市级数据范围）
+                org = orgs.get(2);
+                orgIndex = 2;
+                deptId = pickDeptId(orgIndex, i);
+            } else if (i == 4) {
+                username = "user0004";
+                hash = defaultHash;
+                roleId = operatorRoleId;
+                // SYS-P-24：user0004 → 江苏省省级（org_id=8）
+                org = orgs.get(7);
+                orgIndex = 7;
+                deptId = pickDeptId(orgIndex, i);
             } else {
                 username = "user" + String.format("%04d", i);
                 hash = defaultHash;
                 // 其余用户按稳定分布分配角色：运营 40%、分析 35%、只读 25%
                 roleId = switch (i % 20) {
-                    case 0, 1, 2, 3, 4, 5, 6, 7 -> 2;
-                    case 8, 9, 10, 11, 12, 13 -> 3;
-                    default -> 4;
+                    case 0, 1, 2, 3, 4, 5, 6, 7 -> operatorRoleId;
+                    case 8, 9, 10, 11, 12, 13 -> analystRoleId;
+                    default -> viewerRoleId;
                 };
             }
             String realName = surnames[random.nextInt(surnames.length)]
@@ -311,7 +467,21 @@ public class DataInitializer implements ApplicationRunner {
         jdbcTemplate.batchUpdate("""
                 INSERT INTO sys_user_role (user_id, role_id) VALUES (?, ?)
                 """, userRoles);
-        log.info("已生成用户 {} 个（admin/operator/analyst + {} 个普通用户）", USER_COUNT, USER_COUNT - 3);
+        log.info("已生成用户 {} 个（admin 总部 / operator 浙江省省级 / analyst 浙江市级 / user0004 江苏省省级 "
+                + "+ {} 个普通用户）", USER_COUNT, USER_COUNT - 4);
+    }
+
+    /**
+     * 取某机构的第 n 个部门 id（按用户序号稳定选择）。
+     *
+     * <p>演示账号（operator / analyst / user0004）的机构被显式改写为特定机构，
+     * 以覆盖"省级 / 市级"数据范围场景；**改写机构后必须同步改写部门**，
+     * 否则会出现"用户属 A 机构、部门属 B 机构"这种跨机构悬挂——
+     * 页面上看不出毛病，但按机构统计部门/人数会静默错位（本仓库踩过一次）。</p>
+     */
+    private Long pickDeptId(int orgIndex, int userSeq) {
+        List<Long> deptIds = orgDeptIds.getOrDefault(orgIndex, List.of());
+        return deptIds.isEmpty() ? null : deptIds.get(userSeq % deptIds.size());
     }
 
     // ==================================================================
@@ -580,6 +750,18 @@ public class DataInitializer implements ApplicationRunner {
         DaySampler(Random random, List<OrgRow> orgs) {
             this.random = random;
             this.orgCount = orgs.size();
+
+            // 传入的必须是"仅区域机构"列表（不含总部，SYS-P-23）。
+            // 这里显式断言，避免后续有人加总部/加机构时采样权重静默错位：
+            // orgCumulative 的长度与 REGIONS 的机构数合计强绑定。
+            int expected = 0;
+            for (String[] region : REGIONS) {
+                expected += Integer.parseInt(region[3]);
+            }
+            if (orgCount != expected) {
+                throw new IllegalStateException(
+                        "订单采样只允许在区域机构中进行：期望 " + expected + " 个，实际 " + orgCount + " 个");
+            }
 
             LocalDate cursor = DATA_START;
             while (!cursor.isAfter(DATA_END)) {

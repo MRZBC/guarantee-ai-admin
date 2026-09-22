@@ -13,7 +13,9 @@
                path      AS path,
                component AS component,
                icon      AS icon,
-               sort_no   AS sortNo
+               sort_no   AS sortNo,
+               is_deleted AS isDeleted,
+               deleted_at AS deletedAt
         FROM sys_permission
         ORDER BY sort_no ASC, id ASC
     </select>
