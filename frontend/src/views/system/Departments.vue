@@ -384,7 +384,7 @@ async function handleToggleStatus(node: DepartmentNode): Promise<void> {
     await ElMessageBox.confirm(
       target === 1
         ? `确认启用部门「${node.label}」？`
-        : `确认停用部门「${node.label}」？① 该部门下不能有启用中的用户，否则会被拒绝；② 停用不是删除，记录仍然可见。`,
+        : `确认停用部门「${node.label}」？① 该部门下不能有下级部门，也不能有启用中的用户，否则会被拒绝；② 停用不是删除，记录仍然可见。`,
       `${action}部门`,
       { type: 'warning', confirmButtonText: `确认${action}`, cancelButtonText: '取消' }
     )

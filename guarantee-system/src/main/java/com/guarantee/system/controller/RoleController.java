@@ -16,6 +16,7 @@ import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -67,6 +68,19 @@ public class RoleController {
     public Result<RoleVO> update(@PathVariable Long id,
                                  @Valid @RequestBody RoleDto.UpdateRequest request) {
         return Result.ok(roleService.update(id, request));
+    }
+
+    /**
+     * 角色启停（权限码 {@code system:role:disable}）。
+     *
+     * <p>与机构/部门/险种/用户保持一致的独立启停端点。停用角色会**立即收回**该角色带来的
+     * 权限并撤销持有者的令牌；{@code ADMIN} 角色不允许停用（会导致全体管理员失权）。</p>
+     */
+    @PatchMapping("/{id}/status")
+    @PreAuthorize("hasAuthority('" + Permissions.ROLE_DISABLE + "')")
+    public Result<RoleVO> changeStatus(@PathVariable Long id,
+                                       @Valid @RequestBody RoleDto.StatusRequest request) {
+        return Result.ok(roleService.changeStatus(id, request.getStatus()));
     }
 
     /** 角色授权（ASSIGN_PERMISSIONS）。变更后撤销持有该角色用户的令牌。 */

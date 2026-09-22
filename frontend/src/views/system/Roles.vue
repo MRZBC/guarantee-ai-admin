@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { deleteRole, pageRoles } from '@/api/system'
+import { changeRoleStatus, deleteRole, pageRoles } from '@/api/system'
 import { useUserStore } from '@/stores/user'
 import { formatDateTime } from '@/utils/format'
 import { isEnabled, statusLabel } from '@/utils/status'
@@ -20,6 +20,8 @@ const query = reactive<RoleQuery>({
   roleName: ''
 })
 
+/** 无 system:role:disable 时不渲染启停入口（后端仍是安全边界，SYS-NF-04） */
+const canDisable = computed(() => userStore.permissions.includes('system:role:disable'))
 /** 无 system:role:delete 时不渲染删除入口（后端仍是安全边界，SYS-NF-04） */
 const canDelete = computed(() => userStore.permissions.includes('system:role:delete'))
 
@@ -64,6 +66,41 @@ function handleSizeChange(size: number): void {
   query.pageSize = size
   query.pageNum = 1
   void loadData()
+}
+
+/* ---------------- 启停（权限：system:role:disable） ---------------- */
+
+/**
+ * 启停角色。
+ *
+ * <p>鉴权链路按 {@code r.status = 1} 过滤角色，因此停用是**立即生效**的权限收回：
+ * 持有该角色的用户立刻失去它带来的权限，且后端会撤销这些用户的令牌，他们需要重新登录。
+ * ADMIN 角色不被允许停用。人数前端拿不到准确值，文案里不写数字。</p>
+ */
+async function toggleStatus(row: RoleItem): Promise<void> {
+  const next = isEnabled(row.status) ? 0 : 1
+  const word = next === 0 ? '停用' : '启用'
+  try {
+    await ElMessageBox.confirm(
+      next === 0
+        ? `确认停用「${row.roleName}」？`
+          + '① 仍有启用中的用户持有该角色时会被拒绝，请先解除绑定；'
+          + '② 超级管理员（ADMIN）角色不允许停用，该操作会被系统拒绝；'
+          + '③ 停用不是删除，角色记录仍然保留，可随时重新启用。'
+        : `确认启用「${row.roleName}」？`,
+      `${word}角色`,
+      { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await changeRoleStatus(row.id, next)
+    ElMessage.success(`已${word}「${row.roleName}」`)
+    await loadData()
+  } catch {
+    // 失败原因（如「超级管理员（ADMIN）角色不允许停用」）已由响应拦截器统一提示
+  }
 }
 
 /* ---------------- 逻辑删除 / 恢复（权限：system:role:delete） ---------------- */
@@ -170,10 +207,22 @@ onMounted(loadData)
         <el-table-column prop="createdAt" label="创建时间" width="170" align="center">
           <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
         </el-table-column>
-        <el-table-column v-if="canDelete" label="操作" width="90" align="center" fixed="right">
+        <el-table-column
+          v-if="canDisable || canDelete"
+          label="操作"
+          width="130"
+          align="center"
+          fixed="right"
+        >
           <template #default="{ row }">
-            <!-- 已删除角色不进列表，因此只有「删除」；恢复入口已随「显示已删除」开关撤除（2026-09-22） -->
-            <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
+            <!-- 无权限不渲染按钮（前端过滤仅为体验优化，后端仍是安全边界，SYS-NF-04）。
+                 已删除角色不进列表，因此只有启停与删除；恢复入口已随「显示已删除」开关撤除（2026-09-22） -->
+            <el-button v-if="canDisable" link type="primary" @click="toggleStatus(row)">
+              {{ isEnabled(row.status) ? '停用' : '启用' }}
+            </el-button>
+            <el-button v-if="canDelete" link type="danger" @click="handleDelete(row)">
+              删除
+            </el-button>
           </template>
         </el-table-column>
         <template #empty>

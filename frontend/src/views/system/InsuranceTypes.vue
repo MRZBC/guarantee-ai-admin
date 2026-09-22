@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import {
+  changeInsuranceTypeStatus,
   createInsuranceType,
   deleteInsuranceType,
   pageInsuranceTypes,
@@ -39,6 +40,8 @@ const query = reactive<InsuranceTypeQuery>({
   status: null
 })
 
+/** 无 system:insurance:disable 时不渲染启停入口（后端仍是安全边界，SYS-NF-04） */
+const canDisable = computed(() => userStore.permissions.includes('system:insurance:disable'))
 /** 无 system:insurance:delete 时不渲染删除入口（后端仍是安全边界，SYS-NF-04） */
 const canDelete = computed(() => userStore.permissions.includes('system:insurance:delete'))
 
@@ -249,6 +252,39 @@ async function handleSubmit(): Promise<void> {
   }
 }
 
+/* ---------------- 启停（权限：system:insurance:disable） ---------------- */
+
+/**
+ * 启停险种。
+ *
+ * <p>停用**不校验订单引用**：后端会正常改状态，历史订单因此不受影响（只有逻辑删除才因
+ * "已被 N 条订单引用"被拒绝）。所以这里不能写"被引用会被拒绝"这类后端做不到的承诺。</p>
+ */
+async function toggleStatus(row: InsuranceTypeItem): Promise<void> {
+  const next = isEnabled(row.status) ? 0 : 1
+  const word = next === 0 ? '停用' : '启用'
+  try {
+    await ElMessageBox.confirm(
+      next === 0
+        ? `确认停用「${row.typeName}」？`
+          + '① 停用后该险种不再出现在新订单的可选列表中，历史订单不受影响；'
+          + '② 停用不是删除，记录仍然保留，可随时重新启用。'
+        : `确认启用「${row.typeName}」？`,
+      `${word}险种`,
+      { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await changeInsuranceTypeStatus(row.id, next)
+    ElMessage.success(`已${word}「${row.typeName}」`)
+    await loadData()
+  } catch {
+    // 失败原因（如「险种已处于目标状态，无需变更」）已由响应拦截器统一提示
+  }
+}
+
 /* ---------------- 逻辑删除 / 恢复（权限：system:insurance:delete） ---------------- */
 
 async function handleDelete(row: InsuranceTypeItem): Promise<void> {
@@ -371,11 +407,15 @@ onMounted(loadData)
         <el-table-column prop="updatedAt" label="更新时间" width="170" align="center">
           <template #default="{ row }">{{ formatDateTime(row.updatedAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" :width="canDelete ? 130 : 90" align="center" fixed="right">
+        <el-table-column label="操作" :width="canDelete ? 190 : 135" align="center" fixed="right">
           <template #default="{ row }">
-            <!-- 已删除险种不进列表，因此这里只有编辑与删除；
+            <!-- 无权限不渲染按钮（前端过滤仅为体验优化，后端仍是安全边界，SYS-NF-04）。
+                 已删除险种不进列表，因此这里只有编辑、启停与删除；
                  恢复入口已随「显示已删除」开关撤除（2026-09-22 评审决定） -->
             <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button v-if="canDisable" link type="primary" @click="toggleStatus(row)">
+              {{ isEnabled(row.status) ? '停用' : '启用' }}
+            </el-button>
             <el-button v-if="canDelete" link type="danger" @click="handleDelete(row)">
               删除
             </el-button>

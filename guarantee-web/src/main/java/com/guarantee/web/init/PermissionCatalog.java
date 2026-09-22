@@ -56,6 +56,7 @@ public final class PermissionCatalog {
             {"system:role:create", "角色新增", null},
             {"system:role:update", "角色修改", null},
             {"system:role:assign-permission", "角色授权", null},
+            {"system:role:disable", "角色启停", null},
             {"system:role:delete", "角色删除", null},
 
             {"system:permission:view", "权限配置", null},

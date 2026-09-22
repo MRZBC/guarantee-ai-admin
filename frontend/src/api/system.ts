@@ -39,6 +39,16 @@ export function updateInsuranceType(id: number, data: InsuranceTypeUpdateParams)
   return http.put<InsuranceTypeItem>(`/system/insurance-types/${id}`, data)
 }
 
+/**
+ * 险种启停（权限：system:insurance:disable）。status：1 启用 / 0 停用。
+ *
+ * <p>停用**不校验订单引用**：后端会正常改状态，历史订单因此不受影响；
+ * 只有逻辑删除才会因"已被 N 条订单引用"被拒绝。页面文案必须与此口径一致。</p>
+ */
+export function changeInsuranceTypeStatus(id: number, status: number) {
+  return http.patch<InsuranceTypeItem>(`/system/insurance-types/${id}/status`, { status })
+}
+
 /** 逻辑删除（权限：system:insurance:delete）；被引用时后端返回 code != 0 + 中文 message */
 export function deleteInsuranceType(id: number) {
   return http.delete<InsuranceTypeItem>(`/system/insurance-types/${id}`)
@@ -132,6 +142,17 @@ export function pageUsers(params: UserQuery) {
   return http.get<PageResult<UserItem>>('/system/users', { params })
 }
 
+/**
+ * 用户启停（权限：system:user:disable）。status：1 启用 / 0 停用。
+ *
+ * <p>停用是一次**安全动作**：后端会立即撤销该用户已签发的全部令牌（JWT），
+ * 因此其当前会话直接失效、必须重新登录。后端还会拒绝两类操作并在 message 里给出中文原因：
+ * 停用自己、停用最后一个启用状态的超级管理员。</p>
+ */
+export function changeUserStatus(id: number, status: number) {
+  return http.patch<UserItem>(`/system/users/${id}/status`, { status })
+}
+
 /** 逻辑删除（权限：system:user:delete） */
 export function deleteUser(id: number) {
   return http.delete<UserItem>(`/system/users/${id}`)
@@ -142,6 +163,17 @@ export function deleteUser(id: number) {
 
 export function pageRoles(params: RoleQuery) {
   return http.get<PageResult<RoleItem>>('/system/roles', { params })
+}
+
+/**
+ * 角色启停（权限：system:role:disable）。status：1 启用 / 0 停用。
+ *
+ * <p>鉴权链路按 {@code r.status = 1} 过滤角色，所以停用是**立即生效**的权限收回：
+ * 持有该角色的用户会立刻失去它带来的权限，且后端会撤销这些用户已签发的 JWT，
+ * 他们必须重新登录。ADMIN（超级管理员）角色不允许停用。</p>
+ */
+export function changeRoleStatus(id: number, status: number) {
+  return http.patch<RoleItem>(`/system/roles/${id}/status`, { status })
 }
 
 /** 逻辑删除（权限：system:role:delete） */

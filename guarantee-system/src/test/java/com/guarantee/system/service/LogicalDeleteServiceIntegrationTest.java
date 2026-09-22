@@ -399,6 +399,85 @@ class LogicalDeleteServiceIntegrationTest {
     }
 
     // ==================================================================
+    // 角色启停（新增能力：此前角色连后端都没有 changeStatus 端点）
+    // ==================================================================
+
+    @Test
+    @DisplayName("角色启停：ADMIN 不可停用；有启用用户持有时不可停用；解绑后可停用并可再启用")
+    void roleStatusToggle() {
+        // ADMIN 角色不允许停用 —— 停用会让全体管理员立即失权、系统锁死
+        Long adminRoleId = jdbc.queryForObject(
+                "SELECT id FROM sys_role WHERE role_code = 'ADMIN' AND is_deleted = 0", Long.class);
+        assertThatThrownBy(() -> roleService.changeStatus(adminRoleId, 0))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("ADMIN")
+                .hasMessageContaining("不允许停用");
+
+        // 夹具：一个启用用户 + 一个普通角色，用户持有该角色
+        jdbc.update("INSERT INTO sys_user (username, password, real_name, dept_id, status) VALUES (?, 'x', '夹具', ?, 1)",
+                P + "rsu", deptId());
+        Long userId = jdbc.queryForObject("SELECT id FROM sys_user WHERE username = ?", Long.class, P + "rsu");
+        jdbc.update("INSERT INTO sys_role (role_code, role_name, status) VALUES (?, '走查-启停角色', 1)", P + "rsr");
+        Long roleId = jdbc.queryForObject("SELECT id FROM sys_role WHERE role_code = ?", Long.class, P + "rsr");
+        jdbc.update("INSERT INTO sys_user_role (user_id, role_id) VALUES (?, ?)", userId, roleId);
+
+        // 前置检查：有启用用户持有 → **拒绝**（而不是"停用 + 提示"，否则等于静默降权）
+        revoker.clear();
+        assertThatThrownBy(() -> roleService.changeStatus(roleId, 0))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("启用中的用户持有该角色")
+                .hasMessageContaining("不能停用");
+        assertThat(revoker.revoked).as("被拒绝时不得改动状态、也不得撤销令牌").isEmpty();
+
+        // 解除绑定后允许停用
+        jdbc.update("UPDATE sys_user_role SET is_deleted = 1, deleted_at = NOW(6) WHERE role_id = ?", roleId);
+        assertThat(roleService.changeStatus(roleId, 0).getStatus()).isZero();
+
+        // 已是目标状态 → 明确报错，不静默成功
+        assertThatThrownBy(() -> roleService.changeStatus(roleId, 0))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("已处于目标状态");
+
+        // 启用回来：停用 ≠ 删除，可随时恢复
+        assertThat(roleService.changeStatus(roleId, 1).getStatus()).isOne();
+    }
+
+    @Test
+    @DisplayName("部门停用：有下级部门或有启用用户时都被拒绝（不能有子项、不能有关联的正常用户）")
+    void departmentStopBlockedByChildrenAndUsers() {
+        DataScope admin = adminScope();
+
+        DepartmentDto.CreateRequest parentReq = new DepartmentDto.CreateRequest();
+        parentReq.setDeptCode(P + "stp");
+        parentReq.setDeptName("走查-停用-父部门");
+        DepartmentVO parent = departmentService.create(parentReq, admin);
+
+        DepartmentDto.CreateRequest childReq = new DepartmentDto.CreateRequest();
+        childReq.setDeptCode(P + "stc");
+        childReq.setDeptName("走查-停用-子部门");
+        childReq.setParentId(parent.getId());
+        DepartmentVO child = departmentService.create(childReq, admin);
+
+        // 有下级部门 → 拒绝（否则会出现"父已停用、子仍启用"的错乱状态）
+        assertThatThrownBy(() -> departmentService.changeStatus(parent.getId(), 0, admin))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("下级部门")
+                .hasMessageContaining("不能停用");
+
+        // 叶子部门，但有启用用户 → 拒绝
+        jdbc.update("INSERT INTO sys_user (username, password, real_name, dept_id, status) VALUES (?, 'x', '夹具', ?, 1)",
+                P + "stu", child.getId());
+        assertThatThrownBy(() -> departmentService.changeStatus(child.getId(), 0, admin))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("启用中的用户")
+                .hasMessageContaining("不能停用");
+
+        // 把用户移走、该部门又没有下级 → 放行
+        jdbc.update("UPDATE sys_user SET dept_id = ? WHERE username = ?", deptId(), P + "stu");
+        assertThat(departmentService.changeStatus(child.getId(), 0, admin).getStatus()).isZero();
+    }
+
+    // ==================================================================
     // LD-T10：被引用的险种禁止删除（且给出引用数）
     // ==================================================================
 

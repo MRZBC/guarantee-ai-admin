@@ -62,6 +62,13 @@ public final class Permissions {
     public static final String ROLE_CREATE = "system:role:create";
     public static final String ROLE_UPDATE = "system:role:update";
     public static final String ROLE_ASSIGN_PERMISSION = "system:role:assign-permission";
+    /**
+     * 角色启停。
+     *
+     * <p>角色停用有真实语义：鉴权路径按 {@code r.status = 1} 过滤，停用即**立即收回**
+     * 该角色带来的权限，因此停用后必须撤销持有者的 JWT。</p>
+     */
+    public static final String ROLE_DISABLE = "system:role:disable";
     /** 角色逻辑删除 / 恢复 / 查看已删除（仅 ADMIN，设计 §7.2）。 */
     public static final String ROLE_DELETE = "system:role:delete";
 

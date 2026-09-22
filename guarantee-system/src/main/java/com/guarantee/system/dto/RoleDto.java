@@ -2,6 +2,8 @@ package com.guarantee.system.dto;
 
 import com.guarantee.common.api.PageQuery;
 import com.guarantee.system.scope.QueryScope;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
@@ -95,5 +97,20 @@ public final class RoleDto {
 
         @jakarta.validation.constraints.NotNull(message = "权限列表不能为空")
         private List<@NotBlank(message = "权限编码不能为空") String> permCodes;
+    }
+
+    /**
+     * 角色启停。
+     *
+     * <p>与其它实体保持一致的独立端点：{@code PATCH /api/system/roles/{id}/status}。</p>
+     */
+    @Getter
+    @Setter
+    public static class StatusRequest {
+
+        @jakarta.validation.constraints.NotNull(message = "目标状态不能为空")
+        @Min(value = 0, message = "状态只能是 0/1")
+        @Max(value = 1, message = "状态只能是 0/1")
+        private Integer status;
     }
 }

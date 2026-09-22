@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { deleteUser, pageUsers } from '@/api/system'
+import { changeUserStatus, deleteUser, pageUsers } from '@/api/system'
 import { useUserStore } from '@/stores/user'
 import { formatDateTime } from '@/utils/format'
 import { isEnabled, statusLabel, statusParam, STATUS_OPTIONS } from '@/utils/status'
@@ -21,6 +21,8 @@ const query = reactive<UserQuery>({
   status: null
 })
 
+/** 无 system:user:disable 时不渲染启停入口（后端仍是安全边界，SYS-NF-04） */
+const canDisable = computed(() => userStore.permissions.includes('system:user:disable'))
 /** 无 system:user:delete 时不渲染删除入口（后端仍是安全边界，SYS-NF-04） */
 const canDelete = computed(() => userStore.permissions.includes('system:user:delete'))
 
@@ -72,6 +74,42 @@ function handleSizeChange(size: number): void {
   query.pageSize = size
   query.pageNum = 1
   void loadData()
+}
+
+/* ---------------- 启停（权限：system:user:disable） ---------------- */
+
+/**
+ * 启停用户。
+ *
+ * <p>停用是**安全动作**：后端会立即撤销该用户已签发的全部令牌（JWT），其当前会话随即失效，
+ * 必须重新登录。后端还会拒绝"停用自己"与"停用最后一个启用状态的超级管理员"，
+ * 拒绝原因由响应拦截器统一提示，这里不重复加工。</p>
+ */
+async function toggleStatus(row: UserItem): Promise<void> {
+  const label = userLabel(row)
+  const next = isEnabled(row.status) ? 0 : 1
+  const word = next === 0 ? '停用' : '启用'
+  try {
+    await ElMessageBox.confirm(
+      next === 0
+        ? `确认停用「${label}」？`
+          + '① 该用户将被立即登出（已签发的登录令牌会被撤销），需要重新登录；'
+          + '② 不能停用自己，也不能停用最后一个启用状态的超级管理员，这两种情况会被系统拒绝；'
+          + '③ 停用不是删除，用户记录仍然保留，可随时重新启用。'
+        : `确认启用「${label}」？`,
+      `${word}用户`,
+      { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await changeUserStatus(row.id, next)
+    ElMessage.success(`已${word}「${label}」`)
+    await loadData()
+  } catch {
+    // 失败原因（如「不允许停用自己的账号」）已由响应拦截器统一提示
+  }
 }
 
 /* ---------------- 逻辑删除 / 恢复（权限：system:user:delete） ---------------- */
@@ -202,10 +240,22 @@ onMounted(() => {
         <el-table-column prop="createdAt" label="创建时间" width="170" align="center">
           <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
         </el-table-column>
-        <el-table-column v-if="canDelete" label="操作" width="90" align="center" fixed="right">
+        <el-table-column
+          v-if="canDisable || canDelete"
+          label="操作"
+          width="130"
+          align="center"
+          fixed="right"
+        >
           <template #default="{ row }">
-            <!-- 已删除用户不进列表，因此只有「删除」；恢复入口已随「显示已删除」开关撤除（2026-09-22） -->
-            <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
+            <!-- 无权限不渲染按钮（前端过滤仅为体验优化，后端仍是安全边界，SYS-NF-04）。
+                 已删除用户不进列表，因此只有启停与删除；恢复入口已随「显示已删除」开关撤除（2026-09-22） -->
+            <el-button v-if="canDisable" link type="primary" @click="toggleStatus(row)">
+              {{ isEnabled(row.status) ? '停用' : '启用' }}
+            </el-button>
+            <el-button v-if="canDelete" link type="danger" @click="handleDelete(row)">
+              删除
+            </el-button>
           </template>
         </el-table-column>
         <template #empty>

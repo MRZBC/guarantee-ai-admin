@@ -160,6 +160,11 @@
         WHERE id = #{id}
     </update>
 
+    <!-- 条件启停：只有当前状态与预期一致时才改，防并发覆盖（与其它实体同款） -->
+    <update id="updateStatus">
+        UPDATE sys_role SET status = #{status} WHERE id = #{id} AND status = #{expectedStatus}
+    </update>
+
     <!-- 角色授权同构改造：先清后插 -> UPSERT（设计 §4.2） -->
     <update id="softDeleteRolePermissionsNotIn">
         UPDATE sys_role_permission

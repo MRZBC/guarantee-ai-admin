@@ -68,6 +68,15 @@ public interface SysRoleMapper {
 
     int updateById(SysRole entity);
 
+    /**
+     * 条件启停：只有当前状态与预期一致时才改，防并发覆盖（与其它实体同款）。
+     *
+     * @return 受影响行数：0 表示状态已被他人改过
+     */
+    int updateStatus(@Param("id") Long id,
+                     @Param("status") Integer status,
+                     @Param("expectedStatus") Integer expectedStatus);
+
     /** 把不在目标集合中的角色-权限绑定置为已删除。 */
     int softDeleteRolePermissionsNotIn(@Param("roleId") Long roleId,
                                        @Param("permissionIds") List<Long> permissionIds,

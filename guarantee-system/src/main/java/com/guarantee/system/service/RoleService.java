@@ -10,6 +10,7 @@ import com.guarantee.system.dto.RolePermissionRef;
 import com.guarantee.system.entity.SysPermission;
 import com.guarantee.system.entity.SysRole;
 import com.guarantee.system.mapper.SysRoleMapper;
+import com.guarantee.system.mapper.SysUserMapper;
 import com.guarantee.system.scope.DataScope;
 import com.guarantee.system.scope.QueryScope;
 import com.guarantee.system.vo.RoleVO;
@@ -45,13 +46,17 @@ public class RoleService {
     public static final int CANDIDATE_LIMIT = 20;
 
     private final SysRoleMapper sysRoleMapper;
+    /** 仅用于"持该角色的启用用户数"（停用影响面）；角色自身的数据都走 sysRoleMapper。 */
+    private final SysUserMapper sysUserMapper;
     private final ObjectProvider<UserTokenRevoker> tokenRevokerProvider;
     private final WebAuditor webAuditor;
 
     public RoleService(SysRoleMapper sysRoleMapper,
+                       SysUserMapper sysUserMapper,
                        ObjectProvider<UserTokenRevoker> tokenRevokerProvider,
                        WebAuditor webAuditor) {
         this.sysRoleMapper = sysRoleMapper;
+        this.sysUserMapper = sysUserMapper;
         this.tokenRevokerProvider = tokenRevokerProvider;
         this.webAuditor = webAuditor;
     }
@@ -204,6 +209,69 @@ public class RoleService {
         webAuditor.success("UPDATE", "ROLE", id, existing.getRoleName(), before, after);
 
         return getById(id);
+    }
+
+    /**
+     * 角色启停（ENABLE / DISABLE）—— 与机构/部门/险种/用户保持一致的独立启停端点。
+     *
+     * <p><b>停用前置检查（用户规则）：该角色不能有关联的正常用户</b>。角色停用会立即收回
+     * 它带来的权限（鉴权路径 {@code SysUserMapper.listPermissionCodesByUserId} 按
+     * {@code r.status = 1} 过滤），所以只要还有启用用户持有，就必须**拒绝**而不是
+     * "停用 + 提示"——否则等于把这些人在无感知的情况下静默降权。</p>
+     *
+     * <p><b>守卫：ADMIN 角色不允许停用</b>。ADMIN 是管理员权限的最后来源，
+     * 停用会让全体管理员瞬间失权、系统锁死——与 {@link #deleteBlockers} 里
+     * "ADMIN 不可删除"、以及用户侧"禁止停用最后一个启用 ADMIN"是同一道保护。</p>
+     *
+     * <p>与"删除角色"的区别：删除要求**没有任何未删除用户**持有（更严），
+     * 停用只要求没有任何**启用**用户持有（已停用/已删除的用户不阻塞）。</p>
+     */
+    @Transactional
+    public RoleVO changeStatus(Long id, Integer targetStatus) {
+        SysRole existing = findEntityById(id);
+        if (existing.getStatus() != null && existing.getStatus().equals(targetStatus)) {
+            throw new BizException("角色已处于目标状态，无需变更：" + existing.getRoleName());
+        }
+        if (targetStatus != null && targetStatus == 0) {
+            if (Roles.ADMIN.equals(existing.getRoleCode())) {
+                throw new BizException("超级管理员（ADMIN）角色不允许停用：停用会使全体管理员立即失去权限");
+            }
+            long users = sysUserMapper.countEnabledUsersByRoleCode(existing.getRoleCode());
+            if (users > 0) {
+                throw new BizException("仍有 " + users + " 个启用中的用户持有该角色，不能停用；请先解除绑定");
+            }
+        }
+        // 兜底撤销：上面的检查只保证没有"启用"用户持有，仍可能有已停用用户持有。
+        // 权限来自 JWT claims，不撤令牌的话其旧 JWT 里的该角色权限最长还能用 12 小时。
+        List<Long> holders = (targetStatus != null && targetStatus == 0)
+                ? sysRoleMapper.selectUserIdsByRoleCode(existing.getRoleCode())
+                : List.of();
+        int affected = sysRoleMapper.updateStatus(id, targetStatus, existing.getStatus());
+        if (affected != 1) {
+            throw new BizException("角色状态已被他人修改，请刷新后重试");
+        }
+        if (!holders.isEmpty()) {
+            revokeTokens(holders, "角色被停用: " + existing.getRoleCode());
+        }
+        log.info("角色启停成功 id={} code={} status={} 兜底撤销持有者数={}",
+                id, existing.getRoleCode(), targetStatus, holders.size());
+        webAuditor.success(targetStatus != null && targetStatus == 1 ? "ENABLE" : "DISABLE", "ROLE", id,
+                existing.getRoleName(), Map.of("status", existing.getStatus()),
+                Map.of("status", targetStatus));
+        return getById(id);
+    }
+
+    /**
+     * 停用影响面（确认卡明示）：**持该角色的启用用户数**。
+     *
+     * <p>与停用前置检查同口径——该值大于 0 时停用会被拒绝，因此必须让操作者先看到它。
+     * 已停用用户不计入（他们本就无法登录，不阻塞停用）。</p>
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> stopImpact(SysRole role) {
+        Map<String, Object> impact = new LinkedHashMap<>();
+        impact.put("持该角色的启用用户数", sysUserMapper.countEnabledUsersByRoleCode(role.getRoleCode()));
+        return impact;
     }
 
     /**

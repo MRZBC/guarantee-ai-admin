@@ -484,10 +484,16 @@ class ProposalFlowIT {
     @Test
     @DisplayName("部门下有启用用户时禁止停用；用户全部停用后即可停用")
     void departmentWithEnabledUsersCannotBeDisabled() {
-        // 取一个确实有启用用户的演示部门
+        // 取一个确实有启用用户、且**没有下级部门**的演示部门。
+        // 必须限定叶子部门：停用前置检查现在有两条（① 不能有下级部门 ② 不能有启用用户），
+        // 若取到有子部门的父部门（如总部），会先命中①，测不到本用例要验证的②。
         Long deptId = jdbcTemplate.queryForObject("""
                 SELECT d.id FROM sys_department d
                 INNER JOIN sys_user u ON u.dept_id = d.id AND u.status = 1
+                WHERE d.is_deleted = 0
+                  AND NOT EXISTS (
+                      SELECT 1 FROM sys_department c
+                      WHERE c.parent_id = d.id AND c.is_deleted = 0)
                 GROUP BY d.id
                 ORDER BY COUNT(*) DESC
                 LIMIT 1

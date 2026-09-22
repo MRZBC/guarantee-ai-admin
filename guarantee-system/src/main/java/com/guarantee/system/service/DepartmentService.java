@@ -171,6 +171,13 @@ public class DepartmentService {
             throw new BizException("部门已处于目标状态，无需变更：" + existing.getDeptName());
         }
         if (targetStatus == 0) {
+            // 停用前置检查：**不能有子项，也不能有关联的正常用户**。
+            // 有下级部门时停用父部门，会出现"父已停用、子仍启用"的错乱状态；
+            // 有启用用户时停用，会让用户挂在一个已停用的部门上。
+            long children = sysDepartmentMapper.countChildDept(id);
+            if (children > 0) {
+                throw new BizException("该部门下仍有 " + children + " 个未删除的下级部门，不能停用；请先处理下级部门");
+            }
             long users = sysDepartmentMapper.countEnabledUserByDept(id);
             if (users > 0) {
                 throw new BizException("该部门下仍有 " + users + " 个启用中的用户，不能停用");
@@ -227,9 +234,14 @@ public class DepartmentService {
         return existing;
     }
 
-    /** 停用影响面（确认卡明示）。 */
+    /**
+     * 停用影响面（确认卡明示）。
+     *
+     * <p>与停用前置检查同口径：这两项任一非 0 都会被拒绝，因此必须一并明示。</p>
+     */
     public Map<String, Object> stopImpact(SysDepartment department) {
         Map<String, Object> impact = new LinkedHashMap<>();
+        impact.put("下级部门数", sysDepartmentMapper.countChildDept(department.getId()));
         impact.put("部门下启用用户数", sysDepartmentMapper.countEnabledUserByDept(department.getId()));
         return impact;
     }
