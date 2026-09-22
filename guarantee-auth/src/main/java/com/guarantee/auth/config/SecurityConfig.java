@@ -92,7 +92,12 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource(CorsProperties corsProperties) {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOriginPatterns(corsProperties.getAllowedOriginPatterns());
-        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        // 必须与控制器实际使用的方法集一致。**漏掉任何一个**都会让浏览器发起的该方法的
+        // 跨域请求被 DefaultCorsProcessor 直接拒为 403（纯文本 "Invalid CORS request"，
+        // 响应体没有 message），前端只能落到兜底文案「没有权限访问该资源」，
+        // 与真正的权限不足完全无法区分——系统里所有启停端点都是 PATCH，
+        // 漏掉 PATCH 会让「启用/停用」全部失效且报错指向权限，极难排查。
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
         configuration.setExposedHeaders(List.of("X-Trace-Id"));
         configuration.setAllowCredentials(true);
