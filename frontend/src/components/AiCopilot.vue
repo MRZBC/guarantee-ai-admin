@@ -86,6 +86,25 @@ function hasToolCalls(messageId: number): boolean {
 
 /* ---------------- 提案状态维护 ---------------- */
 
+/** 终态：不再需要用户确认，卡片必须从消息流里移除。 */
+const TERMINAL_PROPOSAL_STATUSES = new Set(['EXECUTED', 'REJECTED', 'EXPIRED', 'INVALIDATED'])
+
+function isTerminalProposal(status?: string | null): boolean {
+  return TERMINAL_PROPOSAL_STATUSES.has((status || '').toUpperCase())
+}
+
+/**
+ * 移除已终态的卡片。
+ *
+ * <p>为什么必须移除而不是"保留作记录"：确认卡挂在**消息流末尾**且会一直渲染，
+ * 一段对话里连续做几次变更（例如先停用、再启用）就会堆成一列再也消不掉的卡片，
+ * 把提问和回复挤出视野。执行结果由成功 Toast + 操作审计承载，
+ * 不需要在对话里留一张不可操作的卡片。</p>
+ */
+function removeProposal(proposalId: number): void {
+  proposals.value = proposals.value.filter((item) => item.proposalId !== proposalId)
+}
+
 function upsertProposal(payload: ProposalPayload): void {
   const index = proposals.value.findIndex((item) => item.proposalId === payload.proposalId)
   if (index >= 0) {
@@ -97,6 +116,12 @@ function upsertProposal(payload: ProposalPayload): void {
 }
 
 function applyProposalResult(payload: SseProposalResultPayload): void {
+  // 后端在别处（例如另一次确认、到期任务）把提案推到终态时，同样要把它从列表移除，
+  // 否则会留下一张永远点不动的卡片。
+  if (isTerminalProposal(payload.status)) {
+    removeProposal(payload.proposalId)
+    return
+  }
   const index = proposals.value.findIndex((item) => item.proposalId === payload.proposalId)
   if (index < 0) return
   proposals.value.splice(index, 1, {
@@ -108,16 +133,10 @@ function applyProposalResult(payload: SseProposalResultPayload): void {
 
 async function refreshProposals(): Promise<void> {
   try {
+    // 待确认列表是**唯一权威来源**：只保留 PENDING。
+    // 之前这里把「本次会话内已终态的卡片」也合并保留，导致执行过的卡片永久堆积。
     const list = await listProposals('PENDING')
-    const byId = new Map<number, ProposalPayload>()
-    for (const item of proposals.value) {
-      byId.set(item.proposalId, item)
-    }
-    // 待确认列表是权威来源：以它为准合并，同时保留本次会话内已终态的卡片
-    for (const item of list ?? []) {
-      byId.set(item.proposalId, { ...byId.get(item.proposalId), ...item })
-    }
-    proposals.value = [...byId.values()].sort((a, b) => a.proposalId - b.proposalId)
+    proposals.value = [...(list ?? [])].sort((a, b) => a.proposalId - b.proposalId)
   } catch {
     // 错误提示已由响应拦截器统一处理
   }
@@ -127,7 +146,12 @@ async function handleConfirm(proposalId: number): Promise<void> {
   executingProposalId.value = proposalId
   try {
     const updated = await confirmProposalApi(proposalId)
-    upsertProposal(updated)
+    // 执行后卡片已终态 → 从消息流移除，避免在对话里堆积；结果由下面的 Toast 反馈
+    if (isTerminalProposal(updated.status)) {
+      removeProposal(proposalId)
+    } else {
+      upsertProposal(updated)
+    }
     if ((updated.status || '').toUpperCase() === 'EXECUTED') {
       ElMessage.success('变更已执行')
     } else {
@@ -146,7 +170,11 @@ async function handleReject(proposalId: number, reason: string): Promise<void> {
   executingProposalId.value = proposalId
   try {
     const updated = await rejectProposalApi(proposalId, reason || undefined)
-    upsertProposal(updated)
+    if (isTerminalProposal(updated.status)) {
+      removeProposal(proposalId)
+    } else {
+      upsertProposal(updated)
+    }
     ElMessage.info('已拒绝，系统未做任何变更')
   } catch {
     await refreshProposals()
@@ -442,6 +470,16 @@ async function send(): Promise<void> {
     abortController = null
     streaming.value = false
     streamingMessage.streaming = false
+
+    /*
+      兜底：本轮结束后以服务端为准刷新一次待确认提案。
+
+      提案事件是**尽力推送**：ProposalEventPublisher 在"会话通道未注册 / 已关闭"时
+      只落库不推送，推送失败也只记 debug 日志。一旦漏推，模型正文里照样会写
+      "请在确认卡上点击「确认执行」"，用户就会看到"说生成了提案、却没有卡片"。
+      这里用 GET 待确认列表兜住——进入会话时本来也有同样的刷新（SYS-C-14）。
+    */
+    void refreshProposals()
 
     if (streamError) {
       ElMessage.error(streamError)
