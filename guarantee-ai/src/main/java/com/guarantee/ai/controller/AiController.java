@@ -1,7 +1,7 @@
 package com.guarantee.ai.controller;
 
 import com.guarantee.ai.dto.AiChatRequest;
-import com.guarantee.ai.mapper.OperationAuditQuery;
+import com.guarantee.ai.dto.OperationAuditQuery;
 import com.guarantee.ai.service.AiChatService;
 import com.guarantee.ai.service.AiConversationService;
 import com.guarantee.ai.service.OperationAuditService;

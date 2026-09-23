@@ -2,7 +2,7 @@ package com.guarantee.ai.service;
 
 import com.guarantee.ai.entity.AiOperationAudit;
 import com.guarantee.ai.mapper.AiOperationAuditMapper;
-import com.guarantee.ai.mapper.OperationAuditQuery;
+import com.guarantee.ai.dto.OperationAuditQuery;
 import com.guarantee.common.exception.BizException;
 import com.guarantee.common.security.SensitiveFieldMasker;
 import com.guarantee.system.scope.DataScope;

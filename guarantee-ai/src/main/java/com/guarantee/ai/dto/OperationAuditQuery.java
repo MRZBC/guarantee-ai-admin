@@ -1,4 +1,4 @@
-package com.guarantee.ai.mapper;
+package com.guarantee.ai.dto;
 
 import lombok.Data;
 
@@ -8,10 +8,16 @@ import java.util.List;
 /**
  * 操作审计查询条件（同时被 {@code queryOperationAudit} 工具与页面接口复用）。
  *
- * <p><b>为什么不用通用 DTO</b>：审计查询有两条硬规则必须由查询对象自身携带——
+ * <p><b>为什么不复用通用查询对象</b>：审计查询有两条硬规则必须由查询对象自身携带——
  * ① 时间区间必填且 ≤90 天（SYS-A-17）；② 可见性规则与其它实体不同
  * （ROLE/PERMISSION 类仅 ADMIN 可见，SYS-A-10）。把规则放在查询对象里，
  * Mapper 就能无条件按它们过滤，而不是指望每个调用方都记得传。</p>
+ *
+ * <p><b>为什么在 {@code dto} 包而不是 {@code mapper} 包</b>：它是查询条件对象，
+ * 不是 MyBatis 映射接口；本仓所有同类对象都在各自模块的 {@code dto} 包下
+ * （{@code order.dto.TenderOrderQuery}、{@code analysis.dto.ProjectQuery} 等）。
+ * Mapper 只是它的**使用方**——{@code AiOperationAuditMapper} 用
+ * {@code @Param("q")} 接它，两者各归其位、互不影响分层。</p>
  *
  * <p><b>机构维度已整体移除</b>（PLAN-移除用户与部门的机构归属 §8 Q3）：
  * 用户与部门都不再挂机构，"操作人机构"没有任何数据来源，因此查询对象里

@@ -1,7 +1,7 @@
 package com.guarantee.ai.tool;
 
 import com.guarantee.ai.entity.AiOperationAudit;
-import com.guarantee.ai.mapper.OperationAuditQuery;
+import com.guarantee.ai.dto.OperationAuditQuery;
 import com.guarantee.ai.service.OperationAuditService;
 import com.guarantee.common.security.Permissions;
 import com.guarantee.common.security.Roles;

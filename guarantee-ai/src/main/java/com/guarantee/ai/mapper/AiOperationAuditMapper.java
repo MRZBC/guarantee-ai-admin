@@ -1,5 +1,6 @@
 package com.guarantee.ai.mapper;
 
+import com.guarantee.ai.dto.OperationAuditQuery;
 import com.guarantee.ai.entity.AiOperationAudit;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
