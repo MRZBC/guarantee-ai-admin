@@ -15,29 +15,97 @@ interface MenuItem {
   path: string
   title: string
   icon: string
+  /** 进入该页面所需的权限码，与 `router/index.ts` 的 `meta.permission` 一一对应 */
+  permission: string
 }
 
-const menuGroups: { title: string; icon: string; children: MenuItem[] }[] = [
+interface MenuGroup {
+  title: string
+  icon: string
+  children: MenuItem[]
+}
+
+/** 是否持有该权限码。菜单过滤只解决"看到不该看的入口"，后端仍是安全边界（SYS-NF-04）。 */
+function can(permission: string): boolean {
+  return userStore.permissions.includes(permission)
+}
+
+/**
+ * 菜单定义（含所需权限码）——**唯一数据源**。
+ *
+ * <p>原先 `menuGroups` 是硬编码常量、所有登录用户看到同一份菜单（V-4）：
+ * VIEWER 能看到"角色配置"，点进去只有 403，体验像"系统坏了"。
+ * 现在按 `userStore.permissions` 过滤（SYS-P-06），
+ * 且**分组内全部子项被过滤掉时整组不渲染**（否则会出现点不开的空分组）。</p>
+ *
+ * <p>与 `router/index.ts` 的 `meta.permission` 必须同步：菜单是"看不看得见"，
+ * 路由守卫是"直接输 URL 进不进得去"，两处用的是同一批权限码。</p>
+ */
+const menuItemsBeforeGroups: MenuItem[] = [
+  { path: '/dashboard', title: '首页', icon: 'HomeFilled', permission: 'dashboard:view' }
+]
+
+/** 这三个在视觉上排在分组之后，因此单独一组，只为保持既有顺序不变。 */
+const menuItemsAfterGroups: MenuItem[] = [
+  {
+    path: '/analysis/overview',
+    title: '数据概览',
+    icon: 'TrendCharts',
+    permission: 'analysis:overview:view'
+  },
+  { path: '/projects', title: '项目管理', icon: 'Folder', permission: 'project:view' },
+  { path: '/enterprises', title: '企业管理', icon: 'OfficeBuilding', permission: 'enterprise:view' }
+]
+
+const menuGroupDefinitions: MenuGroup[] = [
   {
     title: '订单管理',
     icon: 'Tickets',
     children: [
-      { path: '/orders/tender', title: '投标订单', icon: 'Document' },
-      { path: '/orders/performance', title: '履约订单', icon: 'DocumentChecked' }
+      { path: '/orders/tender', title: '投标订单', icon: 'Document', permission: 'order:tender:view' },
+      {
+        path: '/orders/performance',
+        title: '履约订单',
+        icon: 'DocumentChecked',
+        permission: 'order:performance:view'
+      }
     ]
   },
   {
     title: '系统配置',
     icon: 'Setting',
     children: [
-      { path: '/system/insurance-types', title: '险种配置', icon: 'Files' },
-      { path: '/system/orgs', title: '机构配置', icon: 'OfficeBuilding' },
-      { path: '/system/departments', title: '部门配置', icon: 'Grid' },
-      { path: '/system/users', title: '用户配置', icon: 'User' },
-      { path: '/system/roles', title: '角色配置', icon: 'Key' }
+      {
+        path: '/system/insurance-types',
+        title: '险种配置',
+        icon: 'Files',
+        permission: 'system:insurance:view'
+      },
+      { path: '/system/orgs', title: '机构配置', icon: 'OfficeBuilding', permission: 'system:org:view' },
+      { path: '/system/departments', title: '部门配置', icon: 'Grid', permission: 'system:dept:view' },
+      { path: '/system/users', title: '用户配置', icon: 'User', permission: 'system:user:view' },
+      { path: '/system/roles', title: '角色配置', icon: 'Key', permission: 'system:role:view' },
+      // 操作审计（P-07）：当前权限矩阵下仅 ADMIN 持有 system:audit:view
+      {
+        path: '/system/operation-audits',
+        title: '操作审计',
+        icon: 'List',
+        permission: 'system:audit:view'
+      }
     ]
   }
 ]
+
+const visibleBeforeGroups = computed(() => menuItemsBeforeGroups.filter((item) => can(item.permission)))
+
+const visibleAfterGroups = computed(() => menuItemsAfterGroups.filter((item) => can(item.permission)))
+
+/** 过滤后的分组：空分组整体剔除。 */
+const menuGroups = computed<MenuGroup[]>(() =>
+  menuGroupDefinitions
+    .map((group) => ({ ...group, children: group.children.filter((item) => can(item.permission)) }))
+    .filter((group) => group.children.length > 0)
+)
 
 /** 当前激活菜单项，直接使用路由 path */
 const activeMenu = computed(() => route.path)
@@ -88,9 +156,9 @@ function handleUserCommand(command: string): void {
           router
           unique-opened
         >
-          <el-menu-item index="/dashboard">
-            <el-icon><HomeFilled /></el-icon>
-            <template #title>首页</template>
+          <el-menu-item v-for="item in visibleBeforeGroups" :key="item.path" :index="item.path">
+            <el-icon><component :is="item.icon" /></el-icon>
+            <template #title>{{ item.title }}</template>
           </el-menu-item>
 
           <el-sub-menu v-for="group in menuGroups" :key="group.title" :index="group.title">
@@ -104,17 +172,9 @@ function handleUserCommand(command: string): void {
             </el-menu-item>
           </el-sub-menu>
 
-          <el-menu-item index="/analysis/overview">
-            <el-icon><TrendCharts /></el-icon>
-            <template #title>数据概览</template>
-          </el-menu-item>
-          <el-menu-item index="/projects">
-            <el-icon><Folder /></el-icon>
-            <template #title>项目管理</template>
-          </el-menu-item>
-          <el-menu-item index="/enterprises">
-            <el-icon><OfficeBuilding /></el-icon>
-            <template #title>企业管理</template>
+          <el-menu-item v-for="item in visibleAfterGroups" :key="item.path" :index="item.path">
+            <el-icon><component :is="item.icon" /></el-icon>
+            <template #title>{{ item.title }}</template>
           </el-menu-item>
         </el-menu>
       </el-scrollbar>

@@ -156,6 +156,10 @@ public class AiController {
      * 操作审计列表（管理页面用，**仅 ADMIN**，D-1a）。
      *
      * <p>时间区间必填且 ≤90 天（SYS-A-17）。</p>
+     *
+     * @param all 「全部」：不设条数上限（页面「条数上限 = 全部」时传 {@code true}）。
+     *            与 {@code limit} 是**两个语义**：{@code limit} 是"最多取多少条"（默认 50、上限 200），
+     *            {@code all=true} 表示"这个区间里的都要"。两者同时传时以 {@code all} 为准。
      */
     @GetMapping("/operation-audits")
     @PreAuthorize("hasAuthority('" + Permissions.AUDIT_VIEW + "')")
@@ -167,7 +171,8 @@ public class AiController {
             @RequestParam(required = false) String action,
             @RequestParam(required = false) String result,
             @RequestParam(required = false) String source,
-            @RequestParam(required = false, defaultValue = "50") Integer limit) {
+            @RequestParam(required = false, defaultValue = "50") Integer limit,
+            @RequestParam(required = false, defaultValue = "false") boolean all) {
         OperationAuditQuery query = new OperationAuditQuery();
         query.setStartDate(startDate.atStartOfDay());
         query.setEndDate(endDate.atTime(23, 59, 59));
@@ -177,6 +182,7 @@ public class AiController {
         query.setResult(result);
         query.setSource(source);
         query.setLimit(limit);
+        query.setAll(all);
         CurrentUser.Principal principal = requirePrincipal();
         DataScope scope = dataScopeService.resolve(principal.userId(), principal.roles());
         return Result.ok(auditService.query(query, principal.isAdmin(), scope));

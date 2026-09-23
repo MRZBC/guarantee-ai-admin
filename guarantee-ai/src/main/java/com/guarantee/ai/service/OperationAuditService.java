@@ -221,10 +221,27 @@ public class OperationAuditService {
         if (total == 0) {
             return new AuditPage(0L, List.of());
         }
-        int limit = clampLimit(query.getLimit());
+        // 「全部」分支：页面显式要求不限条数（`all=true`）时不做上限收敛。
+        // 唯一的护栏是上面强制校验的 ≤90 天区间（SYS-A-17）：分区裁剪已把扫描范围限定住。
+        // 注意 AI 工具 queryOperationAudit **不会**走这条分支（它不传 all），
+        // 因此 SYS-Q-06 对工具返回值的 200 条上限保持不变。
+        int limit = query.isAll() ? UNLIMITED_LIMIT : clampLimit(query.getLimit());
         List<AiOperationAudit> items = auditMapper.selectPage(query, 0, limit);
         return new AuditPage(total, items);
     }
+
+    /**
+     * 「全部」时的 LIMIT 取值。
+     *
+     * <p>{@code Integer.MAX_VALUE} 直接写进 {@code LIMIT #{limit}} 是合法的（MySQL 的 LIMIT 接受大整数），
+     * 语义就是"不设条数上限"。</p>
+     *
+     * <p><b>为什么敢放开</b>：查询本身被强制要求带 ≤90 天的 {@code operated_at} 区间，
+     * 且审计表按月分区、在线窗口 24 个月，所以这不是"全表无界扫描"。
+     * <b>代价</b>：区间内数据量很大时响应体会很大（页面上仍会如实显示"共 N 条 / 已显示 M 条"），
+     * 这是"要看全部"与"响应可控"之间的取舍，由 ADMIN 主动选择「全部」时才承担。</p>
+     */
+    public static final int UNLIMITED_LIMIT = Integer.MAX_VALUE;
 
     /** 条数上限收敛：默认 50，最大 200（SYS-Q-06）。 */
     public static int clampLimit(Integer limit) {

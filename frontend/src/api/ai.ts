@@ -2,6 +2,8 @@ import { http } from './request'
 import type {
   ConversationDetail,
   ConversationItem,
+  OperationAuditPage,
+  OperationAuditQuery,
   ProposalPayload,
   ToolCallItem
 } from '@/types/ai'
@@ -45,6 +47,20 @@ export function confirmProposal(id: number) {
 /** 拒绝提案（拒绝同样落审计，不允许无痕拒绝） */
 export function rejectProposal(id: number, reason?: string) {
   return http.post<ProposalPayload>(`/ai/proposals/${id}/reject`, { reason })
+}
+
+/* ---------------- 操作审计（P-07） ---------------- */
+
+/**
+ * 操作审计列表（页面等价于助手的 `queryOperationAudit` 工具）。
+ *
+ * <p>时间区间**必填且跨度 ≤ 90 天**（SYS-A-17），后端会拒绝无区间或超跨度的请求。</p>
+ *
+ * <p>注意：后端当前**不支持翻页**（offset 恒为 0），`limit` 的语义是"最多取多少条"，
+ * 默认 50、最大 200；响应里的 `total` 是命中总数，不是"总页数"。</p>
+ */
+export function pageOperationAudits(params: OperationAuditQuery) {
+  return http.get<OperationAuditPage>('/ai/operation-audits', { params })
 }
 
 export { streamChat, ChatStreamError, API_BASE_URL } from '@/utils/chatStream'

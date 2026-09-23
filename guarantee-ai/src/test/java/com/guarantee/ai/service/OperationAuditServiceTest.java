@@ -187,6 +187,41 @@ class OperationAuditServiceTest {
         verify(auditMapper).selectPage(any(), anyInt(), org.mockito.ArgumentMatchers.eq(200));
     }
 
+    @Test
+    @DisplayName("all=true（页面的「全部」）时不设条数上限，且不受 limit 收敛影响")
+    void shouldNotCapWhenAllRequested() {
+        OperationAuditQuery query = new OperationAuditQuery();
+        query.setStartDate(LocalDateTime.now().minusDays(7));
+        query.setEndDate(LocalDateTime.now());
+        // 同时传 limit=50：两者同时出现时以 all 为准（页面「全部」就是这样发的）
+        query.setLimit(50);
+        query.setAll(true);
+        when(auditMapper.countByQuery(any())).thenReturn(925L);
+        when(auditMapper.selectPage(any(), anyInt(), anyInt())).thenReturn(List.of());
+
+        var page = service.query(query, true, DataScope.all(1L, 1));
+
+        assertThat(page.total()).isEqualTo(925L);
+        verify(auditMapper).selectPage(any(), anyInt(),
+                org.mockito.ArgumentMatchers.eq(OperationAuditService.UNLIMITED_LIMIT));
+    }
+
+    @Test
+    @DisplayName("all 默认为 false：不传时仍然按 limit 收敛（不能因为新增开关就悄悄放开上限）")
+    void shouldStillCapWhenAllNotRequested() {
+        OperationAuditQuery query = new OperationAuditQuery();
+        query.setStartDate(LocalDateTime.now().minusDays(7));
+        query.setEndDate(LocalDateTime.now());
+        query.setLimit(500);
+        assertThat(query.isAll()).as("默认必须是 false").isFalse();
+        when(auditMapper.countByQuery(any())).thenReturn(1L);
+        when(auditMapper.selectPage(any(), anyInt(), anyInt())).thenReturn(List.of());
+
+        service.query(query, true, DataScope.all(1L, 1));
+
+        verify(auditMapper).selectPage(any(), anyInt(), org.mockito.ArgumentMatchers.eq(200));
+    }
+
     // ==================================================================
     // 范围规则（SYS-A-10 / TEST-19）
     // ==================================================================

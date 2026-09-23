@@ -40,8 +40,19 @@ public class OperationAuditQuery {
     private Long targetId;
     private String traceId;
 
-    /** 返回条数上限（默认 50，最大 200，由 Service 收敛）。 */
+    /** 返回条数上限（默认 50，最大 200，由 Service 收敛）；{@link #all} 为 true 时忽略本字段。 */
     private Integer limit;
+
+    /**
+     * 「全部」：不设条数上限（页面「条数上限 = 全部」）。
+     *
+     * <p>必须用**独立开关**而不是"把 limit 传很大"来表达：`clampLimit` 会把任何超过 200 的值收敛回 200，
+     * 传大数只会让页面显示"全部"却只拿到 200 条——那是更糟的谎报。
+     * 也不复用 {@code limit<=0}（那个语义是"没传，用默认值"），否则 AI 工具里模型传 0 就会变成不限量。</p>
+     *
+     * <p>唯一护栏仍然是强制的 ≤90 天时间区间（SYS-A-17）。</p>
+     */
+    private boolean all;
 
     /** 允许查看的目标类型白名单；{@code null} 表示不限制。 */
     private List<String> allowedTargetTypes;
