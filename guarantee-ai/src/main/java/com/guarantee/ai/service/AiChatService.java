@@ -11,6 +11,7 @@ import com.guarantee.ai.tool.ToolCallEvent;
 import com.guarantee.ai.tool.ToolCallEventSink;
 import com.guarantee.ai.vo.ChatStreamEvents;
 import com.guarantee.common.security.CurrentUser;
+import com.guarantee.common.security.Permissions;
 import com.guarantee.common.trace.TraceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -159,7 +160,18 @@ public class AiChatService {
                     resultSink.tryEmitComplete();
                 });
 
+        // 工具调用明细（工具名 / 入参 / 返回 JSON / 耗时 / 状态）是**工程遥测**：
+        // 对业务用户没有价值，还会暴露内部工具名与字段结构。因此按权限决定是否下发
+        // （AUTH：ai:debug:view）。
+        //
+        // 注意这里用 filter 而不是"不并入流"：sink 是 unicast + onBackpressureBuffer，
+        // 若无人订阅会一直缓冲。filter 保证事件始终被消费掉，只是不下发。
+        //
+        // 也正因为是在**服务端**过滤，普通用户拿不到这些数据——前端 v-if 只能让界面不显示，
+        // 数据仍在 SSE 响应里，浏览器开发者工具一开就能看到。
+        boolean toolDetailVisible = canSeeToolDetails();
         Flux<ServerSentEvent<String>> toolEvents = sink.asFlux()
+                .filter(toolCall -> toolDetailVisible)
                 .map(toolCall -> event("tool_call", toolCall));
 
         // 写工具生成的提案：必须紧跟 tool_call 之后推到前端，才能渲染确认卡（5.3.1）
@@ -451,6 +463,22 @@ public class AiChatService {
      */
     private static CurrentUser.Principal principalContext() {
         return CurrentUser.get();
+    }
+
+    /**
+     * 当前用户是否可以接收工具调用明细（{@code ai:debug:view}）。
+     *
+     * <p><b>为什么由服务端判定而不是前端隐藏</b>：{@code tool_call} 事件带着完整的
+     * 入参与返回 JSON，前端 {@code v-if} 只能让界面不显示，数据仍在响应里，浏览器
+     * 开发者工具一开就能看到。要让普通用户**真正拿不到**，只能在服务端不下发。</p>
+     *
+     * <p><b>为什么缺失主体时判为不可见（fail-closed）</b>：拿不到权限快照时应当
+     * 收敛到"不给调试信息"，而不是默认放开。工具执行与 {@code ai_tool_call} 落库
+     * **完全不受本判定影响**——隐藏的只是推给浏览器的过程事件，审计照旧。</p>
+     */
+    private static boolean canSeeToolDetails() {
+        CurrentUser.Principal principal = principalContext();
+        return principal != null && principal.hasPermission(Permissions.AI_DEBUG_VIEW);
     }
 
     private static void putIfNotNull(Map<String, Object> target, String key, Object value) {

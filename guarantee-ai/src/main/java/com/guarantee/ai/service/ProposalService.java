@@ -129,7 +129,19 @@ public class ProposalService {
             log.info("会话 {} 已存在同目标同动作的待确认提案 {}，本次不重复生成",
                     draft.conversationId(), pending.getProposalNo());
             // 仍然返回既有提案，让前端复用同一张确认卡（而不是生成第二张）
-            return toPayload(pending, draft.preview(), draft.userText());
+            ProposalPayload reused = toPayload(pending, draft.preview(), draft.userText());
+            // 但**必须照样推送**：不能假设"前端那张卡还挂着"。
+            //
+            // 真机故障：用户第二次说"再把它改回数据分析师"时命中了这条复用分支，
+            // 事件没推、卡没出现，而模型正文照旧写"请在确认卡上点击「确认执行」"
+            // ——用户看到的就是"说生成了提案、却没有卡片"。
+            // 卡不在屏上的情形很常见：刷新过页面、切过会话、前端刚做过一次待确认列表刷新，
+            // 或者用户是在另一台设备/另一个标签页发起的。
+            //
+            // 重复推送是安全的：前端 upsertProposal 按 proposalId 去重（同一张卡只被更新，不会变成两张）。
+            eventPublisher.publishProposal(draft.conversationId(),
+                    com.guarantee.ai.vo.ChatStreamEvents.Proposal.from(reused));
+            return reused;
         }
 
         AiOperationProposal entity = new AiOperationProposal();

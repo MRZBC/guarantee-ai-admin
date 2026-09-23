@@ -376,7 +376,7 @@ public class RoleService {
         impact.put("当前权限", current.getPermissionCodes());
         impact.put("变更后权限", normalize(targetPermCodes));
         impact.put("影响用户数", sysRoleMapper.selectUserIdsByRoleCode(role.getRoleCode()).size());
-        impact.put("影响", "持有该角色的用户 JWT 将被撤销，权限变更立即生效，需重新登录");
+        impact.put("影响", "持有该角色的用户会被立即强制下线，需要重新登录（新权限随即生效）");
         return impact;
     }
 
@@ -460,8 +460,8 @@ public class RoleService {
         impact.put("角色编码", role.getRoleCode());
         impact.put("持有用户数", sysRoleMapper.countUsersByRoleIds(List.of(role.getId())).stream()
                 .mapToLong(RoleCountRef::getCnt).sum());
-        impact.put("影响", "该角色默认不再出现在列表中，其权限不再签发（持有者令牌被撤销、需重新登录）；"
-                + "可在「显示已删除」中恢复");
+        impact.put("影响", "该角色默认不再出现在列表中，其权限不再签发"
+                + "（已登录的持有者会被强制下线、需重新登录）；可在「显示已删除」中恢复");
         return impact;
     }
 

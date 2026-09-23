@@ -104,7 +104,11 @@ class MyProposalsQueryToolTest {
         assertThat(item.expiresAt()).isEqualTo(expiresAt.toString());
         assertThat(item.expired()).isFalse();
         assertThat(item.toolName()).isEqualTo("proposeInsuranceTypeChange");
-        assertThat(result.meta().dataSource()).contains("queryMyProposals").contains("PENDING");
+        // 口径串是要进正文给业务用户看的：不能再出现 queryMyProposals(...) 这种函数调用样式
+        assertThat(result.meta().dataSource())
+                .contains("我的待确认提案")
+                .contains("状态：PENDING")
+                .doesNotContain("queryMyProposals");
     }
 
     @Test

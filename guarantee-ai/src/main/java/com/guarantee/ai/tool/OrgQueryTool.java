@@ -140,17 +140,6 @@ public class OrgQueryTool {
         parts.put("includeDeleted", Boolean.TRUE.equals(includeDeleted));
         parts.put("limit", limit);
         parts.put("数据范围", scope);
-        return "queryOrg(" + render(parts) + ")";
-    }
-
-    static String render(Map<String, Object> parts) {
-        StringBuilder sb = new StringBuilder();
-        parts.forEach((k, v) -> {
-            if (sb.length() > 0) {
-                sb.append(", ");
-            }
-            sb.append(k).append('=').append(v);
-        });
-        return sb.toString();
+        return DataSourceText.of("机构配置", parts);
     }
 }

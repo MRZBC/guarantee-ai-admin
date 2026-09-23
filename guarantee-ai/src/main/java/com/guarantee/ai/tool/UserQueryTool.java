@@ -180,6 +180,6 @@ public class UserQueryTool {
         parts.put("limit", limit);
         parts.put("字段集", canSeeContact ? "含脱敏手机号/邮箱" : "仅账号/姓名/部门/角色/状态");
         parts.put("数据范围", scope);
-        return "queryUser(" + OrgQueryTool.render(parts) + ")";
+        return DataSourceText.of("用户配置", parts);
     }
 }

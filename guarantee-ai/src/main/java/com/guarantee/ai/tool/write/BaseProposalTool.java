@@ -74,8 +74,9 @@ public abstract class BaseProposalTool {
             return new WriteToolResult(false, null, payload.proposalId(), payload.proposalNo(),
                     payload.summary(), payload.expiresAt(), List.of(),
                     "提案已生成，但**尚未生效**。请告知用户：在确认卡上点击「确认执行」后才会真正修改数据。",
-                    ToolResultMeta.ok("propose(" + payload.toolName() + ", action=" + payload.action()
-                            + ", target=" + payload.targetType() + ":" + payload.targetId() + ")"));
+                    // 与查询工具同一口径原则：给正文看的串里不放工具名与枚举码。
+                    // summary 本身就是人话（如「停用险种「投标保函（标准）」」）。
+                    ToolResultMeta.ok("变更提案 · " + payload.summary()));
         }
 
         public static WriteToolResult failed(String hint) {

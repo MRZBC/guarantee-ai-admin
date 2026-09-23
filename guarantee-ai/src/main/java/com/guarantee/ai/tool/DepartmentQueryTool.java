@@ -120,6 +120,6 @@ public class DepartmentQueryTool {
         parts.put("includeDeleted", Boolean.TRUE.equals(includeDeleted));
         parts.put("limit", limit);
         parts.put("数据范围", scope);
-        return "queryDepartment(" + OrgQueryTool.render(parts) + ")";
+        return DataSourceText.of("部门配置", parts);
     }
 }

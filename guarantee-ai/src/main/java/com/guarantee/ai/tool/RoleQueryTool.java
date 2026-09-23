@@ -126,7 +126,7 @@ public class RoleQueryTool {
         parts.put("数据范围", scope.description());
         log.info("Tool queryRole(ROLE) 执行完成 keyword={} 命中={} total={}", keyword, items.size(), page.total());
         return new RoleQueryToolResult("ROLE", page.total(), items, List.of(), null,
-                ToolResultMeta.ok("queryRole(" + OrgQueryTool.render(parts) + ")"));
+                ToolResultMeta.ok(DataSourceText.of("角色与权限", parts)));
     }
 
     private RoleQueryToolResult queryPermissions(String keyword, int limit, String scope) {
@@ -150,9 +150,9 @@ public class RoleQueryTool {
         boolean truncated = items.size() >= limit && all.size() > limit;
         return new RoleQueryToolResult("PERMISSION", items.size(), List.of(), items, null,
                 truncated
-                        ? ToolResultMeta.truncated("queryRole(" + OrgQueryTool.render(parts) + ")",
+                        ? ToolResultMeta.truncated(DataSourceText.of("角色与权限", parts),
                         "权限主数据超过 " + limit + " 条已截断，请缩小关键字范围")
-                        : ToolResultMeta.ok("queryRole(" + OrgQueryTool.render(parts) + ")"));
+                        : ToolResultMeta.ok(DataSourceText.of("角色与权限", parts)));
     }
 
     private RoleQueryToolResult queryRolePermissions(String roleCode, ToolContext toolContext, String scope) {
@@ -174,7 +174,7 @@ public class RoleQueryTool {
             parts.put("roleCode", code);
             parts.put("数据范围", scope);
             return new RoleQueryToolResult("ROLE_PERMISSION", 0L, List.of(), List.of(), null,
-                    ToolResultMeta.ok("queryRole(" + OrgQueryTool.render(parts) + ")；角色不存在"));
+                    ToolResultMeta.ok(DataSourceText.of("角色与权限", parts) + "；角色不存在"));
         }
         RoleVO detail = roleService.getById(role.getId());
         List<RoleQueryToolResult.PermissionItem> permissions = new ArrayList<>();
@@ -190,7 +190,7 @@ public class RoleQueryTool {
         log.info("Tool queryRole(ROLE_PERMISSION) 执行完成 roleCode={} 权限数={}", code, permissions.size());
         return new RoleQueryToolResult("ROLE_PERMISSION", permissions.size(), List.of(), List.of(),
                 new RoleQueryToolResult.RolePermissionMapping(detail.getRoleCode(), detail.getRoleName(), permissions),
-                ToolResultMeta.ok("queryRole(" + OrgQueryTool.render(parts) + ")"));
+                ToolResultMeta.ok(DataSourceText.of("角色与权限", parts)));
     }
 
     private static RoleQueryToolResult.PermissionItem toPermission(SysPermission p) {

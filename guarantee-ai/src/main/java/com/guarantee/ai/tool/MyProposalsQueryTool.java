@@ -106,7 +106,7 @@ public class MyProposalsQueryTool {
         parts.put("status", "PENDING");
         parts.put("limit", MAX_LIMIT);
         parts.put("数据范围", "仅本人 + 本会话");
-        String dataSource = "queryMyProposals(" + OrgQueryTool.render(parts) + ")";
+        String dataSource = DataSourceText.of("我的待确认提案", parts);
         log.info("Tool queryMyProposals 执行完成 userId={} conversationId={} 命中={} 未过期={}",
                 userId, conversationId, items.size(),
                 items.stream().filter(item -> !item.expired()).count());

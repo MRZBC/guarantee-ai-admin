@@ -72,8 +72,8 @@ public class UserProposalTool extends BaseProposalTool {
                     - 禁止停用自己；禁止停用最后一个启用状态的超级管理员（ADMIN）。
                     - 禁止删除自己；禁止删除最后一个启用状态的超级管理员（ADMIN）。
                     - 禁止给自己增加或移除 ADMIN 角色；禁止移除最后一个启用 ADMIN 的 ADMIN 角色。
-                    - 停用与角色分配会撤销该用户全部令牌，用户需重新登录，请在确认卡上明示。
-                    - 删除会**立即撤销**该用户全部令牌（旧 JWT 最长还能用 12 小时，不撤等于没删），
+                    - 停用与角色分配会让该用户**立即被强制下线**、需要重新登录，请在确认卡上明示。
+                    - 删除同样会**立即强制下线**（否则其登录状态最长还能持续 12 小时，等于没删），
                       且删除后该账号无法登录，登录失败提示与密码错误完全一致（防账号枚举）。
                     - 删除属**危险动作**，确认卡上有二次确认；删除**不改变启用/停用状态**，
                       恢复后回到删除前的状态。删除后可恢复（「显示已删除」）。
@@ -229,8 +229,12 @@ public class UserProposalTool extends BaseProposalTool {
             List<String> currentRoles = userService.listRoleCodesByUserId(targetId);
             List<String> targetRoles = userService.validateAssignRoles(existing, request.roleCodes(),
                     operatorUserId);
+            // 确认卡的"原值/新值"是**给业务用户看的正文**，必须显示中文角色名
+            // （ADMIN → 超级管理员）。显示编码会与同屏正文里的中文名自相矛盾。
             List<ProposalPreview.ChangeItem> changes = List.of(new ProposalPreview.ChangeItem(
-                    "roleCodes", "角色", String.join(", ", currentRoles), String.join(", ", targetRoles)));
+                    "roleCodes", "角色",
+                    String.join("，", userService.roleDisplayNames(currentRoles)),
+                    String.join("，", userService.roleDisplayNames(targetRoles))));
             Map<String, Object> impact = userService.assignRolesImpact(existing, targetRoles);
             List<String> warnings = new ArrayList<>();
             warnings.add("角色分配会立即改变该用户的权限");
@@ -252,7 +256,7 @@ public class UserProposalTool extends BaseProposalTool {
             List<String> impact = new ArrayList<>();
             impact.add("该用户当前持有角色：" + ProposalPreview.formatImpactValue(impactMap.get("持有角色")));
             impact.add("删除后该用户**无法登录**，且登录失败提示与密码错误完全一致（防账号枚举）");
-            impact.add("该用户持有的 JWT 将被**立即撤销**，需重新登录");
+            impact.add("该用户会被**立即强制下线**，需要重新登录");
             return new PreviewResult(ProposalPreview.of("删除用户：" + existing.getUsername(), changes,
                     impact,
                     List.of("删除后该用户**默认不再出现在列表中**，可通过「显示已删除」恢复",
@@ -270,7 +274,7 @@ public class UserProposalTool extends BaseProposalTool {
         Map<String, Object> impactMap = userService.stopImpact(existing);
         impact.add("该用户当前持有角色：" + ProposalPreview.formatImpactValue(impactMap.get("持有角色")));
         if (targetStatus == 0) {
-            impact.add("该用户未完结的 AI 会话将失效；其持有的 JWT 将被撤销，需重新登录");
+            impact.add("该用户未完结的 AI 会话将失效；该用户会被立即强制下线，需要重新登录");
         }
         return new PreviewResult(ProposalPreview.of(
                 (targetStatus == 0 ? "停用用户：" : "启用用户：") + existing.getUsername(),

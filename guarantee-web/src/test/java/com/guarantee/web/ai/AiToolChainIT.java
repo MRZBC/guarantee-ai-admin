@@ -4,10 +4,15 @@ import com.guarantee.ai.dto.AiChatRequest;
 import com.guarantee.ai.entity.AiToolCall;
 import com.guarantee.ai.mapper.AiToolCallMapper;
 import com.guarantee.ai.service.AiChatService;
+import com.guarantee.common.security.CurrentUser;
+import com.guarantee.common.security.Roles;
 import com.guarantee.order.dto.OrderSummaryCriteria;
 import com.guarantee.order.service.OrderStatisticsService;
 import com.guarantee.order.vo.OrderSummaryVO;
+import com.guarantee.system.service.UserService;
 import com.guarantee.web.GuaranteeAiAdminApplication;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
@@ -83,6 +88,33 @@ class AiToolChainIT {
 
     @Autowired
     private ChatModel chatModel;
+
+    @Autowired
+    private UserService userService;
+
+    /**
+     * 建立登录主体。
+     *
+     * <p>{@code AiChatService} 在请求线程上读 {@code CurrentUser}，据此决定两件事：
+     * 工具注册裁剪（权限）与**是否把 {@code tool_call} 事件下发给浏览器**
+     * （{@code ai:debug:view}）。本类直接调 Service 而不走 HTTP，所以必须自己建主体，
+     * 否则拿不到权限快照。默认给 ADMIN 的全量权限。</p>
+     */
+    @BeforeEach
+    void setUpPrincipal() {
+        setPrincipalWithPermissions(userService.listPermissionCodesByUserId(adminUserId()));
+    }
+
+    @AfterEach
+    void clearPrincipal() {
+        CurrentUser.clear();
+    }
+
+    private void setPrincipalWithPermissions(List<String> permissions) {
+        Long userId = adminUserId();
+        CurrentUser.set(new CurrentUser.Principal(userId, "admin", "超级管理员",
+                List.of(Roles.ADMIN), permissions));
+    }
 
     @Test
     @DisplayName("AI 提出的 Tool Call 必须命中真实数据库，且结果与直接调用 Service 完全一致")
@@ -191,6 +223,49 @@ class AiToolChainIT {
                 .as("工具执行结果必须回灌给模型")
                 .contains("orderCount")
                 .contains("guaranteeAmount");
+    }
+
+    @Test
+    @DisplayName("无 ai:debug:view 时不下发 tool_call 事件，但工具照常执行、照常落库（可见性与审计解耦）")
+    void toolCallEventsAreNotSentWithoutDebugPermission() {
+        // 只给"能用助手"的最小权限：不含 ai:debug:view
+        setPrincipalWithPermissions(List.of("ai:chat"));
+
+        AiChatRequest request = new AiChatRequest();
+        request.setMessage(QUESTION);
+
+        StubToolCallingChatModel stub = (StubToolCallingChatModel) chatModel;
+        int before = stub.modelInvocations();
+
+        List<ServerSentEvent<String>> events = aiChatService.stream(adminUserId(), request)
+                .collectList()
+                .block(Duration.ofSeconds(90));
+
+        assertThat(events).isNotNull().isNotEmpty();
+        assertThat(events)
+                .as("普通用户不应收到工具调用明细。必须在**服务端**过滤——"
+                        + "前端 v-if 只能让界面不显示，事件里的入参与结果 JSON 仍在响应体中")
+                .noneMatch(e -> "tool_call".equals(e.event()));
+
+        // 但工具本身必须照常执行、照常落库：隐藏的只是过程事件，不是能力
+        assertThat(stub.modelInvocations() - before)
+                .as("工具仍应被执行（模型仍被调用两次：发起工具调用 → 基于结果作答）")
+                .isEqualTo(2);
+        assertThat(stub.lastToolResponse())
+                .as("工具结果仍要回灌给模型，否则答案就没有数据支撑了")
+                .contains("orderCount");
+
+        String answer = events.stream()
+                .filter(e -> "delta".equals(e.event()))
+                .map(ServerSentEvent::data)
+                .reduce("", (a, b) -> a + extractContent(b));
+        assertThat(answer).as("正文照常流式返回").contains(StubToolCallingChatModel.ANSWER_PART_1);
+
+        Map<String, Object> meta = firstData(events, "meta");
+        long conversationId = ((Number) meta.get("conversationId")).longValue();
+        assertThat(aiToolCallMapper.selectByConversationId(conversationId))
+                .as("ai_tool_call 落库与事件下发是两件事：审计必须完整，不因用户看不到而丢失")
+                .hasSize(1);
     }
 
     private Long adminUserId() {

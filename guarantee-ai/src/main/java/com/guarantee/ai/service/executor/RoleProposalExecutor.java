@@ -92,7 +92,7 @@ public class RoleProposalExecutor implements ProposalExecutor {
         Map<String, Object> afterMap = Map.of("permissionCodes",
                 updated.getPermissionCodes() == null ? List.of() : updated.getPermissionCodes());
         List<String> notes = java.util.List.of(
-                "持有该角色的用户 JWT 已被撤销，权限变更立即生效，需重新登录");
+                "持有该角色的用户已被立即强制下线，需要重新登录（新权限随即生效）");
         if (Roles.ADMIN.equalsIgnoreCase(role.getRoleCode())) {
             notes = java.util.List.of("超级管理员角色不允许变更权限");
         }
@@ -124,7 +124,7 @@ public class RoleProposalExecutor implements ProposalExecutor {
                 "角色「" + deleted.getRoleName() + "」（" + deleted.getRoleCode() + "）已删除"
                         + "（默认不再出现在列表中，可在「显示已删除」中恢复）", before, after,
                 List.of(),
-                List.of("持有该角色的用户 JWT 已被撤销，需重新登录",
+                List.of("持有该角色的用户已被强制下线，需要重新登录",
                         "删除不改变启用/停用状态，恢复后回到删除前的状态（LD-02）；"
                                 + "恢复时要求角色编码未被有效角色占用"));
     }

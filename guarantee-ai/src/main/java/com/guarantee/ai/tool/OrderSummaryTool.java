@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -106,19 +107,31 @@ public class OrderSummaryTool {
         return today + " (" + today.getDayOfWeek() + ")";
     }
 
+    /** 订单类型编码 -> 业务名称，用于口径回显（用户看到"投标保函"而不是"TENDER"）。 */
+    private static final Map<String, String> ORDER_TYPE_NAMES = Map.of(
+            "TENDER", "投标保函",
+            "PERFORMANCE", "履约保函",
+            "ALL", "全部险种");
+
+    /**
+     * 组装业务口径文本（SYS-N-08：回答末尾要回显"这批数字是什么口径"）。
+     *
+     * <p>刻意**不含工具名与参数名**：那是函数调用样式的内部语法，业务用户读不懂，
+     * 而且它本来就会出现在开发者专属的工具调用卡里（{@code ai:debug:view}）。
+     * 这里的输出是**要进正文**的，所以只讲口径。</p>
+     */
     private static String buildDataSource(String orderType, LocalDate start, LocalDate end,
                                           String regionCode, Long orgId) {
-        StringBuilder sb = new StringBuilder("queryOrderSummary(orderType=").append(orderType);
-        sb.append(", startDate=").append(start == null ? "不限" : start);
-        sb.append(", endDate=").append(end == null ? "不限" : end);
-        if (regionCode != null && !regionCode.isBlank()) {
-            sb.append(", region=").append(regionCode)
-                    .append(REGION_NAMES.containsKey(regionCode) ? "(" + REGION_NAMES.get(regionCode) + ")" : "");
+        Map<String, Object> parts = new LinkedHashMap<>();
+        parts.put("orderType", ORDER_TYPE_NAMES.getOrDefault(orderType, orderType));
+        if (start != null || end != null) {
+            parts.put("时间区间", (start == null ? "不限" : start) + " ~ " + (end == null ? "不限" : end));
         }
-        if (orgId != null) {
-            sb.append(", orgId=").append(orgId);
-        }
-        return sb.append(")").toString();
+        parts.put("region", regionCode == null || regionCode.isBlank()
+                ? "不限"
+                : regionCode + (REGION_NAMES.containsKey(regionCode) ? "（" + REGION_NAMES.get(regionCode) + "）" : ""));
+        parts.put("orgId", orgId);
+        return DataSourceText.of("订单统计", parts);
     }
 
     private static LocalDate parseDate(String raw, String field) {

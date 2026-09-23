@@ -7,6 +7,7 @@ import com.guarantee.common.security.UserTokenRevoker;
 import com.guarantee.system.dto.UserDto;
 import com.guarantee.system.dto.UserRoleRef;
 import com.guarantee.system.entity.SysUser;
+import com.guarantee.system.entity.SysRole;
 import com.guarantee.system.entity.SysDepartment;
 import com.guarantee.system.mapper.SysDepartmentMapper;
 import com.guarantee.system.mapper.SysRoleMapper;
@@ -132,6 +133,37 @@ public class UserService {
     @Transactional(readOnly = true)
     public List<String> listRoleCodesByUserId(Long userId) {
         return sysUserMapper.listRoleCodesByUserId(userId);
+    }
+
+    /**
+     * 角色编码 → 面向用户的展示名（{@code ADMIN} → {@code 超级管理员}）。
+     *
+     * <p><b>为什么必须转换</b>：返回的这些名称会进入确认卡的变更明细与影响面，
+     * 那是**给业务用户看的正文**。直接显示编码等于把内部枚举码丢给用户——
+     * 真机上出现过同一屏里正文写「该用户将从超级管理员降为数据分析师」、
+     * 而确认卡写「当前角色 ADMIN；变更后角色 ANALYST」的割裂。</p>
+     *
+     * <p><b>查不到的编码原样返回</b>：宁可偶尔露出一个编码，也不能静默丢掉一个角色
+     * ——那会让影响面与实际变更不一致，比不好看严重得多。</p>
+     *
+     * <p><b>注意与逻辑判定的区分</b>：{@code Roles.ADMIN.equals(...)} 这类判断必须继续用编码，
+     * 不能改用展示名。本方法只服务展示。</p>
+     */
+    @Transactional(readOnly = true)
+    public List<String> roleDisplayNames(java.util.Collection<String> roleCodes) {
+        if (roleCodes == null || roleCodes.isEmpty()) {
+            return List.of();
+        }
+        List<String> codes = roleCodes.stream().filter(Objects::nonNull).distinct().toList();
+        if (codes.isEmpty()) {
+            return List.of();
+        }
+        Map<String, String> names = sysRoleMapper.selectEntityByCodes(codes).stream()
+                .filter(role -> role.getRoleCode() != null)
+                .collect(Collectors.toMap(SysRole::getRoleCode,
+                        role -> role.getRoleName() == null ? role.getRoleCode() : role.getRoleName(),
+                        (first, second) -> first));
+        return codes.stream().map(code -> names.getOrDefault(code, code)).toList();
     }
 
     /** 当前用户的启用权限编码（多角色去重），供认证与鉴权使用。 */
@@ -373,20 +405,21 @@ public class UserService {
     /** 停用影响面：未完结会话数、持有角色、是否最后一个 ADMIN（SYS-W-04）。 */
     public Map<String, Object> stopImpact(SysUser user) {
         Map<String, Object> impact = new LinkedHashMap<>();
+        // 逻辑判定用编码，展示用中文名——两者不能混（见 roleDisplayNames）
         List<String> roles = sysUserMapper.listRoleCodesByUserId(user.getId());
-        impact.put("持有角色", roles);
+        impact.put("持有角色", roleDisplayNames(roles));
         impact.put("是否最后一个启用管理员",
                 roles.contains(Roles.ADMIN) && sysUserMapper.countOtherEnabledAdmins(user.getId()) == 0);
-        impact.put("影响", "该用户未完结的 AI 会话将失效，其持有的 JWT 将被撤销，需重新登录");
+        impact.put("影响", "该用户未完结的 AI 会话将失效；该用户会被立即强制下线，需要重新登录");
         return impact;
     }
 
-    /** 角色变更影响面：当前 -> 变更后。 */
+    /** 角色变更影响面：当前 -> 变更后（均以中文角色名展示）。 */
     public Map<String, Object> assignRolesImpact(SysUser user, List<String> targetRoleCodes) {
         Map<String, Object> impact = new LinkedHashMap<>();
-        impact.put("当前角色", sysUserMapper.listRoleCodesByUserId(user.getId()));
-        impact.put("变更后角色", targetRoleCodes);
-        impact.put("影响", "该用户持有的 JWT 将被撤销，其权限变更立即生效，需重新登录");
+        impact.put("当前角色", roleDisplayNames(sysUserMapper.listRoleCodesByUserId(user.getId())));
+        impact.put("变更后角色", roleDisplayNames(targetRoleCodes));
+        impact.put("影响", "该用户会被立即强制下线，需要重新登录（新权限随即生效）");
         return impact;
     }
 
@@ -491,11 +524,11 @@ public class UserService {
     /** 删除影响面（确认卡明示）。 */
     public Map<String, Object> deleteImpact(SysUser user) {
         Map<String, Object> impact = new LinkedHashMap<>();
-        impact.put("持有角色", sysUserMapper.listRoleCodesByUserId(user.getId()));
+        impact.put("持有角色", roleDisplayNames(sysUserMapper.listRoleCodesByUserId(user.getId())));
         impact.put("是否最后一个启用管理员",
                 hasRole(user.getId(), Roles.ADMIN)
                         && sysUserMapper.countOtherEnabledAdmins(user.getId()) == 0);
-        impact.put("影响", "该用户默认不再出现在列表中且无法登录，其持有的 JWT 会被立即撤销；"
+        impact.put("影响", "该用户默认不再出现在列表中且无法登录；若当前处于登录状态，会被立即强制下线。"
                 + "可在「显示已删除」中恢复");
         return impact;
     }

@@ -132,7 +132,7 @@ public class OperationAuditQueryTool {
         parts.put("source", source == null ? "不限" : source);
         parts.put("limit", OperationAuditService.clampLimit(limit));
         parts.put("数据范围", scope.description());
-        String dataSource = "queryOperationAudit(" + OrgQueryTool.render(parts) + ")";
+        String dataSource = DataSourceText.of("操作审计", parts);
         log.info("Tool queryOperationAudit 执行完成 {}~{} 命中={} total={}",
                 startDate, endDate, items.size(), page.total());
         return new OperationAuditQueryToolResult(page.total(), items, null, ToolResultMeta.ok(dataSource));

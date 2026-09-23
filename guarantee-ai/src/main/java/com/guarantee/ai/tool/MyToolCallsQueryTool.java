@@ -114,7 +114,7 @@ public class MyToolCallsQueryTool {
         parts.put("status", status == null ? "不限" : status);
         parts.put("limit", effectiveLimit);
         parts.put("数据范围", "仅本人");
-        String dataSource = "queryMyToolCalls(" + OrgQueryTool.render(parts) + ")";
+        String dataSource = DataSourceText.of("我的工具调用记录", parts);
         log.info("Tool queryMyToolCalls 执行完成 userId={} 命中={} total={}", userId, items.size(), page.total());
         return new MyToolCallsToolResult(page.total(), items, ToolResultMeta.ok(dataSource));
     }

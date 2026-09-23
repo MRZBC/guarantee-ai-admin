@@ -54,7 +54,7 @@ public class RoleProposalTool extends BaseProposalTool {
                     - 超级管理员（ADMIN）角色不允许修改、不允许变更权限，**也不允许删除**。
                     - 授权只能选择系统里**已经存在**的权限码（例如 system:org:view、ai:chat），
                       不接受自定义或新造权限码。可先用 queryRole(mode=PERMISSION) 查询可用权限码。
-                    - 授权变更会撤销所有持有该角色用户的 JWT，权限立即生效，需重新登录。
+                    - 授权变更会让所有持有该角色的用户**立即被强制下线**，需要重新登录，权限随即生效。
                     - 删除的检查更严格：仍有未删除的用户持有该角色时会被拒绝，失败信息会带持有用户数，
                       请如实转述并建议"先解除这些用户的角色绑定，或改用其他方式停用其访问"。
                     - 删除属**危险动作**，确认卡上有二次确认；删除后可恢复（「显示已删除」），
@@ -192,7 +192,7 @@ public class RoleProposalTool extends BaseProposalTool {
             return ProposalPreview.of("删除角色：" + target.getRoleName(), changes, impact,
                     List.of("删除后该角色**默认不再出现在列表中**，可通过「显示已删除」恢复",
                             "删除**不改变启用/停用状态**，恢复后回到删除前的状态",
-                            "持有该角色的用户 JWT 会被撤销，需重新登录",
+                            "持有该角色的用户会被强制下线，需要重新登录",
                             "删除属危险动作，需二次确认"),
                     true);
         }

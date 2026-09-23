@@ -93,7 +93,7 @@ public class UserProposalExecutor implements ProposalExecutor {
         String word = target == 1 ? "启用" : "停用";
         List<String> notes = new ArrayList<>();
         if (target == 0) {
-            notes.add("该用户未完结的 AI 会话将失效，其持有的 JWT 已被撤销，需重新登录");
+            notes.add("该用户未完结的 AI 会话将失效；该用户已被立即强制下线，需要重新登录");
         }
         return ProposalExecutionResult.ok(
                 "用户「" + updated.getUsername() + "」已" + word, before, after,
@@ -113,12 +113,14 @@ public class UserProposalExecutor implements ProposalExecutor {
         Map<String, Object> after = Map.of("roleCodes", targetRoles);
         boolean adminTouched = currentRoles.contains(Roles.ADMIN) || targetRoles.contains(Roles.ADMIN);
         List<String> notes = new ArrayList<>();
-        notes.add("该用户持有的 JWT 已被撤销，权限变更立即生效，需重新登录");
+        notes.add("该用户已被立即强制下线，需要重新登录（新权限随即生效）");
         if (adminTouched) {
-            notes.add("本次变更涉及超级管理员（ADMIN）角色，请确认影响面");
+            notes.add("本次变更涉及超级管理员角色，请确认影响面");
         }
         return ProposalExecutionResult.ok(
-                "用户「" + updated.getUsername() + "」角色已变更为 " + targetRoles,
+                // 结果是给用户看的：角色必须显示中文名，不能把编码（ANALYST）丢出去
+                "用户「" + updated.getUsername() + "」角色已变更为 "
+                        + String.join("，", userService.roleDisplayNames(targetRoles)),
                 before, after, List.of(proposal.getTargetId()), notes);
     }
 
@@ -144,7 +146,7 @@ public class UserProposalExecutor implements ProposalExecutor {
         Map<String, Object> before = Map.of("isDeleted", 0);
         Map<String, Object> after = Map.of("isDeleted", 1);
         List<String> notes = new ArrayList<>();
-        notes.add("该用户持有的 JWT 已被立即撤销，需重新登录");
+        notes.add("该用户已被立即强制下线，需要重新登录");
         notes.add("删除不改变启用/停用状态，恢复后回到删除前的状态（LD-02）；"
                 + "恢复时要求其所属部门已恢复");
         notes.add("删除后账号无法登录，且登录失败提示与密码错误完全一致（防账号枚举，LD-05）");

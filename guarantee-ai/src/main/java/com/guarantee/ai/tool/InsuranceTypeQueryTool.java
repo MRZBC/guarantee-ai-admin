@@ -104,7 +104,7 @@ public class InsuranceTypeQueryTool {
         parts.put("status", status == null ? "不限" : status);
         parts.put("includeDeleted", Boolean.TRUE.equals(includeDeleted));
         parts.put("limit", effectiveLimit);
-        String dataSource = "queryInsuranceType(" + OrgQueryTool.render(parts) + ")";
+        String dataSource = DataSourceText.of("险种配置", parts);
         log.info("Tool queryInsuranceType 执行完成 keyword={} category={} 命中={} total={}",
                 keyword, category, items.size(), page.total());
         return new InsuranceTypeQueryToolResult(page.total(), items, ToolResultMeta.ok(dataSource));

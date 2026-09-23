@@ -228,9 +228,14 @@ class ProposalFlowIT {
                 .hasMessageContaining("不允许给自己增加或移除超级管理员");
 
         // ③ 演示数据里只有 admin 一个 ADMIN：确认"最后一个 ADMIN"这一前提成立
+        //
+        // 必须过滤 is_deleted = 0：关联表用的是 UPSERT 语义（见 DEC-逻辑删除设计方案 §4），
+        // 取消一个角色分配只会把旧行置为 is_deleted = 1，历史行**仍然留在表里**。
+        // 不过滤就会把"曾经是 ADMIN、现在已经不是"的历史行也算进来，
+        // 让这条前置断言在库里有任何历史角色变更后必然失败（真机踩过）。
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM sys_user_role ur INNER JOIN sys_role r ON r.id = ur.role_id "
-                        + "WHERE r.role_code = 'ADMIN'", Integer.class))
+                        + "WHERE r.role_code = 'ADMIN' AND ur.is_deleted = 0", Integer.class))
                 .as("只有 admin 一个 ADMIN，才可能触发'最后一个'分支")
                 .isEqualTo(1);
     }
