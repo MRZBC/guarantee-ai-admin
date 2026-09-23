@@ -209,6 +209,46 @@ export interface UserQuery extends PageQuery {
   status?: number | null
 }
 
+/* ---------------- 在线会话（AUTH-05） ---------------- */
+
+/**
+ * 一条在线会话。
+ *
+ * <p>`idleExpiresAt` 与 `absoluteExpiresAt` 语义不同，**必须都展示**：
+ * 前者是"再没有请求就到此为止"（有活动会顺延），后者是"自登录起算的硬上限"（不会延长）。
+ * 只显示其中一个会让人误判会话还能用多久。</p>
+ */
+export interface SessionItem {
+  /** 会话标识（令牌 jti）。不是凭据，展示与传递都安全 */
+  jti: string
+  userId: number | null
+  username: string | null
+  realName: string | null
+  loginAt: string | null
+  /** 空闲到期时间（有请求即顺延） */
+  idleExpiresAt: string | null
+  /** 绝对上限到期时间（自登录起算，不会延长） */
+  absoluteExpiresAt: string | null
+  loginIp: string | null
+  userAgent: string | null
+  /** 是否为当前请求所用的会话（用于"你正在踢出自己"的提示） */
+  current: boolean
+}
+
+export interface SessionQuery extends PageQuery {
+  userId?: number
+  username?: string
+  keyword?: string
+}
+
+/** 强制下线的结果 */
+export interface SessionKickResult {
+  /** 实际终止的会话数 */
+  kicked: number
+  /** 被终止的会话里是否包含发起者自己当前所用的会话 */
+  selfKicked: boolean
+}
+
 /** 角色配置 */
 export interface RoleItem {
   id: number

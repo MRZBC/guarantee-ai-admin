@@ -17,6 +17,9 @@ import type {
   PermissionItem,
   RoleItem,
   RoleQuery,
+  SessionItem,
+  SessionKickResult,
+  SessionQuery,
   UserItem,
   UserQuery
 } from '@/types/system'
@@ -186,4 +189,27 @@ export function deleteRole(id: number) {
 
 export function listPermissions() {
   return http.get<PermissionItem[]>('/system/permissions')
+}
+
+
+/* ---------------- 在线会话（AUTH-05，权限：system:session:view / :kick） ---------------- */
+
+/** 在线会话列表 */
+export function pageSessions(params: SessionQuery) {
+  return http.get<PageResult<SessionItem>>('/system/sessions', { params })
+}
+
+/**
+ * 踢出单个会话。
+ *
+ * <p>踢出对**下一个请求**生效：不会中断对方正在进行的流式对话（该请求已通过认证）。
+ * 返回的 `selfKicked` 为 true 时说明踢的是自己当前的会话，调用方应提示并跳登录页。</p>
+ */
+export function kickSession(jti: string) {
+  return http.delete<SessionKickResult>(`/system/sessions/${encodeURIComponent(jti)}`)
+}
+
+/** 踢出某用户的全部会话（对方若有多个浏览器/设备，单踢一个不够） */
+export function kickUserSessions(userId: number) {
+  return http.delete<SessionKickResult>('/system/sessions', { params: { userId } })
 }

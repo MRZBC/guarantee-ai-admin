@@ -20,6 +20,19 @@ public final class Permissions {
     /** 助手侧系统管理**写**能力开关（仅 ADMIN 持有）。 */
     public static final String AI_SYSTEM_WRITE = "ai:system:write";
 
+    /**
+     * 接收 AI 工具调用明细（工具名 / 入参 / 返回 JSON / 耗时 / 状态）。
+     *
+     * <p>这是**工程遥测**，不是业务能力：业务用户看不到任何有价值的信息，
+     * 反而会暴露内部工具名与字段结构。因此默认只授予 ADMIN，
+     * 需要在 `PermissionCatalog` 里按"谁是开发者"调整。</p>
+     *
+     * <p><b>它是服务端开关，不是前端显隐开关</b>：{@code AiChatService} 据此决定是否把
+     * {@code tool_call} 事件并入 SSE 流。前端隐藏做不到"用户看不到"——
+     * 事件里的完整入参与结果 JSON 仍在响应体中。</p>
+     */
+    public static final String AI_DEBUG_VIEW = "ai:debug:view";
+
     // ---------------- 险种 ----------------
 
     public static final String INSURANCE_VIEW = "system:insurance:view";
@@ -79,6 +92,22 @@ public final class Permissions {
     // ---------------- 操作审计（D-1a：仅 ADMIN） ----------------
 
     public static final String AUDIT_VIEW = "system:audit:view";
+
+    // ---------------- 在线会话（AUTH-05：仅 ADMIN） ----------------
+
+    /**
+     * 查看在线会话。
+     *
+     * <p>列表包含全员登录 IP 与 User-Agent，属运维级信息，仅授予 ADMIN。</p>
+     */
+    public static final String SESSION_VIEW = "system:session:view";
+
+    /**
+     * 强制下线（踢出会话）。
+     *
+     * <p>"影响他人"的写操作，风险等级与删除相当，不下放给 OPERATOR（AUTH-05 §7）。</p>
+     */
+    public static final String SESSION_KICK = "system:session:kick";
 
     // ---------------- 业务域（既有，供角色分配清单引用） ----------------
 

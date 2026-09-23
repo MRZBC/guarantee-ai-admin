@@ -62,9 +62,18 @@ public final class PermissionCatalog {
             {"system:permission:view", "权限配置", null},
             {"system:audit:view", "操作审计", null},
 
+            // 在线会话（AUTH-05）：仅 ADMIN。列表含全员登录 IP / User-Agent，
+            // 踢出是"影响他人"的写操作，风险等级与删除相当，不下放给 OPERATOR。
+            {"system:session:view", "在线会话查看", null},
+            {"system:session:kick", "在线会话踢出", null},
+
             {"ai:chat", "AI 业务助手", null},
             {"ai:system:query", "AI 系统管理查询", null},
             {"ai:system:write", "AI 系统管理写操作", null},
+            // AI 工具调用明细（工具名/入参/返回 JSON/耗时）。工程遥测，非业务能力：
+            // 由服务端据此决定是否把 tool_call 事件推给浏览器，因此是真正的可见性边界。
+            // 默认只给 ADMIN —— "谁是开发者"就在这一行调整。
+            {"ai:debug:view", "AI 调试信息", null},
     };
 
     /** 角色编码 / 角色名称 / 描述，数组下标 + 1 即角色 id（与初始化顺序一致）。 */
@@ -150,6 +159,10 @@ public final class PermissionCatalog {
         return code.endsWith(":create") || code.endsWith(":update") || code.endsWith(":disable")
                 || code.endsWith(":delete")
                 || code.endsWith(":assign-role") || code.endsWith(":assign-permission")
+                // :kick 是"影响他人"的写操作（AUTH-05）。漏掉它会让 writePermissions() 的
+                // SYS-P-12 断言（ANALYST / VIEWER 的写权限清单必须为空）漏检该权限——
+                // 一旦将来误授给 VIEWER，这套护栏会静默失效。
+                || code.endsWith(":kick")
                 || "ai:system:write".equals(code);
     }
 }

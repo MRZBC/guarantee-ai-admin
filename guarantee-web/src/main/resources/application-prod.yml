@@ -1,0 +1,26 @@
+# ---------------------------------------------------------------------
+# 生产环境覆盖（激活方式：--spring.profiles.active=prod 或 SPRING_PROFILES_ACTIVE=prod）
+#
+# 本文件的唯一职责是**把"能启动但不安全"的默认值在生产环境变成"启动失败"**（AUTH-03）。
+# 其余配置继承 application.yml。
+# ---------------------------------------------------------------------
+
+guarantee:
+  auth:
+    jwt:
+      # 刻意**不提供默认值**：未设置 JWT_SECRET 时应用启动失败（AUTH-03）。
+      #
+      # 实测提醒：Spring Boot 的 Binder 会**忽略无法解析的占位符**，不会自己报
+      # "Could not resolve placeholder" —— 它把字面量 "${JWT_SECRET}"（13 字符）原样绑下去。
+      # 因此真正的拦截点是 JwtTokenProvider 的密钥守卫，它会识别出"值仍是占位符"并给出
+      # 明确提示（否则只会报"长度不足 32 字节（当前 13）"，把人引向错误的排查方向）。
+      secret: ${JWT_SECRET}
+
+      # 显式重申：拒绝内置默认密钥（即使 application.yml 被误改为 false 也不受影响）。
+      reject-known-default: true
+
+    # 生产部署若位于可信反向代理（Nginx / SLB）之后，按需放开本项以启用 IP 维度限流。
+    # **前提**：代理必须覆写 X-Forwarded-For。否则该头可被客户端任意伪造，
+    # 攻击者每次换一个假 IP 即可完全绕过 IP 维度（见方案 §4.1.5）。
+    # login-guard:
+    #   trust-forwarded-header: true

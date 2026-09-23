@@ -50,6 +50,14 @@ class LogicalDeleteWebIT {
 
     private static final String P = "__ldtw_";
 
+    /**
+     * 直调 Service 时传入的客户端 IP（AUTH-01）。
+     *
+     * <p>本类不走 HTTP，拿不到真实来源；显式传一个固定回环地址，让登录失败计数
+     * 落在可预期的 key 上（阈值 5，本类最多失败 2 次，不会触发锁定）。</p>
+     */
+    private static final String TEST_CLIENT_IP = "127.0.0.1";
+
     @Autowired
     private AuthService authService;
     @Autowired
@@ -102,18 +110,18 @@ class LogicalDeleteWebIT {
                 "SELECT id FROM sys_user WHERE username = ?", Long.class, username);
 
         // ① 正常可登录
-        assertThat(authService.login(loginRequest(username, rawPassword)).token()).isNotBlank();
+        assertThat(authService.login(loginRequest(username, rawPassword), TEST_CLIENT_IP).token()).isNotBlank();
 
         // ② 密码错误：作为"提示文案基准"
         BizException wrongPassword = catchThrowableOfType(
-                () -> authService.login(loginRequest(username, "Wrong@123456")), BizException.class);
+                () -> authService.login(loginRequest(username, "Wrong@123456"), TEST_CLIENT_IP), BizException.class);
         assertThat(wrongPassword).isNotNull();
         assertThat(wrongPassword.getCode()).isEqualTo(ResultCode.LOGIN_FAILED.code());
 
         // ③ 已停用仍返回 ACCOUNT_DISABLED（LD-05a：停用是给用户的明确信号，现状不变）
         jdbcTemplate.update("UPDATE sys_user SET status = 0 WHERE id = ?", userId);
         BizException disabled = catchThrowableOfType(
-                () -> authService.login(loginRequest(username, rawPassword)), BizException.class);
+                () -> authService.login(loginRequest(username, rawPassword), TEST_CLIENT_IP), BizException.class);
         assertThat(disabled.getCode()).as("停用与删除必须可区分（LD-05a）")
                 .isEqualTo(ResultCode.ACCOUNT_DISABLED.code());
         jdbcTemplate.update("UPDATE sys_user SET status = 1 WHERE id = ?", userId);
@@ -121,7 +129,7 @@ class LogicalDeleteWebIT {
         // ④ 逻辑删除后：提示必须与密码错误逐字相同——否则可用它探测账号是否存在
         userService.delete(userId, adminScope(), adminId());
         BizException deleted = catchThrowableOfType(
-                () -> authService.login(loginRequest(username, rawPassword)), BizException.class);
+                () -> authService.login(loginRequest(username, rawPassword), TEST_CLIENT_IP), BizException.class);
         assertThat(deleted).isNotNull();
         assertThat(deleted.getCode()).as("已删除用户必须返回 LOGIN_FAILED").isEqualTo(ResultCode.LOGIN_FAILED.code());
         assertThat(deleted.getMessage()).as("提示文案必须与密码错误完全一致（防账号枚举）")

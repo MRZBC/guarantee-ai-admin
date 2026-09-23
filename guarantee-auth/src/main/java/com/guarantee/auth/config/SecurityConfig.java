@@ -38,7 +38,8 @@ import java.util.List;
 @Configuration(proxyBeanMethods = false)
 @EnableWebSecurity
 @EnableMethodSecurity
-@EnableConfigurationProperties({JwtProperties.class, CorsProperties.class})
+@EnableConfigurationProperties({JwtProperties.class, CorsProperties.class,
+        LoginGuardProperties.class, RevocationProperties.class})
 public class SecurityConfig {
 
     @Bean
@@ -51,6 +52,7 @@ public class SecurityConfig {
                                                    JwtTokenProvider tokenProvider,
                                                    TokenRevocationService revocationService,
                                                    com.guarantee.auth.security.UserTokenRevocation userTokenRevocation,
+                                                   com.guarantee.common.security.SessionRegistry sessionRegistry,
                                                    CorsConfigurationSource corsConfigurationSource,
                                                    ObjectMapper objectMapper) throws Exception {
         RestAuthErrorHandlers errorHandlers = new RestAuthErrorHandlers(objectMapper);
@@ -68,6 +70,13 @@ public class SecurityConfig {
                         .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/api/auth/login").permitAll()
+                        // 登出必须放行（AUTH-06）：令牌已过期时，请求在本过滤器之后仍是匿名的，
+                        // 若不放行会被 AuthenticationEntryPoint 拦成 401 —— 而登出的语义承诺是
+                        // "即使令牌已过期也返回成功"。前端拿到 401 会走「登录已失效」分支并
+                        // window.location.reload()，用户主动登出反而看到报错 + 整页刷新。
+                        // 安全性：登出只删除**请求中呈现的令牌**对应的 jti，不提供其它能力；
+                        // 要调用它必须先持有该令牌，不构成新的攻击面。
+                        .requestMatchers("/api/auth/logout").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/info").permitAll()
                         // 前端静态资源（管理后台首页）无需登录即可加载，登录由前端路由守卫处理
                         .requestMatchers("/", "/index.html", "/favicon.svg", "/assets/**").permitAll()
@@ -75,7 +84,8 @@ public class SecurityConfig {
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(errorHandlers)
                         .accessDeniedHandler(errorHandlers))
-                .addFilterBefore(new JwtAuthenticationFilter(tokenProvider, revocationService, userTokenRevocation),
+                .addFilterBefore(new JwtAuthenticationFilter(tokenProvider, revocationService,
+                                userTokenRevocation, sessionRegistry),
                         UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

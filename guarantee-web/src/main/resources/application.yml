@@ -74,10 +74,49 @@ mybatis:
 guarantee:
   auth:
     jwt:
-      # 生产环境必须通过环境变量覆盖
+      # 本地开发默认值。生产环境由 application-prod.yml 覆盖为 ${JWT_SECRET}（无默认值，未设置即启动失败）。
       secret: ${JWT_SECRET:guarantee-ai-admin-local-dev-secret-key-please-change-in-production}
-      expire-minutes: 720
+      # 本地开发允许使用内置默认密钥零配置启动；prod profile 下强制为 true（AUTH-03）。
+      reject-known-default: false
+      # 绝对上限：自登录起算，无论多活跃都不超过。写入 JWT 的 exp。
+      # 注意：原名 expire-minutes 已更名，配置旧名会启动失败（见 JwtProperties#setExpireMinutes）
+      absolute-expire-minutes: 720
+      # 空闲超时（AUTH-04）：Redis 白名单 TTL，有请求即续期。
+      # 设为与 absolute-expire-minutes 相同即退化为"固定有效期"（AUTH-04 之前的行为）。
+      idle-timeout-minutes: 240
       issuer: guarantee-ai-admin
+
+    # ---------------------------------------------------------------------
+    # 登录失败防爆破（AUTH-01）
+    #   账号维度：窗口内连续失败达阈值即锁定，文案与"密码错误"可区分。
+    #   IP 维度 ：阈值更高，避免 NAT / 办公网出口误伤。
+    #   两者均对"不存在的用户名"同样计数——否则"会不会被锁"就成了账号枚举侧信道。
+    #
+    # 时长用 Duration 语法（15m / 30s 均可），对应 LoginGuardProperties 的
+    # failureWindow / userLock / ipLock。**键名写错会启动失败**（该类开了
+    # ignoreUnknownFields = false）——曾经写成 *-minutes 导致三个键全部被静默忽略。
+    # ---------------------------------------------------------------------
+    login-guard:
+      enabled: true
+      max-failures-per-user: 5
+      max-failures-per-ip: 20
+      failure-window: 15m
+      user-lock: 15m
+      ip-lock: 15m
+      # 仅在**可信反向代理**之后才可置 true：X-Forwarded-For 可被客户端伪造，
+      # 伪造成功即可每次换 IP 绕过 IP 维度（见方案 §4.1.5）。
+      trust-forwarded-header: false
+
+    # ---------------------------------------------------------------------
+    # 令牌撤销的 Redis 故障策略（AUTH-02）
+    #   fail-closed：Redis 不可用时拒绝所有令牌校验（默认，安全优先）
+    #   fail-open  ：Redis 不可用时放行（可用性优先，仅限应急，改配置需重启）
+    #
+    # 注意：Redis 由此成为鉴权链路的**强依赖**。生产部署必须具备哨兵/集群，
+    # 且 failure-mode=fail-closed 时必须配套告警（健康检查见 RevocationHealthIndicator）。
+    # ---------------------------------------------------------------------
+    revocation:
+      failure-mode: fail-closed
     # 允许的前端来源（CORS）。
     # 开发期 Vite dev server 监听 0.0.0.0，用 http://192.168.x.x:5273 访问时浏览器会携带
     # 该 Origin，并经 Vite 代理原样转发到后端（changeOrigin 只改 Host，不改 Origin）。
