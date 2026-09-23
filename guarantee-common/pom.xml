@@ -27,5 +27,20 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-jdbc</artifactId>
         </dependency>
+
+        <!--
+          仅为在 GlobalExceptionHandler 里**按类型**处理方法级鉴权的拒绝
+          （org.springframework.security.access.AccessDeniedException，@PreAuthorize 实际抛其子类
+          AuthorizationDeniedException）。不显式处理时，异常会落进兜底的
+          @ExceptionHandler(Exception.class)，把"权限不足"误报成 500「系统内部错误」。
+
+          注意这里刻意用 **spring-security-core** 而不是 spring-boot-starter-security：
+          它只带来注解与异常类型，不会引入 Security 的自动配置与认证过滤器链
+          （本项目只有 guarantee-web 需要那套东西）。
+        -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-core</artifactId>
+        </dependency>
     </dependencies>
 </project>
