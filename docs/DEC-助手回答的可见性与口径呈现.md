@@ -391,6 +391,70 @@ WHERE r.role_code = 'ADMIN'          -- ← 缺 is_deleted = 0
 
 ---
 
+## 7.5 决策七：集成测试不得污染共享开发库
+
+### 7.5.1 现象：用户问了一句纯查询，界面却冒出两张「停用险种」卡
+
+使用者问「履约保函怎么样」（一个只读问题），助手面板上突然出现两张**停用险种**确认卡，
+他从未提过这个诉求。截图里两张卡的「你的原话」还是「把 履约保函（标准） 停用」
+「停用 履约保函（预付款）」——不是他这次说的话。
+
+### 7.5.2 根因（查库确认，不是推测）
+
+| 证据 | 值 |
+| --- | --- |
+| 提案 `conversation_id` | **NULL** |
+| 提案 `user_id` | 1（admin，正是当前登录用户） |
+| 提案创建时间 | 18:33:05 |
+| IT 报告写入时间 | 18:33:22 ~ 18:33:27（同一次 `mvn verify`） |
+| 卡片里的影响面文案 | `影响面：{引用订单数=若干}` —— **测试夹具的字面量** |
+
+链路是：`ProposalFlowIT` 用 `conversationId = null` 直接调 `ProposalService.create(...)`
+造提案（测试路径本就无会话），**且没有清理**。而这些提案是 `PENDING` 的，前端的
+「待确认提案」列表是**按用户全局**返回的（`GET /ai/proposals?status=PENDING`，它设计上
+就是一份跨会话待办清单）。于是下一次任何一轮对话结束时，`refreshProposals()` 就会把它们
+渲染出来——用户看到的是「我没说过要停用，卡片却自己弹出来了」。
+
+`ai_operation_proposal` 里这类残留累计 **333 条**。
+
+### 7.5.3 顺带发现：测试把险种状态留在了停用
+
+`WebAuditIT#pageInsuranceStatusChangeShouldWriteWebAudit` 会停用「投标保函（标准）」，
+而该类的 `@AfterEach` 只清 `CurrentUser`、**从不还原状态**——它的复位靠的是**下一次运行**
+的 `@BeforeEach`。只要不再运行，脏状态就一直留着：开发库里 `投标保函（标准）` 的
+`status` 实测为 `0`（其余 5 个都是 1），使用者在页面上看到的就是"演示数据被谁停用了"。
+
+审计里的痕迹也印证了这一点：同一种"AI `trace-it-1` + 紧随其后的 WEB 停用"组合在
+11:47、12:07、18:33 三次运行里重复出现，与测试运行时刻逐一对齐。
+
+### 7.5.4 落地
+
+| 改动 | 说明 |
+| --- | --- |
+| 新增 `support/ProposalFixture` | 测试创建的提案**登记 id**，结束时精确删除（含 `ai_operation_secret`）。刻意不按条件批量删——那会连使用者真正待确认的提案一起删掉 |
+| `ProposalFlowIT` / `ProposalClaimGuardIT` | 全部创建点用 `fixture.track(...)` 包起来，补上 `@AfterEach` 清理 |
+| `ProposalFlowIT` / `WebAuditIT` | 险种状态改为**快照 + 精确还原**（`@BeforeEach` 先记快照再建立前置状态，`@AfterEach` 按快照还原）。原先只有 `@BeforeEach` 的"一律置为启用"，既会把使用者主动停用的险种重新启用，又会在运行结束后留下脏状态 |
+
+**验证**：修复后跑全量 `mvn verify`，`SELECT MAX(id) FROM ai_operation_proposal` 仍为
+619（**零新增**，修复前每次运行新增约 6 条），险种状态保持不变（既未被篡改、也未留下新的改动）。
+
+同时清掉了修复前那一次留下的 333 条测试提案。
+
+### 7.5.5 仍然开放的两件事
+
+1. **`投标保函（标准）` 当前是停用状态**（测试造成，未被还原）。恢复它属于改动业务数据，
+   因此没有擅自处理。
+2. **审计表里的测试噪声**：`ai_operation_audit` 中按目标聚合可见
+   `PROPOSAL_CREATED 履约保函（标准） AI 95 条`、`DISABLE … AI 94 条` 等，累计数百行，
+   是历次 IT 运行留下的。审计表按产品设计是"只增不改不删"（SYS-A-04），因此也没有擅自清理。
+
+> **根因层面的建议**：以上两条都是"IT 跑在使用者正在使用的同一个库上"的必然结果。
+> 治本做法是给集成测试一个**独立的测试库**（或每个用例一个事务并回滚）。当前没做，
+> 是因为 IT 依赖演示数据（admin、演示险种、订单），换库需要先把种子数据与初始化顺序
+> 一并解决——属独立立项的工作量，此处只登记。
+
+---
+
 ## 8. 验收清单
 
 | # | 验收项 | 证据 |
@@ -404,7 +468,8 @@ WHERE r.role_code = 'ADMIN'          -- ← 缺 is_deleted = 0
 | 7 | 角色编码 → 中文名；未知编码不丢；逻辑判定仍按编码 | `UserServiceRoleDisplayTest`，8 项 |
 | 8 | **影响面文案不含 `JWT` / `令牌` / `claims`，且不含角色编码** | `UserServiceRoleDisplayTest#impactTextsAvoidInternalJargon` / `#impactTextsAvoidRoleCodes` |
 | 9 | 复用待确认提案时照样推送确认卡；新建分支不退化 | `ProposalServiceReusePublishTest`，2 项 |
-| 10 | 全量回归 | `mvn -B verify` BUILD SUCCESS（8 模块）；`npm run build` 通过 |
+| 10 | **集成测试跑完不在共享开发库留下待确认提案，也不残留险种状态** | 跑全量 `mvn verify` 后 `MAX(id)` 不变、险种状态不变（§7.5.4） |
+| 11 | 全量回归 | `mvn -B verify` BUILD SUCCESS（8 模块）；`npm run build` 通过 |
 
 ---
 
@@ -415,3 +480,4 @@ WHERE r.role_code = 'ADMIN'          -- ← 缺 is_deleted = 0
 | （待填） | v1.0 | 初稿。三处决策：Markdown 中文强调闭合修补、工具调用明细改为服务端按 `ai:debug:view` 下发（新增权限码）、口径串由函数调用样式改为业务人话（新增 `DataSourceText`，覆盖 10 处产出点），含提示词第 32/39 条同步与权限契约登记 |
 | （待填） | v1.1 | 追加两处：**决策四** 确认卡的角色显示中文名（`UserService.roleDisplayNames`，改 3 处影响面 + 1 处变更明细；含"逻辑判定仍按编码"的边界与"已存快照不改写"的说明）；**决策五** 复用既有待确认提案时漏推 SSE 的缺陷（`ProposalService.create` 复用分支补 `publishProposal`）。顺带修正 `ProposalFlowIT` 缺 `is_deleted = 0` 的历史行计数 |
 | （待填） | v1.2 | 追加**决策六**：面向用户文案清除内部技术术语（`JWT`/`令牌` 共 11 处用户可见文案 + 3 处工具说明/提示词，统一为「会被立即强制下线，需要重新登录」）；提示词新增第 42 条术语约束；顺带修掉 `UserProposalExecutor` 执行结果消息里的角色编码泄漏（决策四的漏网之处） |
+| （待填） | v1.3 | 追加**决策七**：集成测试污染共享开发库——`ProposalFlowIT` 留下的 PENDING 提案（`conversation_id` 为 NULL、归属 admin）会在真实使用者的助手面板里渲染成"没人提过的停用确认卡"；`WebAuditIT` 把「投标保函（标准）」留在停用状态。落地：新增 `ProposalFixture` 精确登记并清理、两个 IT 补 `@AfterEach`、险种状态改为快照精确还原。已清理历史残留 333 条测试提案；业务数据还原与审计噪声清理登记为开放项 |

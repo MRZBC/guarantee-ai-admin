@@ -76,16 +76,49 @@ class ProposalFlowIT {
     private JdbcTemplate jdbcTemplate;
 
     /**
-     * 每个用例前把险种恢复为启用。
+     * 测试前的险种状态快照——结束时按它**精确还原**。
      *
-     * <p>提案执行会真实改动 {@code insurance_type.status}。如果不复位，上一次失败运行的
-     * 残留状态会让下一次运行在"险种已处于目标状态"上失败，表现为"单独跑能过、
-     * 整套跑就挂"的假失败。用 {@code @BeforeEach} 显式建立前置状态，
-     * 使每个用例可独立重复执行。</p>
+     * <p>为什么不直接"一律置为启用"：那会把使用者在页面上主动停用的险种也重新启用，
+     * 属于对共享开发库的另一种破坏。快照还原后，测试对业务数据的净影响为零。</p>
+     */
+    private Map<Long, Integer> insuranceStatusSnapshot;
+
+    private com.guarantee.web.support.ProposalFixture proposalFixture;
+
+    /**
+     * 每个用例前建立前置状态。
+     *
+     * <p>提案执行会真实改动 {@code insurance_type.status}。如果不从"全部启用"开始，
+     * 上一次失败运行的残留状态会让下一次运行在"险种已处于目标状态"上失败，表现为
+     * "单独跑能过、整套跑就挂"的假失败。</p>
      */
     @org.junit.jupiter.api.BeforeEach
     void resetInsuranceStatus() {
+        insuranceStatusSnapshot = new java.util.LinkedHashMap<>();
+        jdbcTemplate.query("SELECT id, status FROM insurance_type", rs -> {
+            insuranceStatusSnapshot.put(rs.getLong("id"), rs.getInt("status"));
+        });
         jdbcTemplate.update("UPDATE insurance_type SET status = 1 WHERE status <> 1");
+        proposalFixture = new com.guarantee.web.support.ProposalFixture(jdbcTemplate);
+    }
+
+    /**
+     * 与 {@link #resetInsuranceStatus()} 严格配对：把本用例对共享开发库的改动**全部收回**。
+     *
+     * <p><b>为什么不能只有 {@code @BeforeEach}</b>：那种写法只在"下一次运行开始"时才复位，
+     * 于是每次 {@code mvn verify} 之后，开发库里都留着被测试改过的状态——真机上表现为
+     * 「投标保函（标准）在页面上显示为已停用」，而那不是任何人操作的结果。</p>
+     *
+     * <p>提案清理同理：测试造的 PENDING 提案会出现在真实使用者的「待确认提案」列表里，
+     * 与业务数据被改动一样，都是把测试的痕迹泄露给了使用者。</p>
+     */
+    @org.junit.jupiter.api.AfterEach
+    void restoreAfterTest() {
+        if (insuranceStatusSnapshot != null) {
+            insuranceStatusSnapshot.forEach((id, status) -> jdbcTemplate.update(
+                    "UPDATE insurance_type SET status = ? WHERE id = ?", status, id));
+        }
+        proposalFixture.cleanUp();
     }
 
     // ==================================================================
@@ -101,7 +134,7 @@ class ProposalFlowIT {
                 "SELECT status FROM insurance_type WHERE type_name = ?", Integer.class, insuranceName);
         assertThat(beforeStatus).isEqualTo(1);
 
-        ProposalPayload payload = proposalService.create(new ProposalService.ProposalDraft(
+        ProposalPayload payload = proposalFixture.track(proposalService.create(new ProposalService.ProposalDraft(
                 null, adminId, "admin", "超级管理员",
                 "proposeInsuranceTypeChange", "DISABLE", "INSURANCE_TYPE",
                 insuranceTypeId(insuranceName), insuranceName,
@@ -113,7 +146,7 @@ class ProposalFlowIT {
                                 "status", "状态", "启用", "停用")),
                         List.of("影响面：{引用订单数=若干}"), List.of("停用后不再出现在新订单可选列表"), true),
                 java.util.Set.of(Permissions.AI_SYSTEM_WRITE, Permissions.INSURANCE_DISABLE),
-                "把履约保函（标准）停用", null, "trace-it-1"));
+                "把履约保函（标准）停用", null, "trace-it-1")));
 
         assertThat(payload.proposalId()).isPositive();
         assertThat(payload.status()).isEqualTo("PENDING");
@@ -568,7 +601,7 @@ class ProposalFlowIT {
     // ==================================================================
 
     private ProposalPayload createDisableInsuranceProposal(long adminId, long typeId, String typeName) {
-        return proposalService.create(new ProposalService.ProposalDraft(
+        return proposalFixture.track(proposalService.create(new ProposalService.ProposalDraft(
                 null, adminId, "admin", "超级管理员",
                 "proposeInsuranceTypeChange", "DISABLE", "INSURANCE_TYPE", typeId, typeName,
                 com.guarantee.ai.service.ProposalRequest.builder()
@@ -578,7 +611,7 @@ class ProposalFlowIT {
                                 "status", "状态", "启用", "停用")),
                         List.of("影响面：引用订单数"), List.of("停用后不再出现在新订单可选列表"), true),
                 java.util.Set.of(Permissions.AI_SYSTEM_WRITE, Permissions.INSURANCE_DISABLE),
-                "停用 " + typeName, null, "trace-it-" + typeId));
+                "停用 " + typeName, null, "trace-it-" + typeId)));
     }
 
     private ProposalExecutionContext adminContext(String traceId) {

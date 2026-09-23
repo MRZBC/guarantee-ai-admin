@@ -127,6 +127,25 @@ class ProposalClaimGuardIT {
     @Autowired
     private tools.jackson.databind.ObjectMapper objectMapper;
 
+    private com.guarantee.web.support.ProposalFixture proposalFixture;
+
+    @org.junit.jupiter.api.BeforeEach
+    void setUpFixture() {
+        proposalFixture = new com.guarantee.web.support.ProposalFixture(jdbcTemplate);
+    }
+
+    /**
+     * 清理本类造出的提案。
+     *
+     * <p>集成测试跑在共享开发库上，而前端的「待确认提案」是按用户全局返回的待办清单——
+     * 测试留下的 PENDING 提案会出现在真实使用者的助手面板里（真机上发生过：
+     * 使用者只问了一句纯查询「履约保函怎么样」，界面上却冒出两张测试造的停用确认卡）。</p>
+     */
+    @org.junit.jupiter.api.AfterEach
+    void cleanUpProposals() {
+        proposalFixture.cleanUp();
+    }
+
     // ==================================================================
     // 一：编造 + 无 PENDING → 追加纠正
     // ==================================================================
@@ -183,7 +202,7 @@ class ProposalClaimGuardIT {
                 adminId, null, "把投标保函（标准）停用", "stub-model");
 
         // 真实生成一张待确认提案（走 ProposalService 的正规入口，不手工插库）
-        proposalService.create(new ProposalService.ProposalDraft(
+        proposalFixture.track(proposalService.create(new ProposalService.ProposalDraft(
                 conversation.getId(), adminId, "admin", "超级管理员",
                 "proposeInsuranceTypeChange", "DISABLE", "INSURANCE_TYPE", typeId, "投标保函（标准）",
                 ProposalRequest.builder().id(typeId).targetName("投标保函（标准）")
@@ -192,7 +211,7 @@ class ProposalClaimGuardIT {
                         List.of(new ProposalPreview.ChangeItem("status", "状态", "启用", "停用")),
                         List.of("影响面：引用订单数"), List.of("停用后不再出现在新订单可选列表"), true),
                 Set.of(Permissions.AI_SYSTEM_WRITE, Permissions.INSURANCE_DISABLE),
-                "把投标保函（标准）停用", null, "trace-claim-guard-it"));
+                "把投标保函（标准）停用", null, "trace-claim-guard-it")));
 
         List<ServerSentEvent<String>> events = streamOnce(adminId, conversation.getId(),
                 "把投标保函（标准）停用");
@@ -203,10 +222,9 @@ class ProposalClaimGuardIT {
 
         String stored = lastAssistantMessage(conversation.getId());
         assertThat(stored).as("落库正文也不得被改动").isEqualTo(FABRICATED_ANSWER);
-
-        // 收尾：把这张提案置为终态，避免影响其它用例/后续运行
-        jdbcTemplate.update("UPDATE ai_operation_proposal SET status = 'REJECTED' "
-                + "WHERE conversation_id = ? AND status = 'PENDING'", conversation.getId());
+        // 收尾统一交给 @AfterEach 的 proposalFixture：原先这里手工把提案置为 REJECTED，
+        // 但仍会留下"提案编号存在、业务上没人做过这个变更"的痕迹（而且那张卡一度
+        // 在真实使用者的面板里出现过）。现在直接删除，对共享开发库零残留。
     }
 
     // ==================================================================
@@ -223,7 +241,7 @@ class ProposalClaimGuardIT {
         AiConversation conversation = conversationService.resolveOrCreate(
                 adminId, null, "把履约保函（预付款）停用", "stub-model");
 
-        var payload = proposalService.create(new ProposalService.ProposalDraft(
+        var payload = proposalFixture.track(proposalService.create(new ProposalService.ProposalDraft(
                 conversation.getId(), adminId, "admin", "超级管理员",
                 "proposeInsuranceTypeChange", "DISABLE", "INSURANCE_TYPE", typeId, "履约保函（预付款）",
                 ProposalRequest.builder().id(typeId).targetName("履约保函（预付款）")
@@ -232,7 +250,7 @@ class ProposalClaimGuardIT {
                         List.of(new ProposalPreview.ChangeItem("status", "状态", "启用", "停用")),
                         List.of("影响面：引用订单数"), List.of("停用后不再出现在新订单可选列表"), true),
                 Set.of(Permissions.AI_SYSTEM_WRITE, Permissions.INSURANCE_DISABLE),
-                "把履约保函（预付款）停用", null, "trace-my-proposals-it"));
+                "把履约保函（预付款）停用", null, "trace-my-proposals-it")));
 
         // 用真实的 ToolContext 键调用工具（与 AiChatService.buildToolContext 写入的键一致）
         MyProposalsToolResult result = myProposalsQueryTool.queryMyProposals(new ToolContext(Map.of(

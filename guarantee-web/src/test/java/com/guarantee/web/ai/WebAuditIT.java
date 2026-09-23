@@ -54,19 +54,44 @@ class WebAuditIT {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    /**
+     * 测试前的险种状态快照——结束时按它精确还原。
+     *
+     * <p>为什么不直接"一律置为启用"：那会把使用者在页面上主动停用的险种也重新启用
+     * （与"留下停用状态"是同一类破坏，只是方向相反）。快照还原后净影响为零。</p>
+     */
+    private Map<Long, Integer> insuranceStatusSnapshot;
+
     /** 模拟页面请求线程上的登录主体（Web 线程上 CurrentUser 是有效的）。 */
     @BeforeEach
     void setUpPrincipal() {
         // 机构已从用户上移除：Principal 不再携带 orgId
         CurrentUser.set(new CurrentUser.Principal(adminId(), "admin", "超级管理员",
                 List.of(Roles.ADMIN), userService.listPermissionCodesByUserId(adminId())));
-        // 复位可能被其它用例改动的状态，保证本类可重复运行
+        // 先记快照，再建立前置状态：本类会真实停用险种，必须先确保它处于启用。
+        insuranceStatusSnapshot = new java.util.LinkedHashMap<>();
+        jdbcTemplate.query("SELECT id, status FROM insurance_type", rs -> {
+            insuranceStatusSnapshot.put(rs.getLong("id"), rs.getInt("status"));
+        });
         jdbcTemplate.update("UPDATE insurance_type SET status = 1 WHERE status <> 1");
     }
 
+    /**
+     * 与 {@link #setUpPrincipal()} 配对：收回本用例对共享开发库的改动。
+     *
+     * <p><b>缺了这一步的真实后果</b>：{@code pageInsuranceStatusChangeShouldWriteWebAudit}
+     * 会停用「投标保函（标准）」且原先从不还原，于是每次 {@code mvn verify} 之后，
+     * 开发库里那个险种就一直是停用状态——使用者在页面上看到的是"演示数据被谁停用了"，
+     * 而实际上没有任何人操作过。原先的做法是靠**下一次运行**的 {@code @BeforeEach}
+     * 把它重新启用，也就是"只在运行开始时复位"；只要不再运行，脏状态就一直留着。</p>
+     */
     @AfterEach
     void clearPrincipal() {
         CurrentUser.clear();
+        if (insuranceStatusSnapshot != null) {
+            insuranceStatusSnapshot.forEach((id, status) -> jdbcTemplate.update(
+                    "UPDATE insurance_type SET status = ? WHERE id = ?", status, id));
+        }
     }
 
     // ==================================================================
@@ -270,7 +295,8 @@ class WebAuditIT {
                         testOrgId);
                 jdbcTemplate.update("DELETE FROM sys_org WHERE id = ?", testOrgId);
             }
-            jdbcTemplate.update("UPDATE insurance_type SET status = 1 WHERE status <> 1");
+            // 险种状态不在这里复位：统一由 @AfterEach 按快照还原。
+            // 原先这里写的是"一律置为启用"，会把使用者主动停用的险种也重新启用。
         }
     }
 
