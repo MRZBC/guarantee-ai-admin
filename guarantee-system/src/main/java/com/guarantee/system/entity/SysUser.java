@@ -25,6 +25,13 @@ public class SysUser {
     private String email;
     /** 状态 1启用 0停用 */
     private Integer status;
+    /**
+     * 首次登录强制改密（P-10 / D1=C）。
+     *
+     * <p>新建账号与管理员重置密码都会置 1；用户改密成功后清 0。为 1 时服务端闸门
+     * （{@code PasswordChangeRequiredFilter}）会拒绝除改密/登出/读自己外的一切请求。</p>
+     */
+    private Integer mustChangePassword;
     /** 最近登录时间 */
     private LocalDateTime lastLoginAt;
     private LocalDateTime createdAt;

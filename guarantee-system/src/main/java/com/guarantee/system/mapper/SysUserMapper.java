@@ -69,6 +69,26 @@ public interface SysUserMapper {
 
     // ---------------- 写 ----------------
 
+    /**
+     * 新建用户（P-10）。回填自增主键。
+     *
+     * <p>调用方必须已写入 password 散列与 must_change_password——密码策略与标记由
+     * {@code UserService.applyInitialPassword} 统一负责，Mapper 不做任何默认值兜底。</p>
+     */
+    int insert(SysUser entity);
+
+    /**
+     * 写密码散列并按需清/置"首次登录强制改密"（P-10）。
+     *
+     * <p>自助改密传 {@code mustChangePassword = 0}，管理员重置传 {@code 1}；
+     * 一次语句同时改两列，避免"改了密码但忘了改标记"的中间态。</p>
+     *
+     * @return 受影响行数：0 表示该行不存在（并发冲突）
+     */
+    int updatePassword(@Param("id") Long id,
+                       @Param("password") String password,
+                       @Param("mustChangePassword") Integer mustChangePassword);
+
     /** 登录成功后记录最近登录时间。 */
     int updateLastLoginAt(@Param("id") Long id);
 

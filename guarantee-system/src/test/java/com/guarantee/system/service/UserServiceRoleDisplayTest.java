@@ -1,5 +1,6 @@
 package com.guarantee.system.service;
 
+import com.guarantee.common.security.DefaultCredentials;
 import com.guarantee.common.security.UserTokenRevoker;
 import com.guarantee.system.entity.SysRole;
 import com.guarantee.system.entity.SysUser;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
 import java.util.List;
 import java.util.Map;
@@ -48,8 +50,12 @@ class UserServiceRoleDisplayTest {
 
     @BeforeEach
     void setUp() {
+        // P-10 起 UserService 还需要 PasswordEncoder 与 DefaultCredentials（新建/改密/重置）。
+        // 本类只测"角色编码 → 中文名"的转换，不触碰密码逻辑，因此用真实但无状态的实现即可。
         userService = new UserService(sysUserMapper, sysRoleMapper, sysDepartmentMapper,
-                dataScopeService, tokenRevokerProvider, webAuditor);
+                dataScopeService, tokenRevokerProvider, webAuditor,
+                new BCryptPasswordEncoder(),
+                new DefaultCredentials(DefaultCredentials.BUILT_IN_DEFAULT_PASSWORD));
     }
 
     private static SysRole role(String code, String name) {

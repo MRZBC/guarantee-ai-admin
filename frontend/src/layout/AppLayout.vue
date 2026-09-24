@@ -134,7 +134,14 @@ async function handleLogout(): Promise<void> {
 }
 
 function handleUserCommand(command: string): void {
-  if (command === 'logout') void handleLogout()
+  if (command === 'logout') {
+    void handleLogout()
+    return
+  }
+  if (command === 'change-password') {
+    // 主动改密（非强制模式）。被强制改密的用户走不到这里——守卫会把他锁在改密页
+    void router.push('/change-password')
+  }
 }
 </script>
 
@@ -210,7 +217,11 @@ function handleUserCommand(command: string): void {
                 <el-dropdown-item disabled>
                   {{ userStore.user?.deptName || '未分配部门' }}
                 </el-dropdown-item>
-                <el-dropdown-item divided command="logout">
+                <el-dropdown-item divided command="change-password">
+                  <el-icon><Key /></el-icon>
+                  修改密码
+                </el-dropdown-item>
+                <el-dropdown-item command="logout">
                   <el-icon><SwitchButton /></el-icon>
                   退出登录
                 </el-dropdown-item>

@@ -32,6 +32,46 @@ service.interceptors.request.use(
   (error: unknown) => Promise.reject(error)
 )
 
+/**
+ * 后端 `ResultCode.PASSWORD_CHANGE_REQUIRED`（1006）：「首次登录需先修改初始密码」。
+ *
+ * <p>服务端强制闸门（`PasswordChangeRequiredFilter`）对 `must_change_password = 1` 的令牌
+ * 拒掉除 `PUT /auth/password`、`POST /auth/logout`、`GET /auth/me` 之外的一切请求，
+ * 统一返回 **HTTP 403 + 该 code**。</p>
+ */
+const CODE_PASSWORD_CHANGE_REQUIRED = 1006
+
+/** 强制改密页路径（与 `router/index.ts` 的路由一致，且**不在** AppLayout 之下）。 */
+const CHANGE_PASSWORD_HASH = '#/change-password'
+
+/**
+ * 是否已经因为"强制改密"提示过一次。
+ *
+ * <p>被闸门拦住时页面可能同时并发多个请求（列表 + 权限 + AI 助手状态…），
+ * 每个都弹一次会把屏幕刷满。用模块级开关拦到"跳走为止"：跳转本身会改 hash，
+ * 后续请求在到达新页面后不再重复提示。</p>
+ */
+let passwordChangeNotified = false
+
+/**
+ * 把用户送到强制改密页。
+ *
+ * <p><b>刻意不清 token</b>：改密接口 `PUT /auth/password` 靠它认人，清了就真的改不了了。
+ * 这与 401 的 `redirectToLogin()` 是两条不同的路径。</p>
+ *
+ * <p>不复用 `router.push` 而是直接改 hash：本模块被 `router` 依赖链间接引用
+ * （router → stores/user → api/auth → api/request），静态 import router 会形成循环依赖。
+ * hash 路由下改 hash 与 `router.push('/change-password')` 效果一致。</p>
+ */
+function redirectToChangePassword(): void {
+  if (window.location.hash.startsWith(CHANGE_PASSWORD_HASH)) return
+  if (!passwordChangeNotified) {
+    passwordChangeNotified = true
+    ElMessage.warning('首次登录需先修改初始密码')
+  }
+  window.location.hash = CHANGE_PASSWORD_HASH
+}
+
 /** 清除登录态并跳转登录页 */
 function redirectToLogin(): void {
   removeToken()
@@ -53,6 +93,11 @@ service.interceptors.response.use(
     if (body.code === 0) {
       return body.data as unknown as AxiosResponse
     }
+    // 闸门也可能以 HTTP 200 + 业务码返回，同样按 code 分流，不能只看 HTTP 状态
+    if (body.code === CODE_PASSWORD_CHANGE_REQUIRED) {
+      redirectToChangePassword()
+      return Promise.reject(new Error(body.message || '首次登录需先修改初始密码'))
+    }
     const config = response.config as RetriableConfig
     if (!config.__notified) {
       config.__notified = true
@@ -63,7 +108,19 @@ service.interceptors.response.use(
   (error: AxiosError<ApiResponse<unknown>>) => {
     const status = error.response?.status
     const config = (error.config ?? {}) as RetriableConfig
+    const body = error.response?.data as ApiResponse<unknown> | undefined
     let message = error.message || '网络异常，请稍后重试'
+
+    /*
+      强制改密闸门（403 + code 1006）必须**先于** 401/403 的通用处理分流。
+      混同的后果是死循环：把 1006 当成普通 403 走去登录页 → 用户重新登录 →
+      闸门再次拒绝 → 又被踢回登录页。所以这里：不清 token、不弹"没有权限"提示，
+      只把用户送到改密页。
+    */
+    if (status === 403 && body?.code === CODE_PASSWORD_CHANGE_REQUIRED) {
+      redirectToChangePassword()
+      return Promise.reject(error)
+    }
 
     if (status === 401) {
       if (!config.__notified) {
@@ -74,8 +131,8 @@ service.interceptors.response.use(
       return Promise.reject(error)
     }
 
-    if (error.response?.data && typeof error.response.data.message === 'string') {
-      message = error.response.data.message
+    if (typeof body?.message === 'string' && body.message !== '') {
+      message = body.message
     } else if (status === 403) {
       message = '没有权限访问该资源'
     } else if (status === 404) {

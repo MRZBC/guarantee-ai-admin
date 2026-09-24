@@ -47,9 +47,11 @@ public final class PermissionCatalog {
             {"system:dept:delete", "部门删除", null},
 
             {"system:user:view", "用户配置", "/system/users"},
+            {"system:user:create", "用户新增", null},
             {"system:user:update", "用户修改", null},
             {"system:user:disable", "用户启停", null},
             {"system:user:assign-role", "用户角色分配", null},
+            {"system:user:reset-password", "用户重置密码", null},
             {"system:user:delete", "用户删除", null},
 
             {"system:role:view", "角色配置", "/system/roles"},
@@ -159,6 +161,10 @@ public final class PermissionCatalog {
         return code.endsWith(":create") || code.endsWith(":update") || code.endsWith(":disable")
                 || code.endsWith(":delete")
                 || code.endsWith(":assign-role") || code.endsWith(":assign-permission")
+                // :reset-password 是"影响他人凭据"的敏感写操作（P-10 / D3=B）。漏掉它会让
+                // writePermissions() 的 SYS-P-12 断言（ANALYST / VIEWER 的写权限清单必须为空）
+                // 漏检该权限——一旦将来误授给 VIEWER，这套护栏会静默失效。
+                || code.endsWith(":reset-password")
                 // :kick 是"影响他人"的写操作（AUTH-05）。漏掉它会让 writePermissions() 的
                 // SYS-P-12 断言（ANALYST / VIEWER 的写权限清单必须为空）漏检该权限——
                 // 一旦将来误授给 VIEWER，这套护栏会静默失效。

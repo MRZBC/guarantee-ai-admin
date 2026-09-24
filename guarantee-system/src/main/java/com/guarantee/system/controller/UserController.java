@@ -29,9 +29,14 @@ import java.util.List;
 /**
  * 用户配置接口。响应 VO 不含密码字段。
  *
- * <p><b>D-2 的接口级落点</b>：本类**没有** {@code POST /api/system/users} 与
- * {@code POST /api/system/users/{id}/reset-password}。新建账号与密码重置确定单独立项，
- * 不在本需求交付（见需求 5.2.2 D-2 / D-2a）。</p>
+ * <p><b>P-10 起提供新建账号与密码重置</b>（见 {@code docs/REQ-用户管理新增与修改.md}）：
+ * D-2 曾把这两项整体移出本期并要求单独立项，P-10 就是那个独立项，因此本类新增了
+ * {@code POST /api/system/users} 与 {@code POST /api/system/users/{id}/reset-password}
+ * （另加 {@code PUT /api/auth/password} 供用户自助改密，落在 AuthController）。</p>
+ *
+ * <p><b>密码永不经过 HTTP</b>：新建与重置都写入固定默认密码并置"首次登录强制改密"，
+ * 因此请求体与响应体里都没有任何密码字段。唯一的例外是自助改密
+ * （用户必须提交旧密码与新密码），那是用户自己的凭据、且不落库明文。</p>
  *
  * <p><b>Q-15 暂缓口径</b>：本期页面接口的返回行为保持不变（仍是 {@code UserVO} 直出），
  * 字段脱敏只作用于助手工具返回值、审计、提案与 {@code ai_tool_call} 四条路径。</p>
@@ -67,6 +72,33 @@ public class UserController {
     public Result<UserVO> update(@PathVariable Long id,
                                  @Valid @RequestBody UserDto.UpdateRequest request) {
         return Result.ok(userService.updateProfile(id, request, currentScope(), currentUserId()));
+    }
+
+    /**
+     * 新建用户（P-10 / CREATE）。
+     *
+     * <p>密码写入固定默认密码（见 {@code DefaultCredentials}）并置"首次登录强制改密"，
+     * 因此请求体里没有密码字段。</p>
+     */
+    @PostMapping
+    @PreAuthorize("hasAuthority('" + Permissions.USER_CREATE + "')")
+    public Result<UserVO> create(@Valid @RequestBody UserDto.CreateRequest request) {
+        return Result.ok(userService.create(request, currentScope(), currentUserId()));
+    }
+
+    /**
+     * 重置他人密码（P-10 / RESET_PASSWORD，D3=B）。
+     *
+     * <p><b>无请求体</b>：不接受"重置成什么"，固定重置为系统默认密码。
+     * 让管理员指定密码会让密码经手他人并进入请求体。</p>
+     *
+     * <p><b>不得重置自己</b>——自己的密码走 {@code PUT /api/auth/password} 自助改密
+     * （要验旧密码），走这里等于绕过旧密码校验。</p>
+     */
+    @PostMapping("/{id}/reset-password")
+    @PreAuthorize("hasAuthority('" + Permissions.USER_RESET_PASSWORD + "')")
+    public Result<UserVO> resetPassword(@PathVariable Long id) {
+        return Result.ok(userService.resetPassword(id, currentScope(), currentUserId()));
     }
 
     /** 启用/停用（SYS-W-04 ENABLE/DISABLE）。停用后该用户全部令牌被撤销。 */

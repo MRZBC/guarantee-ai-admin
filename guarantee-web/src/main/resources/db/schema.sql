@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS sys_user (
     phone         VARCHAR(20)  NULL,
     email         VARCHAR(128) NULL,
     status        TINYINT      NOT NULL DEFAULT 1 COMMENT '状态 1启用 0停用',
+    must_change_password TINYINT NOT NULL DEFAULT 0 COMMENT '首次登录强制改密 1是 0否',
     last_login_at DATETIME     NULL COMMENT '最近登录时间',
     created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -135,6 +136,37 @@ CREATE TABLE IF NOT EXISTS sys_role_permission (
     UNIQUE KEY uk_sys_role_perm (role_id, permission_id),
     KEY idx_sys_role_perm_perm (permission_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '角色-权限';
+
+-- =====================================================================
+--  行政区划基础信息（地区字典）
+--
+--  依据 docs/REQ-地区基础信息与区域筛选下拉.md：把"区域编码"从自由文本输入改成地区下拉，
+--  并让机构写入按字典校验。表按省/市/区县三级设计（level 1/2/3），
+--  本期只导入省（34）+ 市（342），区县留待业务数据细化到区县时纯数据补齐。
+--
+--  主键用**区划码 code** 而不是代理 id：业务数据（订单/机构/企业/项目）一直用
+--  region_code 字符串引用它，再引入代理 id 只会多一个需要对照的标识。国标码稳定，
+--  适合做自然主键。若将来要改成代理 id + uk(code)，只影响本表，接口只暴露 code。
+--
+--  种子数据见 db/seed/region.sql（Spring Boot 启动时按 data-locations 执行，INSERT IGNORE 幂等）。
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS sys_region (
+    code        VARCHAR(12) NOT NULL                COMMENT '行政区划代码（GB/T 2260），省级 6 位',
+    name        VARCHAR(64) NOT NULL                COMMENT '名称，例如 浙江省（全称，与业务数据的 region_name 逐字一致）',
+    short_name  VARCHAR(32) NULL                    COMMENT '简称，用于下拉搜索，例如 浙江',
+    level       TINYINT     NOT NULL                COMMENT '层级 1省 2市 3区县',
+    parent_code VARCHAR(12) NOT NULL DEFAULT ''     COMMENT '上级区划代码；省级为空串',
+    status      TINYINT     NOT NULL DEFAULT 1      COMMENT '状态 1启用 0停用',
+    sort_no     INT         NOT NULL DEFAULT 0      COMMENT '排序号（国标顺序）',
+    created_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0      COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL   COMMENT '删除时间（微秒精度）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB'   COMMENT '删除人：应用写 sys_user.id，直连为 DB',
+    PRIMARY KEY (code),
+    KEY idx_sys_region_parent (parent_code, level),
+    KEY idx_sys_region_deleted (is_deleted)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '行政区划基础信息';
 
 CREATE TABLE IF NOT EXISTS insurance_type (
     id          BIGINT        NOT NULL AUTO_INCREMENT,

@@ -126,14 +126,16 @@
 
     <select id="selectEntityById" resultType="com.guarantee.system.entity.SysUser">
         SELECT id, username, password, real_name, dept_id, phone, email,
-               status, last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
+               status, must_change_password AS mustChangePassword,
+               last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_user
         WHERE id = #{id}
     </select>
 
     <select id="selectEntitiesByIds" resultType="com.guarantee.system.entity.SysUser">
         SELECT id, username, password, real_name, dept_id, phone, email,
-               status, last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
+               status, must_change_password AS mustChangePassword,
+               last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_user
         WHERE id IN
         <foreach collection="ids" item="id" open="(" separator="," close=")">
@@ -186,7 +188,8 @@
     <!-- 仅登录校验使用：返回包含 password 散列的实体，禁止用于任何响应。 -->
     <select id="selectByUsername" resultType="com.guarantee.system.entity.SysUser">
         SELECT id, username, password, real_name, dept_id, phone, email,
-               status, last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
+               status, must_change_password AS mustChangePassword,
+               last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_user
         WHERE username = #{username}
           AND is_deleted = 0
@@ -255,6 +258,33 @@
             <if test="deptId != null">dept_id = #{deptId},</if>
         </set>
         WHERE id = #{id}
+    </update>
+
+    <!--
+      新建用户（P-10）。
+      password 与 must_change_password 由 Service 层统一写入（applyInitialPassword），
+      Mapper 不做默认值兜底——否则"某条路径忘了置强制改密标记"会被数据库默认值静默掩盖。
+    -->
+    <insert id="insert" parameterType="com.guarantee.system.entity.SysUser"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO sys_user (username, password, real_name, dept_id, phone, email,
+                              status, must_change_password)
+        VALUES (#{username}, #{password}, #{realName}, #{deptId}, #{phone}, #{email},
+                #{status}, #{mustChangePassword})
+    </insert>
+
+    <!--
+      写密码散列并同时改"首次登录强制改密"标记（P-10）。
+      两列在同一条语句里改：分开写会出现"改了密码但没清标记（用户被永久关在改密页）"
+      或"清了标记但没写新密码"的中间态。
+      update 不校验旧密码——旧密码校验在 Service 层（需要 PasswordEncoder）。
+    -->
+    <update id="updatePassword">
+        UPDATE sys_user
+        SET password = #{password},
+            must_change_password = #{mustChangePassword}
+        WHERE id = #{id}
+          AND is_deleted = 0
     </update>
 
     <!-- 条件更新状态：只有当前状态与预期一致时才改，防并发覆盖（T-08） -->

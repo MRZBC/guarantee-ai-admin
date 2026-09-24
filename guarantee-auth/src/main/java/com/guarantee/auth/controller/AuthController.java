@@ -19,6 +19,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -63,6 +64,43 @@ public class AuthController {
             throw new BizException(ResultCode.UNAUTHORIZED, "未登录或登录已过期");
         }
         return Result.ok(authService.currentUser(userId));
+    }
+
+    /**
+     * 用户自助修改自己的密码（P-10 / §5.5）。
+     *
+     * <p><b>本路径是"强制改密闸门"的白名单之一</b>：处于首次登录强制改密状态的用户，
+     * 除改密 / 登出 / 读自己外的一切请求都会被 {@code PasswordChangeRequiredFilter} 拒绝。
+     * 若漏掉这里，用户被要求改密却没有任何入口——账号直接变砖。</p>
+     *
+     * <p><b>不接受任何"改谁的密码"参数</b>：目标恒为当前登录用户。一旦接受该参数，
+     * 越权就只是传错一个参数的事。</p>
+     *
+     * <p>成功后服务端会<b>撤销该用户全部令牌</b>，因此前端应提示"请用新密码重新登录"。
+     * 这样做是必需的：旧令牌里的 {@code mcp} claim 恒为 true，不撤销的话用户改完密码
+     * 仍会被闸门拦住（表现为"改了但没生效"）。</p>
+     */
+    @PutMapping("/password")
+    public Result<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
+        Long userId = CurrentUser.userId();
+        if (userId == null) {
+            throw new BizException(ResultCode.UNAUTHORIZED, "未登录或登录已过期");
+        }
+        authService.changePassword(userId, request.oldPassword(), request.newPassword());
+        return Result.ok();
+    }
+
+    /**
+     * 自助改密请求体。
+     *
+     * <p>这是全系统**唯一**会出现明文密码的请求体（用户自己的凭据）。密码不落库明文，
+     * 只存 BCrypt 散列；审计与日志都不记录它。</p>
+     */
+    public record ChangePasswordRequest(
+            @jakarta.validation.constraints.NotBlank(message = "原密码不能为空")
+            String oldPassword,
+            @jakarta.validation.constraints.NotBlank(message = "新密码不能为空")
+            String newPassword) {
     }
 
     /**

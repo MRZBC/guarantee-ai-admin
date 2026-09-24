@@ -9,6 +9,7 @@ import {
   updateDepartment
 } from '@/api/system'
 import { useUserStore } from '@/stores/user'
+import { confirmText } from '@/utils/confirmText'
 import { formatDateTime } from '@/utils/format'
 import { isEnabled, statusLabel, statusParam, STATUS_OPTIONS } from '@/utils/status'
 import type {
@@ -384,7 +385,10 @@ async function handleToggleStatus(node: DepartmentNode): Promise<void> {
     await ElMessageBox.confirm(
       target === 1
         ? `确认启用部门「${node.label}」？`
-        : `确认停用部门「${node.label}」？① 该部门下不能有下级部门，也不能有启用中的用户，否则会被拒绝；② 停用不是删除，记录仍然可见。`,
+        : confirmText(`确认停用部门「${node.label}」？`, [
+            '该部门下不能有下级部门，也不能有启用中的用户，否则会被拒绝',
+            '停用不是删除，记录仍然可见'
+          ]),
       `${action}部门`,
       { type: 'warning', confirmButtonText: `确认${action}`, cancelButtonText: '取消' }
     )
@@ -411,10 +415,11 @@ async function handleToggleStatus(node: DepartmentNode): Promise<void> {
 async function handleDelete(node: DepartmentNode): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      `确认删除部门「${node.label}」？`
-        + '① 删除后该部门不再出现在部门树中；'
-        + '② 该部门下有子部门或有用户时，删除会被拒绝并给出数量；'
-        + '③ 如只是暂停业务，请改用「停用」——停用可随时启用，删除不可。',
+      confirmText(`确认删除部门「${node.label}」？`, [
+        '删除后该部门不再出现在部门树中，且页面不提供恢复入口——如只是暂停业务，请改用「停用」',
+        '该部门下有子部门或仍有用户时，删除会被拒绝并给出数量',
+        '停用可随时启用，删除不可'
+      ]),
       '删除部门',
       { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }
     )

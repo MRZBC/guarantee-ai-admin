@@ -27,6 +27,14 @@ const rules: FormRules = {
   ]
 }
 
+/**
+ * 登录。
+ *
+ * <p><b>登录后必须按 `mustChangePassword` 分流（§6.2b 第 1 条）</b>：被标记的账号在改密完成前
+ * 除改密/登出/读自己外的一切请求都会被服务端闸门拒为 403/1006。若这里仍跳 dashboard，
+ * 用户会先看到一个"加载失败"的空首页再被弹回来——体验上是"系统坏了"。
+ * 注意分流要**先于** `redirect` 查询参数：那个 redirect 指向的业务页此刻必然访问不了。</p>
+ */
 async function handleLogin(): Promise<void> {
   if (!formRef.value) return
   const valid = await formRef.value.validate().catch(() => false)
@@ -35,6 +43,11 @@ async function handleLogin(): Promise<void> {
   loading.value = true
   try {
     const user = await userStore.login({ username: form.username, password: form.password })
+    if (userStore.mustChangePassword) {
+      ElMessage.warning('首次登录需先修改初始密码')
+      await router.replace('/change-password')
+      return
+    }
     ElMessage.success(`欢迎回来，${user.realName || user.username}`)
     const redirect = route.query.redirect
     const target = typeof redirect === 'string' && redirect.startsWith('/') ? redirect : '/dashboard'

@@ -119,7 +119,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
             List<SimpleGrantedAuthority> authorities = JwtTokenProvider.permissions(claims).stream()
                     .map(SimpleGrantedAuthority::new)
-                    .toList();
+                    .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+            // 首次登录强制改密（P-10）：把令牌里的 mcp 提升为一个 authority，
+            // 由 PasswordChangeRequiredFilter 消费。
+            //
+            // 刻意**不**改 CurrentUser.Principal：那是个 record，被 AiController 构造
+            // ProposalExecutionContext、以及 AI 的 ToolContext 装配读取；为一个只在 HTTP
+            // 鉴权层使用的标志去改它，会把改动扩散到 AI 模块。用 authority 承载最收敛——
+            // 鉴权层自己消费，业务层无感。
+            if (JwtTokenProvider.mustChangePassword(claims)) {
+                authorities.add(new SimpleGrantedAuthority(
+                        PasswordChangeRequiredFilter.AUTHORITY_MUST_CHANGE_PASSWORD));
+            }
             UsernamePasswordAuthenticationToken authentication =
                     new UsernamePasswordAuthenticationToken(username, null, authorities);
             authentication.setDetails(userId);

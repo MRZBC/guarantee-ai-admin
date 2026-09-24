@@ -39,6 +39,36 @@ public class JwtTokenProvider {
     private static final String CLAIM_ROLES = "roles";
     private static final String CLAIM_PERMISSIONS = "perms";
 
+    /**
+     * 「首次登录强制改密」标记（P-10 / D1=C）。
+     *
+     * <p>写进令牌而不是每次请求回查数据库，与本类"权限编码直接写入令牌，避免每个请求都回查
+     * 数据库"的既有取向一致。代价是：用户改密后<b>必须撤销旧令牌</b>，否则旧令牌里这个
+     * claim 恒为 true，用户会被强制闸门永久拦住（见 {@code UserService.changeOwnPassword}）。</p>
+     */
+    private static final String CLAIM_MUST_CHANGE_PASSWORD = "mcp";
+
+    /**
+     * 签发时刻的**毫秒**精度副本。
+     *
+     * <p><b>为什么需要它</b>：JWT 标准的 {@code iat}（RFC 7519 NumericDate）只有**秒**精度，
+     * 而用户级撤销写入的是 {@code System.currentTimeMillis()}（毫秒）。二者被拿来比较时
+     * （{@code UserTokenRevocation.issuedAfterRevocation} 判 {@code iat > 撤销时刻}），
+     * 只要"撤销"与"签发"落在同一秒，新令牌的 {@code iat}（该秒的 0 毫秒）就必然小于撤销时刻，
+     * 于是**刚签发的令牌被判为已撤销 → 401**，
+     * 实测：撤销后立即登录 5/5 401，等 1100ms 再登录 3/3 200。</p>
+     *
+     * <p>影响面是所有用户级撤销流程（停用后启用、角色分配、管理侧重置密码、自助改密），
+     * 而"改密后请立即用新密码重新登录"恰是用户被明确要求立即执行的路径。</p>
+     *
+     * <p><b>兼容性</b>：老令牌没有该 claim，{@link #issuedAtMillis(Claims)} 会回退到
+     * {@code iat} 秒×1000，行为与修复前**完全一致**（仍 fail-closed，不会多放行任何令牌）。</p>
+     *
+     * <p>注意：本 claim 只提升**排序精度**，不改变 AUTH-04 §4.4.3 的红线——"不得靠重签令牌续期"
+     * 依然成立（重签产生的 {@code iatMs} 同样晚于撤销时刻，会使旧令牌复活）。</p>
+     */
+    private static final String CLAIM_ISSUED_AT_MILLIS = "iatMs";
+
     /** HS256 要求的最小密钥长度（256 bit）。 */
     private static final int MIN_SECRET_BYTES = 32;
 
@@ -156,6 +186,10 @@ public class JwtTokenProvider {
                 .claim(CLAIM_REAL_NAME, user.getRealName())
                 .claim(CLAIM_ROLES, roles)
                 .claim(CLAIM_PERMISSIONS, permissions)
+                .claim(CLAIM_MUST_CHANGE_PASSWORD,
+                        Integer.valueOf(1).equals(user.getMustChangePassword()))
+                // 毫秒精度签发时刻：供用户级撤销的先后判定使用（见 CLAIM_ISSUED_AT_MILLIS）
+                .claim(CLAIM_ISSUED_AT_MILLIS, now.getTime())
                 .issuedAt(now)
                 .expiration(expiry)
                 .signWith(secretKey)
@@ -195,8 +229,18 @@ public class JwtTokenProvider {
         return claims.getExpiration();
     }
 
-    /** 令牌签发时间（毫秒）；缺失时返回 0，由调用方按"最保守"处理。 */
+    /**
+     * 令牌签发时间（毫秒）；缺失时返回 0，由调用方按"最保守"处理。
+     *
+     * <p><b>优先取毫秒 claim</b>（{@link #CLAIM_ISSUED_AT_MILLIS}）：标准的 {@code iat} 只有秒精度，
+     * 与毫秒精度的撤销时刻比较时，同一秒内签发的新令牌会被误判为"已撤销"（详见该常量注释）。
+     * 老令牌没有该 claim，回退到 {@code iat} 秒×1000——与修复前行为一致。</p>
+     */
     public static long issuedAtMillis(Claims claims) {
+        Object millis = claims.get(CLAIM_ISSUED_AT_MILLIS);
+        if (millis instanceof Number number) {
+            return number.longValue();
+        }
         Date issuedAt = claims.getIssuedAt();
         return issuedAt == null ? 0L : issuedAt.getTime();
     }
@@ -211,5 +255,15 @@ public class JwtTokenProvider {
     public static List<String> permissions(Claims claims) {
         Object value = claims.get(CLAIM_PERMISSIONS);
         return value instanceof List<?> list ? (List<String>) list : List.of();
+    }
+
+    /**
+     * 该令牌是否处于"首次登录强制改密"状态（P-10）。
+     *
+     * <p>缺失或非 true 一律按 false 处理：老令牌（本次上线前签发）没有这个 claim，
+     * 不能被误判成"需要改密"而把所有人关进改密页。</p>
+     */
+    public static boolean mustChangePassword(Claims claims) {
+        return Boolean.TRUE.equals(claims.get(CLAIM_MUST_CHANGE_PASSWORD));
     }
 }

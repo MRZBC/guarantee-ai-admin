@@ -4,6 +4,8 @@ import com.guarantee.common.api.PageQuery;
 import com.guarantee.system.scope.QueryScope;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.Setter;
@@ -14,13 +16,47 @@ import java.util.List;
 /**
  * 用户配置的请求 DTO。
  *
- * <p><b>D-2 收敛</b>：本期只提供 UPDATE / ENABLE-DISABLE / ASSIGN_ROLES 三类写动作，
- * 因此这里**没有** CreateRequest 与 ResetPasswordRequest——不是遗漏，
- * 而是"新建账号与密码重置单独立项"的显式落点（见需求 5.2.2 D-2a）。</p>
+ * <p><b>P-10 起解除 D-2 的收敛</b>：新增了 {@link CreateRequest}（用户新建）。
+ * 但仍然**没有** ResetPasswordRequest——管理侧重置密码**不接受任何入参**
+ * （密码固定为系统默认密码），所以它不是一个"请求体 DTO"，见
+ * {@code UserController#resetPassword}。详见 docs/REQ-用户管理新增与修改.md。</p>
  */
 public final class UserDto {
 
     private UserDto() {
+    }
+
+    /**
+     * 用户新建（P-10 / CREATE，权限 {@code system:user:create}）。
+     *
+     * <p><b>刻意没有密码字段</b>：密码由服务端写入固定默认密码（{@code DefaultCredentials}）
+     * 并要求首次登录改密，因此明文密码既不进请求体、也不进响应体。</p>
+     */
+    @Getter
+    @Setter
+    public static class CreateRequest {
+
+        @NotBlank(message = "登录账号不能为空")
+        @Size(max = 64, message = "登录账号长度不能超过 64")
+        private String username;
+
+        @NotBlank(message = "姓名不能为空")
+        @Size(max = 64, message = "姓名长度不能超过 64")
+        private String realName;
+
+        /** 所属部门（必填：{@code sys_user.dept_id NOT NULL}）。 */
+        @NotNull(message = "所属部门不能为空")
+        private Long deptId;
+
+        @Size(max = 20, message = "手机号长度不能超过 20")
+        private String phone;
+
+        @Size(max = 128, message = "邮箱长度不能超过 128")
+        private String email;
+
+        /** 角色（D2=A：至少 1 个；服务层校验存在且启用）。 */
+        @NotEmpty(message = "请至少分配一个角色")
+        private List<@NotBlank(message = "角色编码不能为空") String> roleCodes;
     }
 
     /** 用户列表查询条件（同时被 queryUser 工具复用）。 */

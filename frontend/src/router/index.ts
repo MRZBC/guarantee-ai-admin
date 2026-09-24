@@ -36,6 +36,19 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '登录', public: true }
   },
   {
+    /*
+      修改密码（D1=C 的连带项）。
+
+      **刻意与 /login 同级、不在 AppLayout 之下**：被强制改密的用户此时什么都做不了，
+      让他看到带侧边栏与菜单的空壳只会制造"我是不是坏了"的错觉。
+    */
+    path: '/change-password',
+    name: 'ChangePassword',
+    component: () => import('@/views/ChangePassword.vue'),
+    // 不设 public：改密接口靠 token 认人，未登录访问要先登录
+    meta: { title: '修改密码' }
+  },
+  {
     path: '/',
     component: () => import('@/layout/AppLayout.vue'),
     redirect: '/dashboard',
@@ -129,24 +142,43 @@ const router = createRouter({
 /** 查不到权限时的兜底落地页。 */
 const FALLBACK_PATH = '/dashboard'
 
+/** 强制改密页路径（§6.2b 第 2 条）。 */
+const CHANGE_PASSWORD_PATH = '/change-password'
+
 /**
- * 全局前置守卫：登录态 + 页面权限（P-06）。
+ * 全局前置守卫：登录态 + 强制改密闸门 + 页面权限（P-06 / D1=C）。
  *
  * <p><b>为什么必须异步</b>：刷新页面时内存里可能只有 token（`user` 为空），
  * 此时直接查 `permissions` 会把"还没加载"误判成"没有权限"，
  * 表现为"一刷新就被踢回首页"。因此先 `fetchMe()` 补齐权限快照再判断。</p>
  *
- * <p><b>两个防死循环的细节</b>：① 兜底页自身无权限时不再跳兜底页
- * （否则 Vue Router 会判定"无限重定向"并中断导航）；② `fetchMe()` 失败时不抛错，
- * 交给 `request.ts` 统一提示与 401 跳登录，避免守卫把页面卡死。</p>
+ * <p><b>强制改密闸门（§6.2b 第 2 条）</b>：`mustChangePassword` 为 true 时，
+ * 除改密页本身外的一切路由都重定向到 `/change-password`。这只是**体验**层——
+ * 真正的安全边界是服务端 `PasswordChangeRequiredFilter`（用户直接调接口照样被 403/1006 拒绝）。
+ * 因为标记会被持久化（见 `stores/user.ts`），守卫在刷新后**第一次导航时**就能生效，
+ * 不必等 `fetchMe()` 回来才发现"该用户必须改密"。</p>
+ *
+ * <p><b>三个防死循环的细节</b>：① 兜底页自身无权限时不再跳兜底页
+ * （否则 Vue Router 会判定"无限重定向"并中断导航）；② 改密页不受权限码约束
+ * （它没有 `meta.permission`，且必须对"什么权限都没有"的新账号可用）；
+ * ③ `fetchMe()` 失败时不抛错，交给 `request.ts` 统一提示与 401 跳登录，避免守卫把页面卡死。</p>
  */
 router.beforeEach(async (to) => {
   const token = getToken()
   if (!token && !to.meta.public) {
     return { path: '/login', query: to.fullPath !== '/' ? { redirect: to.fullPath } : undefined }
   }
+
+  const userStore = useUserStore()
+
   if (token && to.path === '/login') {
-    return { path: FALLBACK_PATH }
+    // 已被强制改密的用户重新打开登录页时，应回到改密页而不是首页（首页必然被闸门拒绝）
+    return { path: userStore.mustChangePassword ? CHANGE_PASSWORD_PATH : FALLBACK_PATH }
+  }
+
+  // 强制改密闸门：除改密页自身外一律重定向过去
+  if (token && userStore.mustChangePassword && to.path !== CHANGE_PASSWORD_PATH) {
+    return { path: CHANGE_PASSWORD_PATH }
   }
 
   const required = to.meta.permission
@@ -154,12 +186,15 @@ router.beforeEach(async (to) => {
     return true
   }
 
-  const userStore = useUserStore()
   if (!userStore.user) {
     try {
       await userStore.fetchMe()
     } catch {
       return true
+    }
+    // fetchMe 可能刚刚把标记打开（例如缓存被清过），需要重新判一次
+    if (userStore.mustChangePassword && to.path !== CHANGE_PASSWORD_PATH) {
+      return { path: CHANGE_PASSWORD_PATH }
     }
   }
   if (userStore.permissions.includes(required)) {

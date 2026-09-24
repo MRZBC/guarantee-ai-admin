@@ -1,5 +1,6 @@
 package com.guarantee.web.init;
 
+import com.guarantee.common.security.DefaultCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -95,7 +96,19 @@ public class DataInitializer implements ApplicationRunner {
     private static final String ADMIN_PASSWORD = "Admin@123";
     private static final String OPERATOR_PASSWORD = "Operator@123";
     private static final String ANALYST_PASSWORD = "Analyst@123";
-    private static final String DEFAULT_PASSWORD = "User@123";
+
+    /**
+     * 演示用户的默认密码。
+     *
+     * <p>刻意引用 {@link DefaultCredentials#BUILT_IN_DEFAULT_PASSWORD} 而**不是**再写一遍字面量：
+     * P-10 起"新建账号 / 管理员重置密码"也写这个值，两处同值定义会漂移，
+     * 而"以为改了一处、实际生效的是另一处"是最难排查的一类问题。</p>
+     *
+     * <p>注意这里用的是**内置常量**而非可配置值 {@code DefaultCredentials.defaultPassword()}：
+     * 演示数据种子是开发/测试用途，应当稳定可预期；生产环境若要覆盖初始密码，
+     * 覆盖的是业务路径（新建/重置），不该反过来改演示数据。</p>
+     */
+    private static final String DEFAULT_PASSWORD = DefaultCredentials.BUILT_IN_DEFAULT_PASSWORD;
 
     /** 区域权重（合计 100）。浙江最高、江苏次之。 */
     private static final String[][] REGIONS = {

@@ -2,6 +2,7 @@ package com.guarantee.system.service;
 
 import com.guarantee.common.api.PageResult;
 import com.guarantee.common.exception.BizException;
+import com.guarantee.common.security.DefaultCredentials;
 import com.guarantee.common.security.Roles;
 import com.guarantee.common.security.UserTokenRevoker;
 import com.guarantee.system.dto.UserDto;
@@ -19,6 +20,7 @@ import com.guarantee.system.vo.UserVO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,12 +39,13 @@ import java.util.stream.Collectors;
  * <p><b>安全约束</b>：所有对外返回的 VO 都不含 password；只有
  * {@link #getEntityByUsername(String)}（登录专用）返回带密码散列的实体。</p>
  *
- * <p><b>D-2 收敛</b>：写操作只有 UPDATE / ENABLE-DISABLE / ASSIGN_ROLES 三类，
- * 没有 create 与 reset-password —— 这是"新建账号与密码重置单独立项"的代码级落点。</p>
+ * <p><b>P-10 起解除了 D-2 的收敛</b>：新增 CREATE 与 RESET_PASSWORD 两类写操作
+ * （见 docs/REQ-用户管理新增与修改.md）。两者都写入**固定默认密码**并把
+ * {@code must_change_password} 置 1，要求目标用户下次登录先改密。</p>
  *
  * <p><b>危险动作保护</b>（SYS-W-04）：禁止停用自己、禁止停用最后一个启用 ADMIN、
- * 禁止给自己增删 ADMIN 角色、禁止移除最后一个启用 ADMIN 的 ADMIN 角色。
- * 这些规则同时被"提案生成期预检"与"确认执行期复核"调用（SYS-C-05）。</p>
+ * 禁止给自己增删 ADMIN 角色、禁止移除最后一个启用 ADMIN 的 ADMIN 角色、
+ * 禁止重置自己的密码。这些规则同时被"提案生成期预检"与"确认执行期复核"调用（SYS-C-05）。</p>
  */
 @Service
 public class UserService {
@@ -58,6 +61,22 @@ public class UserService {
     /** 邮箱：宽松匹配（SYS-W-04 格式校验）。 */
     private static final Pattern EMAIL = Pattern.compile("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}");
 
+    /** 登录账号：4-64 位字母、数字、下划线、点、中划线（P-10 新建校验）。 */
+    private static final Pattern USERNAME = Pattern.compile("[A-Za-z0-9_.-]{4,64}");
+
+    /** 新密码长度下界（D8=A：极简策略）。 */
+    public static final int PASSWORD_MIN_LENGTH = 8;
+
+    /**
+     * 新密码长度上界。
+     *
+     * <p>注意这是**字符数**上界，不等于字节数：BCrypt 只处理前 **72 字节**，
+     * 因此 64 个 ASCII 字符安全，而 64 个汉字是 192 字节、会在第 72 字节处被静默截断
+     * （即"前 24 个汉字相同"的两个密码等价）。属低危，但如果将来要收紧，
+     * 校验单位应从字符改成 {@code getBytes(UTF_8).length}。</p>
+     */
+    public static final int PASSWORD_MAX_LENGTH = 64;
+
     private final SysUserMapper sysUserMapper;
     private final SysRoleMapper sysRoleMapper;
     /**
@@ -68,19 +87,30 @@ public class UserService {
     private final DataScopeService dataScopeService;
     private final ObjectProvider<UserTokenRevoker> tokenRevokerProvider;
     private final WebAuditor webAuditor;
+    /**
+     * 密码散列。bean 定义在 {@code guarantee-common} 的 {@code PasswordEncoderConfig}——
+     * 依赖方向是 auth → system，此处不能依赖 auth 里原有的那个 bean。
+     */
+    private final PasswordEncoder passwordEncoder;
+    /** 初始密码的单一来源（内置 {@code User@123}，可经配置覆盖）。 */
+    private final DefaultCredentials defaultCredentials;
 
     public UserService(SysUserMapper sysUserMapper,
                        SysRoleMapper sysRoleMapper,
                        SysDepartmentMapper sysDepartmentMapper,
                        DataScopeService dataScopeService,
                        ObjectProvider<UserTokenRevoker> tokenRevokerProvider,
-                       WebAuditor webAuditor) {
+                       WebAuditor webAuditor,
+                       PasswordEncoder passwordEncoder,
+                       DefaultCredentials defaultCredentials) {
         this.sysUserMapper = sysUserMapper;
         this.sysRoleMapper = sysRoleMapper;
         this.sysDepartmentMapper = sysDepartmentMapper;
         this.dataScopeService = dataScopeService;
         this.tokenRevokerProvider = tokenRevokerProvider;
         this.webAuditor = webAuditor;
+        this.passwordEncoder = passwordEncoder;
+        this.defaultCredentials = defaultCredentials;
     }
 
     // ==================================================================
@@ -292,6 +322,194 @@ public class UserService {
     }
 
     // ==================================================================
+    // 写（P-10：新增 / 密码）
+    // ==================================================================
+
+    /**
+     * 新建用户（P-10 / CREATE）。
+     *
+     * <p>密码不由前端提供：写入 {@link DefaultCredentials} 的固定默认密码，并置"首次登录强制改密"。
+     * 因此<b>明文密码永不经过 HTTP</b>（既不在请求里，也不在响应里）。</p>
+     */
+    @Transactional
+    public UserVO create(UserDto.CreateRequest request, DataScope scope, Long operatorUserId) {
+        List<String> roleCodes = validateCreate(request, scope);
+        List<Long> roleIds = resolveRoleIds(roleCodes);
+
+        SysUser entity = new SysUser();
+        entity.setUsername(request.getUsername().trim());
+        entity.setRealName(request.getRealName().trim());
+        entity.setDeptId(request.getDeptId());
+        entity.setPhone(normalize(request.getPhone()));
+        entity.setEmail(normalize(request.getEmail()));
+        // 新账号固定启用：让创建时就能建停用账号没有实际价值，反而多一条"建好却是停用"的困惑路径
+        entity.setStatus(1);
+        applyInitialPassword(entity);
+
+        sysUserMapper.insert(entity);
+        if (!roleIds.isEmpty()) {
+            sysUserMapper.upsertUserRoles(entity.getId(), roleIds);
+        }
+        log.info("新增用户成功 id={} username={} 角色={} 操作者={}",
+                entity.getId(), entity.getUsername(), roleCodes, operatorUserId);
+
+        // 页面直连审计（SYS-A-07 / AC-22）。phone / email 传原值，由 OperationAuditService 统一脱敏（D-4）。
+        // 绝不记录任何密码信息——"需要改密"这个事实本身是可以记的，密码不行（SYS-A-05）。
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("username", entity.getUsername());
+        after.put("realName", entity.getRealName());
+        after.put("deptId", entity.getDeptId());
+        after.put("phone", entity.getPhone());
+        after.put("email", entity.getEmail());
+        after.put("status", entity.getStatus());
+        after.put("roleCodes", roleCodes);
+        after.put("mustChangePassword", entity.getMustChangePassword());
+        webAuditor.success("CREATE", "USER", entity.getId(), entity.getUsername(), null, after);
+
+        return getById(entity.getId());
+    }
+
+    /**
+     * 自助改密（P-10 / §5.5）。
+     *
+     * <p>顺序不可颠倒：取当前散列 → 校验旧密码 → 校验新密码策略 → 写新散列并清强制改密标记 →
+     * <b>撤销该用户全部令牌</b>。</p>
+     *
+     * <p><b>撤销令牌是必须的</b>，不是可选的收尾：当前 JWT 里的 {@code mcp} claim 恒为 true，
+     * 不撤销的话用户改完密码仍会被强制闸门拦住（表现为"改了但没生效"）；
+     * 另外若密码是被他人改动，原持有者还能继续用旧会话，等于密码变更不生效。</p>
+     *
+     * <p>旧密码错误<b>不计入登录失败锁定</b>：走的是已认证会话，不是登录尝试，
+     * 不存在需要爆破的对象。</p>
+     */
+    @Transactional
+    public void changeOwnPassword(Long userId, String oldPassword, String newPassword) {
+        SysUser existing = sysUserMapper.selectEntityById(userId);
+        if (existing == null) {
+            throw BizException.notFound(DataScopeService.OUT_OF_SCOPE_MESSAGE);
+        }
+        if (oldPassword == null || !passwordEncoder.matches(oldPassword, existing.getPassword())) {
+            throw new BizException("原密码不正确");
+        }
+        if (newPassword != null && newPassword.equals(oldPassword)) {
+            throw BizException.badRequest("新密码不能与原密码相同");
+        }
+        validateNewPassword(newPassword);
+
+        int affected = sysUserMapper.updatePassword(userId, passwordEncoder.encode(newPassword), 0);
+        if (affected != 1) {
+            throw new BizException("密码修改失败，请重试");
+        }
+        revokeTokens(List.of(userId), "用户修改了自己的密码: " + existing.getUsername());
+        log.info("用户自助改密成功 id={} username={}", userId, existing.getUsername());
+
+        // 审计只记"发生了改密"与标记变化，不记任何密码信息（SYS-A-05）
+        webAuditor.success("CHANGE_PASSWORD", "USER", userId, existing.getUsername(),
+                Map.of("mustChangePassword", String.valueOf(existing.getMustChangePassword())),
+                Map.of("mustChangePassword", "0"));
+    }
+
+    /**
+     * 管理员重置他人密码（P-10 / §4.7，D3=B）。
+     *
+     * <p>语义是"把密码重置回固定默认密码，并要求其下次登录必须修改"——<b>不是</b>让管理员
+     * 指定一个密码。让管理员指定会让密码经手他人并进入请求体，正是 D1=C 要避免的。</p>
+     */
+    @Transactional
+    public UserVO resetPassword(Long id, DataScope scope, Long operatorUserId) {
+        SysUser existing = validateResetPassword(id, scope, operatorUserId);
+        int affected = sysUserMapper.updatePassword(id,
+                passwordEncoder.encode(defaultCredentials.defaultPassword()), 1);
+        if (affected != 1) {
+            throw new BizException("密码重置失败，请刷新后重试");
+        }
+        revokeTokens(List.of(id), "管理员重置了密码: " + existing.getUsername());
+        log.info("重置用户密码成功 id={} username={} 操作者={}",
+                id, existing.getUsername(), operatorUserId);
+        webAuditor.success("RESET_PASSWORD", "USER", id, existing.getUsername(),
+                Map.of("mustChangePassword", String.valueOf(existing.getMustChangePassword())),
+                Map.of("mustChangePassword", "1"));
+        return getById(id);
+    }
+
+    /**
+     * 是否处于"首次登录强制改密"状态（AuthService 构造 {@code CurrentUserVO} 用）。
+     *
+     * <p>为什么不把该字段加到 {@code UserVO}：那会让它随**每一次用户列表查询**返回。
+     * 这个标记只在"我自己"的上下文里有意义。</p>
+     */
+    @Transactional(readOnly = true)
+    public boolean mustChangePassword(Long userId) {
+        SysUser entity = sysUserMapper.selectEntityById(userId);
+        return entity != null && Integer.valueOf(1).equals(entity.getMustChangePassword());
+    }
+
+    /**
+     * 新密码策略（D8=A：极简）。
+     *
+     * <p>复杂度 / 定期改密 / 历史密码不可复用仍属 {@code REQ-登录安全与令牌生命周期加固方案}
+     * 的 N-4，本需求只采纳了其中的"首次登录强制改密"。</p>
+     */
+    private void validateNewPassword(String newPassword) {
+        if (newPassword == null || newPassword.isBlank()) {
+            throw BizException.badRequest("新密码不能为空");
+        }
+        if (newPassword.length() < PASSWORD_MIN_LENGTH || newPassword.length() > PASSWORD_MAX_LENGTH) {
+            throw BizException.badRequest(
+                    "新密码长度需在 " + PASSWORD_MIN_LENGTH + "~" + PASSWORD_MAX_LENGTH + " 位之间");
+        }
+        if (newPassword.equals(defaultCredentials.defaultPassword())) {
+            throw BizException.badRequest("新密码不能与系统默认密码相同");
+        }
+    }
+
+    /**
+     * 写入固定默认密码并置"首次登录强制改密"。
+     *
+     * <p>创建与重置<b>共用这一处</b>：两处各写一遍必然漂移，而"其中一处忘了置标记"
+     * 会让新账号直接可用（等于强制改密形同虚设）。</p>
+     */
+    private void applyInitialPassword(SysUser entity) {
+        entity.setPassword(passwordEncoder.encode(defaultCredentials.defaultPassword()));
+        entity.setMustChangePassword(1);
+    }
+
+    /** 空白字符串归一化为 null：避免手机号/邮箱存成空串，与"未填"难以区分。 */
+    private static String normalize(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /** 手机号 / 邮箱格式校验（修改资料与新建共用，避免两处文案漂移）。 */
+    private static void validatePhoneAndEmail(String phone, String email) {
+        if (phone != null && !phone.isBlank() && !PHONE.matcher(phone.trim()).matches()) {
+            throw BizException.badRequest("手机号格式不正确，应为 11 位大陆手机号");
+        }
+        if (email != null && !email.isBlank() && !EMAIL.matcher(email.trim()).matches()) {
+            throw BizException.badRequest("邮箱格式不正确");
+        }
+    }
+
+    /** 角色编码去空、去重、保序；为空直接失败（D2=A：新建必须至少 1 个角色）。 */
+    private static List<String> normalizeRoleCodes(List<String> roleCodes) {
+        LinkedHashSet<String> target = new LinkedHashSet<>();
+        if (roleCodes != null) {
+            roleCodes.stream()
+                    .filter(Objects::nonNull)
+                    .map(String::trim)
+                    .filter(code -> !code.isEmpty())
+                    .forEach(target::add);
+        }
+        if (target.isEmpty()) {
+            throw BizException.badRequest("角色列表不能为空：新建用户必须至少分配一个角色");
+        }
+        return new ArrayList<>(target);
+    }
+
+    // ==================================================================
     // 预检（提案生成期调用，与执行期复核共用同一实现，SYS-C-05）
     // ==================================================================
 
@@ -301,14 +519,7 @@ public class UserService {
         if (request.isEmpty()) {
             throw BizException.badRequest("至少需要提供一个待修改字段（realName / phone / email / deptId）");
         }
-        if (request.getPhone() != null && !request.getPhone().isBlank()
-                && !PHONE.matcher(request.getPhone().trim()).matches()) {
-            throw BizException.badRequest("手机号格式不正确，应为 11 位大陆手机号");
-        }
-        if (request.getEmail() != null && !request.getEmail().isBlank()
-                && !EMAIL.matcher(request.getEmail().trim()).matches()) {
-            throw BizException.badRequest("邮箱格式不正确");
-        }
+        validatePhoneAndEmail(request.getPhone(), request.getEmail());
         // 不得修改自己的部门：改变自己的组织归属属于提权风险（SYS-W-04）
         if (request.getDeptId() != null && id.equals(operatorUserId)) {
             throw BizException.badRequest("不允许修改自己的所属部门");
@@ -318,6 +529,61 @@ public class UserService {
         if (request.getDeptId() != null
                 && sysDepartmentMapper.selectEntityById(request.getDeptId()) == null) {
             throw BizException.badRequest("部门不存在或已删除: " + request.getDeptId());
+        }
+        return existing;
+    }
+
+    /**
+     * 新建用户预检（P-10）。
+     *
+     * @return 去重保序后的角色编码
+     */
+    public List<String> validateCreate(UserDto.CreateRequest request, DataScope scope) {
+        String username = request.getUsername() == null ? null : request.getUsername().trim();
+        if (username == null || username.isEmpty()) {
+            throw BizException.badRequest("登录账号不能为空");
+        }
+        if (!USERNAME.matcher(username).matches()) {
+            throw BizException.badRequest("登录账号由 4-64 位字母、数字、下划线、点或中划线组成");
+        }
+        if (request.getRealName() == null || request.getRealName().trim().isEmpty()) {
+            throw BizException.badRequest("姓名不能为空");
+        }
+        // sys_user.dept_id 是 NOT NULL：用户必须属于一个部门
+        if (request.getDeptId() == null) {
+            throw BizException.badRequest("所属部门不能为空");
+        }
+        if (sysDepartmentMapper.selectEntityById(request.getDeptId()) == null) {
+            throw BizException.badRequest("部门不存在或已删除: " + request.getDeptId());
+        }
+        validatePhoneAndEmail(request.getPhone(), request.getEmail());
+
+        // 登录名唯一性只比对**未删除**账号：selectByUsername 已带 is_deleted = 0（LD-05b），
+        // 与唯一键 (username, IFNULL(deleted_at, ...)) 的语义一致——已删除账号的名字可以被复用。
+        // 若改用"含已删除"的查询，会把合法创建误判为冲突。
+        if (sysUserMapper.selectByUsername(username) != null) {
+            throw new BizException("登录账号已存在：" + username);
+        }
+
+        // 角色必填（D2=A）：resolveRoleIds 同时校验"角色存在且启用"
+        List<String> roleCodes = normalizeRoleCodes(request.getRoleCodes());
+        resolveRoleIds(roleCodes);
+        return roleCodes;
+    }
+
+    /**
+     * 重置密码预检（P-10 / §4.7 守卫表）。
+     *
+     * <p><b>刻意没有"不得重置最后一个启用 ADMIN"这一条。</b>默认权限矩阵下
+     * {@code system:user:reset-password} 仅 ADMIN 持有，而"最后一个启用 ADMIN"必然就是
+     * 操作者本人（两者都是启用的 ADMIN），已被下面的"不得重置自己"完整覆盖；
+     * 加了就是一段永不触发的死代码，还会挡住"管理员 A 帮忘记密码的管理员 B 重置"这一合法场景。
+     * 完整推演见需求文档 §4.7a 的纠错记录。</p>
+     */
+    public SysUser validateResetPassword(Long id, DataScope scope, Long operatorUserId) {
+        SysUser existing = requireVisible(id, scope);
+        if (existing.getId().equals(operatorUserId)) {
+            throw new BizException("请使用「修改密码」修改自己的密码");
         }
         return existing;
     }
@@ -563,9 +829,23 @@ public class UserService {
         return getById(id);
     }
 
-    /** 恢复阻碍项（LD-04a）：所属部门必须存在且已恢复（dept_id 为必填，故无"无部门"分支）。 */
+    /**
+     * 恢复阻碍项（LD-04a）：所属部门必须存在且已恢复（dept_id 为必填，故无"无部门"分支）；
+     * 且登录账号不能被另一个有效账号占用。
+     *
+     * <p><b>登录名冲突这一条是 P-10 补上的</b>：唯一键是
+     * {@code (username, IFNULL(deleted_at, …))}，所以已删除账号的登录名**可以被复用**。
+     * 在 P-10 之前根本没有"新建用户"入口，这个冲突不可达，因此一直没有校验；
+     * 一旦能新建，"新建同名账号 → 恢复旧账号"就会撞唯一键抛 SQL 异常 →
+     * <b>500 而不是可读的业务提示</b>。这里与 {@code RoleService.restore} 的
+     * "角色编码已被同名的有效角色占用" 对称。</p>
+     */
     public List<String> restoreBlockers(SysUser user) {
         List<String> blockers = new ArrayList<>();
+        SysUser byName = sysUserMapper.selectByUsername(user.getUsername());
+        if (byName != null && !byName.getId().equals(user.getId())) {
+            blockers.add("登录账号已被同名账号占用，无法恢复：" + user.getUsername());
+        }
         SysDepartment dept = sysDepartmentMapper.selectEntityByIdIncludingDeleted(user.getDeptId());
         if (dept == null) {
             blockers.add("所属部门不存在");

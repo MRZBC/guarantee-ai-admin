@@ -29,6 +29,15 @@ export interface InsuranceTypeOption {
   typeName: string
   category: string
   categoryName: string | null
+  /**
+   * 后端 TINYINT：1 启用 / 0 停用。
+   *
+   * <p>筛选下拉里**会出现停用险种**（历史订单仍在列表里展示它），因此选项文案要标注状态，
+   * 否则用户会以为它还能承保新业务。</p>
+   */
+  status?: number | null
+  /** 逻辑删除标记：1 已删除 / 0 正常（原理由同上；仅直连删除会走到这个状态）。 */
+  isDeleted?: number | null
 }
 
 export interface InsuranceTypeQuery extends PageQuery {
@@ -56,6 +65,20 @@ export interface InsuranceTypeUpdateParams {
   /** 后端 TINYINT：1 启用 / 0 停用 */
   status: number
   description?: string
+}
+
+/** 地区（行政区划）下拉项 —— 数据来自 `GET /api/system/regions/options` */
+export interface RegionOption {
+  /** 行政区划代码（6 位，例如 330000 / 330100 / 330102）：筛选参数就传它 */
+  code: string
+  /** 全称（例如 浙江省 / 杭州市 / 上城区） */
+  name: string
+  /** 简称，仅用于搜索（例如 浙江） */
+  shortName: string | null
+  /** 层级 1省 2市 3区县 */
+  level: number
+  /** 上级区划码（省级为空串）：前端据此组装省/市/区县树 */
+  parentCode: string | null
 }
 
 /** 机构配置 */
@@ -98,6 +121,15 @@ export interface OrgOption {
   orgName: string
   regionCode: string | null
   regionName: string | null
+  /**
+   * 后端 TINYINT：1 启用 / 0 停用。
+   *
+   * <p>筛选下拉里**会出现停用/已删除机构**（历史订单仍在列表里展示它们），
+   * 因此选项文案要标注状态，否则用户会以为它还能用于新业务。</p>
+   */
+  status?: number | null
+  /** 逻辑删除标记：1 已删除 / 0 正常（原理由同上）。 */
+  isDeleted?: number | null
 }
 
 export interface OrgQuery extends PageQuery {
@@ -195,6 +227,15 @@ export interface UserItem {
   createdAt: string | null
   roleIds: number[] | null
   roleNames: string[] | null
+  /**
+   * 已分配角色的**编码**（不是 id）。
+   *
+   * <p>角色分配对话框的回显必须用它：分配接口 `PUT /system/users/{id}/roles` 收的是
+   * `roleCodes`；且后端 `UserService` 的角色校验与回填同为 `is_deleted = 0` 口径，
+   * 因此它是唯一"回显了就不会被判不存在"的来源——用 `roleIds` 或 `roleNames` 反查都会对不上
+   * （与 `RoleItem.permissionCodes` 同款约定）。</p>
+   */
+  roleCodes: string[] | null
   /** 逻辑删除标记：后端 TINYINT，1 已删除 / 0 或 null 正常 */
   isDeleted: number | null
   /** 逻辑删除时间（yyyy-MM-dd HH:mm:ss）；未删除为 null。删除操作人不返回（设计文档 §10.3） */
@@ -207,6 +248,65 @@ export interface UserQuery extends PageQuery {
   username?: string
   realName?: string
   status?: number | null
+}
+
+/**
+ * 新增用户参数（`POST /system/users`，权限 `system:user:create`）。
+ *
+ * <p><b>刻意没有任何密码字段</b>：密码由后端写入部署配置的**固定默认密码**，
+ * 并同时置 `must_change_password = 1`（该用户首次登录必须改密）。管理员既不需要、
+ * 也不应该指定初始密码——"明文密码永不经过 HTTP"是这条决策的附带收益。</p>
+ *
+ * <p>也没有 `status` 字段：新账号固定为启用（后端写死 `status = 1`）。</p>
+ */
+export interface UserCreateParams {
+  /** 必填，4-64 位字母、数字、下划线、点或中划线 */
+  username: string
+  /** 必填，≤64 */
+  realName: string
+  /** 必填；部门必须存在且未删除（schema 里 `dept_id` 是 NOT NULL） */
+  deptId: number
+  /** 选填，≤20；11 位大陆手机号 */
+  phone?: string
+  /** 选填，≤128；邮箱格式 */
+  email?: string
+  /** 必填且至少 1 个（D2=A）；角色必须存在且启用 */
+  roleCodes: string[]
+}
+
+/**
+ * 修改用户资料参数（`PUT /system/users/{id}`，权限 `system:user:update`）。
+ *
+ * <p>三点是**契约本身**，不要"顺手"补字段：</p>
+ * <ol>
+ *   <li>`username` **不可改**（后端 `UpdateRequest` 里根本没有该字段）；</li>
+ *   <li>`deptId` 省略/传 `null` 表示"**不改**"，不是"清空部门"——
+ *       "清空部门"能力已整体移除（`sys_user.dept_id NOT NULL`）；</li>
+ *   <li>**空请求会被拒**（「至少需要提供一个待修改字段」），因此只在字段确有变化时才上送。</li>
+ * </ol>
+ *
+ * <p>同样没有 `status`：状态改动只能走 `PATCH /{id}/status`，只有那条路径带
+ * 「停用前置检查 + 撤销持有者令牌」。</p>
+ */
+export interface UserUpdateParams {
+  realName?: string
+  phone?: string
+  email?: string
+  deptId?: number | null
+}
+
+/**
+ * 用户角色分配参数（`PUT /system/users/{id}/roles`，权限 `system:user:assign-role`）。
+ *
+ * <p><b>全量替换语义</b>：提交的是"变更后的**完整**角色码集合"，漏传即等于移除。
+ * 空数组会被后端拒绝（「角色列表不能为空」）。</p>
+ *
+ * <p><b>副作用</b>：后端会撤销该用户的**全部令牌**——立即强制下线，需重新登录后
+ * 新权限才生效。影响必须在上屏文案里说明。</p>
+ */
+export interface UserAssignRolesParams {
+  /** 变更后的完整角色码集合（`roleCode`，不是 id），不可为空 */
+  roleCodes: string[]
 }
 
 /* ---------------- 在线会话（AUTH-05） ---------------- */
@@ -260,6 +360,19 @@ export interface RoleItem {
   createdAt: string | null
   permissionIds: number[] | null
   permissionNames: string[] | null
+  /**
+   * 已授权权限**编码**（不是 id）。
+   *
+   * 授权对话框回显必须用它：授权接口 `PUT /system/roles/{roleCode}/permissions` 收的是
+   * `permCodes`；且后端 `selectPermissionRefsByRoleIds`（回填本字段）与授权校验
+   * `selectPermissionEntitiesByCodes` 同为 `is_deleted = 0` 口径，因此它是唯一
+   * "回显了就不会被判不存在"的来源——用 `permissionNames` 反查或 `permissionIds` 都会对不上。
+   */
+  permissionCodes: string[] | null
+  /** 已授权权限数（权限列折叠展示「共 N 项」用） */
+  permissionCount: number | null
+  /** 持有该角色的用户数（授权影响提示用：变更后这些人会被强制下线） */
+  userCount: number | null
   /** 逻辑删除标记：后端 TINYINT，1 已删除 / 0 或 null 正常 */
   isDeleted: number | null
   /** 逻辑删除时间（yyyy-MM-dd HH:mm:ss）；未删除为 null。删除操作人不返回（设计文档 §10.3） */
@@ -273,7 +386,41 @@ export interface RoleQuery extends PageQuery {
   roleName?: string
 }
 
-/** 权限（平铺结构） */
+/** 角色新增参数（`POST /system/roles`，权限 `system:role:create`） */
+export interface RoleCreateParams {
+  /** 必填，2-32 位；保留码 `ADMIN` 前端先拦、后端兜底 */
+  roleCode: string
+  /** 必填，≤64 */
+  roleName: string
+  /** 选填，≤255 */
+  description?: string
+}
+
+/**
+ * 角色修改参数（`PUT /system/roles/{id}`，权限 `system:role:update`）。
+ *
+ * 两个字段是**刻意不提供**的，不要"顺手"补上：
+ * - `roleCode`：后端 `RoleDto.UpdateRequest` 无此字段，角色编码创建后不可改；
+ * - `status`：状态改动一律走 `PATCH /{id}/status`——**只有那条路径**带
+ *   「停用前置检查（有启用用户则拒绝）+ 撤销持有者令牌」，走 PUT 会静默绕过这两道保护。
+ */
+export interface RoleUpdateParams {
+  roleName: string
+  description?: string
+}
+
+/**
+ * 角色授权参数（`PUT /system/roles/{roleCode}/permissions`，权限 `system:role:assign-permission`）。
+ *
+ * **全量替换语义**：后端先 `softDeleteRolePermissionsNotIn` 再 `upsertRolePermissions`，
+ * 提交的是"变更后的**完整**权限集"，漏传即等于删除。空集会被后端拒绝。
+ */
+export interface RoleAssignPermissionsParams {
+  /** 变更后的完整权限码集合（`permCode`，不是 id），不可为空 */
+  permCodes: string[]
+}
+
+/** 权限（平铺结构，前端按 parentId 组树） */
 export interface PermissionItem {
   id: number
   permCode: string
@@ -284,4 +431,11 @@ export interface PermissionItem {
   component: string | null
   icon: string | null
   sortNo: number | null
+  /**
+   * 逻辑删除标记。后端**会返回**该字段，但当前无需前端过滤：
+   * `SysPermissionMapper.selectAllOrdered` 已加 `is_deleted = 0`（与授权校验同口径）。
+   */
+  isDeleted: number | null
+  /** 逻辑删除时间；未删除为 null。同上，后端已过滤 */
+  deletedAt: string | null
 }

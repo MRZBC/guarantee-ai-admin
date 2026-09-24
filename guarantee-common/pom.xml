@@ -42,5 +42,18 @@
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-core</artifactId>
         </dependency>
+
+        <!--
+          密码散列（BCrypt）。P-10 起 guarantee-system 的 UserService 需要编码初始密码，
+          而 PasswordEncoder bean 原本定义在 guarantee-auth 的 SecurityConfig 里——
+          依赖方向是 auth → system，system 不能反向依赖，因此把编码器下沉到本模块。
+
+          仍然**不用** spring-boot-starter-security：crypto 只带来 BCrypt/Argon2 等编码器，
+          不会引入自动配置与认证过滤器链（那套只有 guarantee-web 需要）。
+        -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
     </dependencies>
 </project>

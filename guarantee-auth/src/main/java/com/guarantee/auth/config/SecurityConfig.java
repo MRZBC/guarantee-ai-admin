@@ -3,6 +3,7 @@ package com.guarantee.auth.config;
 import tools.jackson.databind.ObjectMapper;
 import com.guarantee.auth.security.JwtAuthenticationFilter;
 import com.guarantee.auth.security.JwtTokenProvider;
+import com.guarantee.auth.security.PasswordChangeRequiredFilter;
 import com.guarantee.auth.security.RestAuthErrorHandlers;
 import com.guarantee.auth.security.TokenRevocationService;
 import jakarta.servlet.DispatcherType;
@@ -15,8 +16,6 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
@@ -42,10 +41,13 @@ import java.util.List;
         LoginGuardProperties.class, RevocationProperties.class})
 public class SecurityConfig {
 
-    @Bean
-    public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder();
-    }
+    /*
+      PasswordEncoder bean **不在本类**：它已下沉到 guarantee-common 的 PasswordEncoderConfig（P-10 / D5）。
+      guarantee-system 的 UserService 也需要编码密码（新建账号写入初始密码、自助改密、管理员重置），
+      而依赖方向是 auth → system，system 拿不到本模块的 bean。
+      ⚠️ 不要在 auth 或 system 里再定义一个同类型 bean：guarantee-web 同时加载两个模块，
+      按类型注入会抛 NoUniqueBeanDefinitionException。
+     */
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
@@ -86,6 +88,15 @@ public class SecurityConfig {
                         .accessDeniedHandler(errorHandlers))
                 .addFilterBefore(new JwtAuthenticationFilter(tokenProvider, revocationService,
                                 userTokenRevocation, sessionRegistry),
+                        UsernamePasswordAuthenticationFilter.class)
+                // 强制改密闸门必须**在 JWT 过滤器之后**：它只认后者附加的
+                // PWD_CHANGE_REQUIRED authority。
+                //
+                // 锚点用 UsernamePasswordAuthenticationFilter 而不是 JwtAuthenticationFilter：
+                // 后者是自定义过滤器、不是 Spring Security 已知的排序锚点（addFilterAfter 对它
+                // 会抛错）。而 addFilterBefore(jwt, UPAF) 让 jwt 落在 UPAF-1、
+                // addFilterAfter(gate, UPAF) 让 gate 落在 UPAF+1，顺序是确定的。
+                .addFilterAfter(new PasswordChangeRequiredFilter(objectMapper),
                         UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

@@ -116,6 +116,7 @@ public class AuthService {
         log.info("登录成功 userId={} username={} roles={}", user.getId(), user.getUsername(), roles);
         return new LoginResponse(issued.token(), "Bearer",
                 tokenProvider.getAbsoluteExpireSeconds(), tokenProvider.getIdleTimeoutSeconds(),
+                Integer.valueOf(1).equals(user.getMustChangePassword()),
                 buildCurrentUser(user.getId(), roles, permissions));
     }
 
@@ -124,6 +125,29 @@ public class AuthService {
         return buildCurrentUser(userId,
                 userService.listRoleCodesByUserId(userId),
                 userService.listPermissionCodesByUserId(userId));
+    }
+
+    /**
+     * 用户自助修改自己的密码（P-10 / §5.5）。
+     *
+     * <p>本方法只做转发：真正的旧密码校验、新密码策略、写散列、清"首次登录强制改密"标记、
+     * 以及<b>撤销该用户全部令牌</b>都在 {@code UserService.changeOwnPassword} 里
+     * （那里才有 PasswordEncoder 与实体读取，也复用了既有的令牌撤销约定）。</p>
+     *
+     * <p><b>撤销令牌是强制的</b>：当前令牌里的 {@code mcp} claim 恒为 true，
+     * 不撤销的话用户改完密码仍会被强制闸门拦住，表现为"改了但没生效"。
+     * 撤销后前端会引导用户重新登录，新令牌的 mcp 即为 false。</p>
+     */
+    public void changePassword(Long userId, String oldPassword, String newPassword) {
+        userService.changeOwnPassword(userId, oldPassword, newPassword);
+    }
+
+    private CurrentUserVO buildCurrentUser(Long userId, List<String> roles, List<String> permissions) {
+        UserVO user = userService.getById(userId);
+        return new CurrentUserVO(user.getId(), user.getUsername(), user.getRealName(),
+                user.getDeptId(), user.getDeptName(),
+                roles, permissions,
+                userService.mustChangePassword(userId));
     }
 
     /**
@@ -143,12 +167,5 @@ public class AuthService {
             log.warn("登出时撤销令牌失败（令牌本身即将失效，不影响登出结果）：jti={} {}",
                     tokenId, ex.getMessage());
         }
-    }
-
-    private CurrentUserVO buildCurrentUser(Long userId, List<String> roles, List<String> permissions) {
-        UserVO user = userService.getById(userId);
-        return new CurrentUserVO(user.getId(), user.getUsername(), user.getRealName(),
-                user.getDeptId(), user.getDeptName(),
-                roles, permissions);
     }
 }

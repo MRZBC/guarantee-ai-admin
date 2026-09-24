@@ -38,6 +38,10 @@ export const AUDIT_DEFAULT_DAYS = 7
  *
  * `PROPOSAL_CREATED` 是提案生命周期事件（不是一次字段变更，无前后值）；
  * `DELETE` / `RESTORE` 来自逻辑删除。三者都必须在，否则会显示英文码。
+ *
+ * `CHANGE_PASSWORD`（自助改密）与 `RESET_PASSWORD`（管理员重置他人密码）随
+ * 「固定默认密码 + 强制首次改密」一起新增：两者都不在 `AUDIT_ACTION_LABELS` 的既有取值里，
+ * 不加就会在审计页整列显示英文码——而这两条恰恰是安全追溯的关键记录（RK-U-14）。
  */
 export const AUDIT_ACTION_LABELS: Record<string, string> = {
   CREATE: '新增',
@@ -48,7 +52,9 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   RESTORE: '恢复',
   ASSIGN_ROLES: '角色分配',
   ASSIGN_PERMISSIONS: '权限授权',
-  PROPOSAL_CREATED: '提案创建'
+  PROPOSAL_CREATED: '提案创建',
+  CHANGE_PASSWORD: '修改密码',
+  RESET_PASSWORD: '重置密码'
 }
 
 /** 目标类型码 → 中文。 */
