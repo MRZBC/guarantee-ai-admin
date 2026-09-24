@@ -47,7 +47,16 @@ public abstract class BaseProposalTool {
         this.scopeResolver = scopeResolver;
     }
 
-    /** 写工具的统一返回（SYS-W-07 要求含 proposalId / summary / expiresAt）。 */
+    /**
+     * 写工具的统一返回（SYS-W-07 要求含 proposalId / summary / expiresAt）。
+     *
+     * <p><b>为什么要把 {@code changes} 也返回给模型</b>：确认卡上的"原值 → 新值"是前端按这份
+     * changes 渲染的，而模型正文里的"变更内容"是它自己写的。此前模型拿不到 changes，
+     * 只能凭记忆写名字，于是出现**正文与卡片不一致**：真机事故（2026-09-25 00:16）模型写
+     * 「变更后角色：行政（编码 OPER_NO_SYS）」，而同屏卡片写的是「业务运营（无系统配置）」——
+     * 因为"行政"只存在于它自己上一轮编造的改名提案里。把 changes 一并返回，
+     * 正文就有了一份**可逐字抄写的真值**（配合提示词要求）。</p>
+     */
     public record WriteToolResult(
             boolean denied,
             String deniedReason,
@@ -57,22 +66,25 @@ public abstract class BaseProposalTool {
             java.time.LocalDateTime expiresAt,
             /** 目标歧义或不存在时的候选列表（SYS-W-10）。 */
             List<TargetCandidate> ambiguousTargets,
+            /** 卡片上"原值 → 新值"的逐条明细（模型正文写"变更内容"时的唯一真值来源）。 */
+            List<com.guarantee.ai.service.ProposalPayload.ChangeItem> changes,
             String hint,
             ToolResultMeta meta) {
 
         public static WriteToolResult denied(String reason) {
-            return new WriteToolResult(true, reason, null, null, null, null, List.of(), null,
+            return new WriteToolResult(true, reason, null, null, null, null, List.of(), List.of(), null,
                     ToolResultMeta.denied(reason));
         }
 
         public static WriteToolResult ambiguous(List<TargetCandidate> candidates, String hint) {
-            return new WriteToolResult(false, null, null, null, null, null, candidates, hint,
+            return new WriteToolResult(false, null, null, null, null, null, candidates, List.of(), hint,
                     ToolResultMeta.ok(hint));
         }
 
         public static WriteToolResult ok(com.guarantee.ai.service.ProposalPayload payload) {
             return new WriteToolResult(false, null, payload.proposalId(), payload.proposalNo(),
                     payload.summary(), payload.expiresAt(), List.of(),
+                    payload.changes() == null ? List.of() : payload.changes(),
                     "提案已生成，但**尚未生效**。请告知用户：在确认卡上点击「确认执行」后才会真正修改数据。",
                     // 与查询工具同一口径原则：给正文看的串里不放工具名与枚举码。
                     // summary 本身就是人话（如「停用险种「投标保函（标准）」」）。
@@ -80,7 +92,7 @@ public abstract class BaseProposalTool {
         }
 
         public static WriteToolResult failed(String hint) {
-            return new WriteToolResult(false, null, null, null, null, null, List.of(), hint,
+            return new WriteToolResult(false, null, null, null, null, null, List.of(), List.of(), hint,
                     ToolResultMeta.ok(hint));
         }
     }

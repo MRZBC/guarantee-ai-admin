@@ -23,9 +23,17 @@ public interface AiOperationProposalMapper {
 
     AiOperationProposal selectByNo(@Param("proposalNo") String proposalNo);
 
+    /**
+     * 当前用户的提案列表（{@code GET /api/ai/proposals} 的数据源）。
+     *
+     * @param conversationId 非 null 时**只返回该会话下的提案**。确认卡是会话内资产
+     *                       （{@code ProposalPayload.conversationId} 就是为此存在），
+     *                       不按会话过滤会让 A 会话的待确认卡渲染到 B 会话的消息流末尾。
+     */
     List<AiOperationProposal> selectByUserId(@Param("userId") Long userId,
                                              @Param("status") String status,
-                                             @Param("limit") int limit);
+                                             @Param("limit") int limit,
+                                             @Param("conversationId") Long conversationId);
 
     /** 同一会话内是否已存在同目标同动作的 PENDING 提案（SYS-W-12）。 */
     List<AiOperationProposal> selectPendingSameTarget(@Param("conversationId") Long conversationId,

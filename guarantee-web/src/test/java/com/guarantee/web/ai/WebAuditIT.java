@@ -366,9 +366,9 @@ class WebAuditIT {
     private List<String> permissionCodesOfRole(String roleCode) {
         return jdbcTemplate.queryForList("""
                 SELECT p.perm_code FROM sys_role r
-                INNER JOIN sys_role_permission rp ON rp.role_id = r.id
+                INNER JOIN sys_role_permission rp ON rp.role_id = r.id AND rp.is_deleted = 0
                 INNER JOIN sys_permission p ON p.id = rp.permission_id
-                WHERE r.role_code = ?
+                WHERE r.role_code = ? AND r.is_deleted = 0
                 ORDER BY p.sort_no
                 """, String.class, roleCode);
     }
@@ -390,9 +390,17 @@ class WebAuditIT {
                 "SELECT id FROM insurance_type WHERE type_name = ?", Long.class, typeName);
     }
 
+    /**
+     * 按编码取角色 id；**必须带 is_deleted = 0**。
+     *
+     * <p>本方法用的是裸 {@code JdbcTemplate}（不走逻辑删除拦截器），而角色删除是逻辑删除。
+     * 真机事故（2026-09-25 00:07 使用者在角色页删掉了「覆盖检查角色」）之后，这里会返回那条
+     * **已删除**的历史行 id，接着 {@code roleService.update(id)} 直接抛「角色不存在」——
+     * 用例挂掉，但业务代码是对的。与 §6.5（`sys_user_role`）、§7.7.6（部门启用用户数）同类。</p>
+     */
     private long roleIdByCode(String roleCode) {
         List<Long> ids = jdbcTemplate.queryForList(
-                "SELECT id FROM sys_role WHERE role_code = ?", Long.class, roleCode);
+                "SELECT id FROM sys_role WHERE role_code = ? AND is_deleted = 0", Long.class, roleCode);
         return ids.isEmpty() ? 0L : ids.get(0);
     }
 

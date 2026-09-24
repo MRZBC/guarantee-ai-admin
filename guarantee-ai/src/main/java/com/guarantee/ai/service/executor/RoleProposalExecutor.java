@@ -96,8 +96,15 @@ public class RoleProposalExecutor implements ProposalExecutor {
         if (Roles.ADMIN.equalsIgnoreCase(role.getRoleCode())) {
             notes = java.util.List.of("超级管理员角色不允许变更权限");
         }
+        // 执行结果消息会落成会话消息给用户看：必须用中文权限名。
+        // 结构化 before/after 仍存编码（审计要的是"到底改了哪几项"，见 P-05 §227）。
+        List<String> afterCodes = updated.getPermissionCodes() == null
+                ? List.of() : updated.getPermissionCodes();
+        String afterText = afterCodes.isEmpty()
+                ? "（已清空该角色的全部权限）"
+                : String.join("，", roleService.permissionDisplayNames(afterCodes));
         return ProposalExecutionResult.ok(
-                "角色「" + updated.getRoleName() + "」权限已变更为 " + afterMap.get("permissionCodes"),
+                "角色「" + updated.getRoleName() + "」的权限已变更为 " + afterText,
                 beforeMap, afterMap, List.of(), notes);
     }
 

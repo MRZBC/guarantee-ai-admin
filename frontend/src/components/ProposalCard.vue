@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
+import { confirmText } from '@/utils/confirmText'
 import type { ProposalPayload, ProposalStatus } from '@/types/ai'
 
 /**
@@ -126,6 +127,29 @@ function stopTimer(): void {
   }
 }
 
+/**
+ * 把后端的「影响面」文案切成逐条要点。
+ *
+ * <p><b>为什么需要切</b>：后端把整个影响面 Map 渲染成**一个**字符串
+ * （{@code 影响面：键 值；键 值；…}，见 {@code ProposalPreview.formatImpact}），
+ * 而本组件按"一条一行"渲染它（正文与二次确认都是 `• xxx`）。
+ * 不切的话，整段影响面会挤成一个超长条目——真机截图确认过这种"没有文本格式"的观感。</p>
+ *
+ * <p><b>切分依据就是后端自己的分隔符「；」</b>，不额外猜语义。已知边界：若某个**值**内部
+ * 含「；」，会被多切一刀。实测这些值都是计数/名称/短句，切开后语义仍然成立
+ * （例如「…无法登录；若当前处于登录状态，会被立即强制下线」→ 两条，读起来更像分条）。</p>
+ *
+ * <p>刻意**保留**首条的「影响面：」前缀：它是唯一的"这段是影响面"标识，
+ * 去掉反而丢信息。所以渲染结果形如
+ * {@code • 影响面：当前角色 运营人员} / {@code • 变更后角色 只读用户}。</p>
+ */
+function impactLines(impact: readonly string[] | null | undefined): string[] {
+  return (impact ?? [])
+    .flatMap((item) => String(item ?? '').split('；'))
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+}
+
 async function handleConfirm(): Promise<void> {
   if (buttonsDisabled.value) return
   if (isDangerous.value) {
@@ -135,14 +159,17 @@ async function handleConfirm(): Promise<void> {
     // window.confirm 是浏览器原生框——标题会显示成域名（如 "localhost:5273 显示"）、
     // 按钮文案跟随系统语言（"确定/取消"），与站内风格完全割裂。
     //
+    // 文案排版统一走 confirmText：首行一句话 + 空行 + 逐条「• xxx」。
     // 注意：impact 各项**已由后端带上「影响面：」前缀**（卡片正文就是直接渲染它们），
     // 所以这里不能再拼一次，否则会出现「影响面：影响面：...」。
-    const impactText = props.proposal.impact.join('；') || '影响面：未提供'
+    const lines = impactLines(props.proposal.impact)
     try {
       await ElMessageBox.confirm(
-        `这是危险操作：${props.proposal.actionName} ${props.proposal.targetTypeName}` +
-          `${props.proposal.targetName ? `「${props.proposal.targetName}」` : ''}。` +
-          `${impactText}。确认执行吗？`,
+        confirmText(
+          `这是危险操作：${props.proposal.actionName} ${props.proposal.targetTypeName}`
+            + `${props.proposal.targetName ? `「${props.proposal.targetName}」` : ''}。确认执行吗？`,
+          lines.length ? lines : ['影响面：未提供']
+        ),
         // 标题与「系统配置」手动操作的确认框同构：`${动作}${对象}`，如「停用险种」「分配权限角色」
         `${props.proposal.actionName ?? ''}${props.proposal.targetTypeName ?? ''}` || '确认执行',
         { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' }
@@ -226,9 +253,9 @@ onBeforeUnmount(stopTimer)
       </el-table-column>
     </el-table>
 
-    <!-- 影响面：高亮文案 -->
+    <!-- 影响面：逐条要点（impact 的每一项内部还可能用「；」串了多条，见 impactLines） -->
     <div v-if="proposal.impact && proposal.impact.length" class="proposal-card__impact">
-      <div v-for="(item, index) in proposal.impact" :key="index">• {{ item }}</div>
+      <div v-for="(item, index) in impactLines(proposal.impact)" :key="index">• {{ item }}</div>
     </div>
 
     <!-- 风险提示 -->

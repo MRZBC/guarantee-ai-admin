@@ -45,10 +45,14 @@ public class OrgProposalTool extends BaseProposalTool {
                     - DELETE：删除机构（必填 id）。**与停用完全不同**：停用=暂停业务、可随时启用、
                       数据仍在默认列表中；删除=从默认列表移除、需要显式恢复才会重新出现。
                     重要规则：
+                    - 行政区划 regionCode 必须来自**系统地区字典**：可传区划码（如 330000 浙江省、
+                      330100 杭州市、330102 上城区）或地区名称（服务端会解析成编码）。
+                      省/市/区县三级都能填；停用或已删除的地区会被拒绝；**不要凭空编造区划码**。
                     - 机构编码 orgCode 新增后不可修改；机构创建会新增数据范围边界，请务必与用户确认层级与上级机构。
                     - 停用时若存在启用中的下级机构或启用中的用户，系统会拒绝。
-                    - 删除比停用**更严格**：机构下存在未删除的下级机构 / 部门 / 用户 / 关联订单时会被拒绝，
-                      失败信息会带具体数量。遇此情况请如实转述，并建议"先处理引用的数据，或改用停用"。
+                    - 删除的前置检查只有一条：机构下存在**未删除的下级机构**时会被拒绝（避免悬挂层级），
+                      失败信息会带数量。**被订单引用不拦删除**——历史订单仍显示该机构名称、也仍能按它筛选，
+                      所以不得说成"因为有订单所以删不掉"，引用订单数只作为影响面提示。
                     - 删除属**危险动作**，确认卡上有二次确认；删除**不改变启用/停用状态**，
                       恢复后回到删除前的状态。删除后可恢复（「显示已删除」）。
                     - 用户说"停用/暂停/禁用"时用 DISABLE，**不要**用 DELETE；用户说"删掉/移除"时
@@ -68,7 +72,8 @@ public class OrgProposalTool extends BaseProposalTool {
             String orgName,
             @ToolParam(description = "机构编码，仅 CREATE 必填。例如 ORG4402", required = false)
             String orgCode,
-            @ToolParam(description = "行政区划编码。例如 440000", required = false)
+            @ToolParam(description = "行政区划：区划码（如 330000 浙江省 / 330100 杭州市 / 330102 上城区）"
+                    + "或地区名称；省/市/区县都可，必须来自系统地区字典", required = false)
             String regionCode,
             @ToolParam(description = "机构层级：1=总部 2=省级 3=市级", required = false)
             Integer orgLevel,

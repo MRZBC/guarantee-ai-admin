@@ -75,10 +75,30 @@ class ProposalClaimGuardTest {
                 .isPresent();
         assertThat(guard.correctionFor(1L, 2L, "变更提案已生成，请到确认卡上点击确认。"))
                 .isPresent();
-        assertThat(guard.correctionFor(1L, 2L, "请在确认卡上点击确认执行。"))
-                .as("指向一张不存在的卡片本身就是需要纠正的失败形态")
-                .isPresent();
         assertThat(guard.correctionFor(1L, 2L, "我生成了了一张新的待确认提案，编号 OP202609231200000001。"))
+                .isPresent();
+    }
+
+    @Test
+    @DisplayName("只有「确认卡 + 点击」但没有完成态动词 → 不纠正（真机实测的误报）")
+    void cardMentionWithoutCompletionCueShouldNotBeCorrected() {
+        // 2026-09-24 实测：模型解释机制时会这样写，它并未声称生成了任何提案。
+        // 曾经"确认卡 + 点击"单独就能命中，于是正常回复后面被贴了一句
+        // "本次回复提到的提案并未生成"——把将来时说成了完成态。
+        assertThat(guard.correctionFor(1L, 2L, "请在确认卡上点击确认执行。"))
+                .as("将来时/机制说明不是完成态声明")
+                .isEmpty();
+        assertThat(guard.correctionFor(1L, 2L,
+                "我再去核对具体权限项并生成变更提案（提案需要在确认卡上点击「确认执行」后才会生效）。"))
+                .as("真机误报原句")
+                .isEmpty();
+        assertThat(guard.correctionFor(1L, 2L,
+                "你回复 A 或 C，我就去生成变更提案（提案需要在确认卡上点击「确认执行」后才会生效）。"))
+                .as("真机误报原句（第二起）")
+                .isEmpty();
+        // 但"已生成"这类完成态一旦出现，即使不含"提案"二字也要纠正
+        assertThat(guard.correctionFor(1L, 2L, "变更已生成，请在确认卡上点击确认执行。"))
+                .as("确认卡分支保留：完成态 + 指向卡片")
                 .isPresent();
     }
 

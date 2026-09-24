@@ -549,10 +549,17 @@ class ProposalFlowIT {
         assertThat(deptId).as("演示数据里应存在含有启用用户的部门").isNotNull();
 
         long adminId = userId("admin");
+        // 必须带 is_deleted = 0：Service 侧的计数经 LogicalDeleteInnerInterceptor 自动过滤，
+        // 而这里用的是裸 JdbcTemplate。不带过滤就会把软删除的历史账号也数进来——
+        // 本开发库「系统部」（id=1011）有 11 行 status=1 且 is_deleted=1 的历史账号
+        // （P-10 删除用户留下的），于是断言期望 38、实际文案 27。
+        // 与 §6.5 记录的是同一类漏网（那条在 sys_user_role 上）。
         long enabledUsers = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM sys_user WHERE dept_id = ? AND status = 1", Long.class, deptId);
+                "SELECT COUNT(*) FROM sys_user WHERE dept_id = ? AND status = 1 AND is_deleted = 0",
+                Long.class, deptId);
         long disabledUsers = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM sys_user WHERE dept_id = ? AND status = 0", Long.class, deptId);
+                "SELECT COUNT(*) FROM sys_user WHERE dept_id = ? AND status = 0 AND is_deleted = 0",
+                Long.class, deptId);
 
         var scope = adminScopeFor(adminId);
 
@@ -571,7 +578,10 @@ class ProposalFlowIT {
 
             // ② 停用该部门下所有用户后 → 允许停用（规则只约束"状态正常"的用户）
             if (disabledUsers == 0) {
-                jdbcTemplate.update("UPDATE sys_user SET status = 0 WHERE dept_id = ?", deptId);
+                // 同样只动未删除的行：软删除的历史账号不属于"该部门的用户"，
+                // 顺手改它们的 status 等于测试偷偷修改了历史数据
+                jdbcTemplate.update(
+                        "UPDATE sys_user SET status = 0 WHERE dept_id = ? AND is_deleted = 0", deptId);
                 try {
                     var updated = departmentService.changeStatus(deptId, 0, scope);
                     assertThat(updated.getStatus()).as("无启用用户时应可停用").isEqualTo(0);
@@ -585,7 +595,8 @@ class ProposalFlowIT {
                     assertThat(audit.get("action")).isEqualTo("DISABLE");
                 } finally {
                     jdbcTemplate.update("UPDATE sys_department SET status = 1 WHERE id = ?", deptId);
-                    jdbcTemplate.update("UPDATE sys_user SET status = 1 WHERE dept_id = ?", deptId);
+                    jdbcTemplate.update(
+                            "UPDATE sys_user SET status = 1 WHERE dept_id = ? AND is_deleted = 0", deptId);
                 }
             }
         } finally {
@@ -601,8 +612,18 @@ class ProposalFlowIT {
     // ==================================================================
 
     private ProposalPayload createDisableInsuranceProposal(long adminId, long typeId, String typeName) {
+        return createDisableInsuranceProposal(null, adminId, typeId, typeName);
+    }
+
+    /**
+     * 造一张"停用险种"提案。
+     *
+     * @param conversationId 来源会话；为 {@code null} 表示"没有会话上下文"的直连路径
+     */
+    private ProposalPayload createDisableInsuranceProposal(Long conversationId, long adminId,
+                                                           long typeId, String typeName) {
         return proposalFixture.track(proposalService.create(new ProposalService.ProposalDraft(
-                null, adminId, "admin", "超级管理员",
+                conversationId, adminId, "admin", "超级管理员",
                 "proposeInsuranceTypeChange", "DISABLE", "INSURANCE_TYPE", typeId, typeName,
                 com.guarantee.ai.service.ProposalRequest.builder()
                         .id(typeId).targetName(typeName).userText("停用 " + typeName).build(),
@@ -642,5 +663,56 @@ class ProposalFlowIT {
     private long insuranceTypeId(String typeName) {
         return jdbcTemplate.queryForObject(
                 "SELECT id FROM insurance_type WHERE type_name = ?", Long.class, typeName);
+    }
+
+    // ==================================================================
+    // 确认卡的会话隔离（真机故障：别的会话的卡片出现在当前会话里）
+    // ==================================================================
+
+    /**
+     * 真机故障（2026-09-24）：用户在会话 485 里让助手把 user0005 改成只读角色，那张确认卡
+     * 一直挂着；随后切到会话 484 问"建立个新角色"，助手正常回答了角色的命名与权限范围，
+     * 可回答末尾却跟出一张「角色分配 user0005」的危险操作卡——**那是 485 的卡**。
+     *
+     * <p>成因：{@code GET /api/ai/proposals} 只按 {@code user_id} 过滤，前端在本轮结束的
+     * 兜底刷新里拿到该用户**跨会话**的全部待确认提案，直接渲染在当前消息流末尾——
+     * 看起来就像助手答非所问。</p>
+     *
+     * <p>修法：接口支持 {@code conversationId}，前端始终带上当前会话。本用例锁住服务端
+     * 这一层：带会话号时只返回该会话的提案，不带时语义不变（跨会话待办视角）。</p>
+     */
+    @Test
+    @DisplayName("待确认提案按会话隔离：带 conversationId 只返回该会话，缺省仍返回跨会话清单")
+    void pendingProposalsAreScopedToConversation() {
+        long adminId = userId("admin");
+        // 用不存在的会话号即可：ai_operation_proposal.conversation_id 没有外键，
+        // 而本用例要验证的正是"按这一列过滤"。真实会话号不具有可复现性。
+        long conversationA = 990001L;
+        long conversationB = 990002L;
+        ProposalPayload inA = createDisableInsuranceProposal(conversationA, adminId,
+                insuranceTypeId("履约保函（标准）"), "履约保函（标准）");
+        ProposalPayload inB = createDisableInsuranceProposal(conversationB, adminId,
+                insuranceTypeId("履约保函（预付款）"), "履约保函（预付款）");
+
+        List<Long> scopedToA = proposalService.listMine(adminId, "PENDING", 50, conversationA).stream()
+                .map(ProposalPayload::proposalId).toList();
+        assertThat(scopedToA)
+                .as("会话 A 只应看到自己的卡片")
+                .contains(inA.proposalId())
+                .doesNotContain(inB.proposalId());
+
+        List<Long> scopedToB = proposalService.listMine(adminId, "PENDING", 50, conversationB).stream()
+                .map(ProposalPayload::proposalId).toList();
+        assertThat(scopedToB)
+                .as("会话 B 只应看到自己的卡片")
+                .contains(inB.proposalId())
+                .doesNotContain(inA.proposalId());
+
+        // 不带会话号时语义不变：仍是"该用户全部待确认提案"（跨会话待办清单）
+        List<Long> global = proposalService.listMine(adminId, "PENDING", 50, null).stream()
+                .map(ProposalPayload::proposalId).toList();
+        assertThat(global)
+                .as("不带 conversationId 时保持既有语义，不能把跨会话视角弄丢")
+                .contains(inA.proposalId(), inB.proposalId());
     }
 }

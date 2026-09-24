@@ -26,12 +26,18 @@ export function listToolCalls(conversationId: number) {
 /* ---------------- 变更提案（5.3.2） ---------------- */
 
 /**
- * 待确认提案列表（用于待办角标）。
+ * 提案列表（用于待办角标、刷新页面后恢复确认卡）。
  *
  * 取值范围固定在**当前用户自己**的提案：确认接口会再次校验所有者（SYS-C-01）。
+ *
+ * <p>{@code conversationId} 用于把确认卡**限定在自己的会话**里。不传会拿到该用户
+ * 跨会话的全部提案——真机故障：A 会话里挂着的"角色分配 user0005"卡片被 B 会话
+ * 的"本轮结束兜底刷新"拉到，渲染在 B 会话消息流末尾，看起来像助手答非所问。</p>
  */
-export function listProposals(status = 'PENDING') {
-  return http.get<ProposalPayload[]>('/ai/proposals', { params: { status } })
+export function listProposals(status = 'PENDING', conversationId?: number | null) {
+  return http.get<ProposalPayload[]>('/ai/proposals', {
+    params: conversationId ? { status, conversationId } : { status }
+  })
 }
 
 /** 提案详情：刷新页面或切回历史会话时恢复确认卡（SYS-C-14） */

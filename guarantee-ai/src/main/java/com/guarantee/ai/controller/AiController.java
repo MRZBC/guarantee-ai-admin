@@ -107,13 +107,20 @@ public class AiController {
     // 提案（二期，5.3.2）
     // ==================================================================
 
-    /** 待确认提案列表（用于"待办"角标）。 */
+    /**
+     * 提案列表（用于"待办"角标与刷新页面后恢复确认卡）。
+     *
+     * <p>{@code conversationId} 建议**始终携带**：确认卡属于某个会话，前端只应恢复
+     * 当前会话的卡片。不传即退化为"该用户全部提案"（跨会话视角，历史上正是这个默认值
+     * 让 A 会话的待确认卡出现在 B 会话里）。</p>
+     */
     @GetMapping("/proposals")
     @PreAuthorize("hasAuthority('" + Permissions.AI_CHAT + "')")
     public Result<List<ProposalPayload>> proposals(
             @RequestParam(required = false, defaultValue = "PENDING") String status,
-            @RequestParam(required = false, defaultValue = "50") int limit) {
-        return Result.ok(proposalService.listMine(requireUserId(), status, limit));
+            @RequestParam(required = false, defaultValue = "50") int limit,
+            @RequestParam(required = false) Long conversationId) {
+        return Result.ok(proposalService.listMine(requireUserId(), status, limit, conversationId));
     }
 
     /** 提案详情（刷新页面后恢复确认卡，SYS-C-14）。 */

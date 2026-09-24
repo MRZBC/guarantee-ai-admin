@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   confirmProposal as confirmProposalApi,
@@ -131,12 +131,31 @@ function applyProposalResult(payload: SseProposalResultPayload): void {
   proposals.value = [...proposals.value]
 }
 
-async function refreshProposals(): Promise<void> {
+/**
+ * 按**当前会话**刷新待确认卡片。
+ *
+ * <p>确认卡是会话内资产（后端 `ai_operation_proposal.conversation_id`）。此前这里
+ * 拉的是"该用户全部待确认提案"，于是别的会话里挂着的卡片会被塞进当前会话的消息流
+ * 末尾：用户问"建个新角色"，助手正常回了角色的命名与权限范围，紧接着却出现一张
+ * 「角色分配 user0005」的危险操作卡——看起来像是助手答非所问，实际是泄漏。</p>
+ *
+ * <p>没有当前会话（新会话还没发出第一条消息）时不显示任何卡片：此时屏幕上没有任何
+ * 对话上下文，卡片无从归位。</p>
+ */
+async function refreshProposals(scopeConversationId: number | null = conversationId.value): Promise<void> {
+  if (!scopeConversationId) {
+    proposals.value = []
+    return
+  }
   try {
     // 待确认列表是**唯一权威来源**：只保留 PENDING。
     // 之前这里把「本次会话内已终态的卡片」也合并保留，导致执行过的卡片永久堆积。
-    const list = await listProposals('PENDING')
-    proposals.value = [...(list ?? [])].sort((a, b) => a.proposalId - b.proposalId)
+    const list = await listProposals('PENDING', scopeConversationId)
+    proposals.value = [...(list ?? [])]
+      // 双保险：后端已按会话过滤，这里再挡一次——
+      // 只认"就是本会话"的卡片；conversationId 为空的提案不属于任何会话，故不渲染
+      .filter((item) => item.conversationId === scopeConversationId)
+      .sort((a, b) => a.proposalId - b.proposalId)
   } catch {
     // 错误提示已由响应拦截器统一处理
   }
@@ -298,11 +317,8 @@ async function loadConversation(id: number): Promise<void> {
     visible.value = true
     await loadToolCalls(id)
     // 刷新页面/切回历史会话时恢复 PENDING 确认卡（SYS-C-14）：
-    // 只保留当前会话的卡片，避免不同会话的确认卡混在一起
-    await refreshProposals()
-    proposals.value = proposals.value.filter(
-      (item) => item.conversationId === undefined || item.conversationId === id
-    )
+    // refreshProposals 本身按会话过滤，只恢复当前会话的卡片
+    await refreshProposals(id)
     await scrollToBottom()
   } catch {
     // 拦截器已提示
@@ -472,14 +488,17 @@ async function send(): Promise<void> {
     streamingMessage.streaming = false
 
     /*
-      兜底：本轮结束后以服务端为准刷新一次待确认提案。
+      兜底：本轮结束后以服务端为准刷新一次待确认提案（**只刷新当前会话**）。
 
       提案事件是**尽力推送**：ProposalEventPublisher 在"会话通道未注册 / 已关闭"时
       只落库不推送，推送失败也只记 debug 日志。一旦漏推，模型正文里照样会写
       "请在确认卡上点击「确认执行」"，用户就会看到"说生成了提案、却没有卡片"。
       这里用 GET 待确认列表兜住——进入会话时本来也有同样的刷新（SYS-C-14）。
+
+      必须带 conversationId：不带就会把**别的会话**里挂着的待确认卡拉进来，
+      渲染在本轮回答后面，表现为"助手答非所问地弹了一张危险操作卡"（已修）。
     */
-    void refreshProposals()
+    void refreshProposals(conversationId.value)
 
     if (streamError) {
       ElMessage.error(streamError)
@@ -516,10 +535,12 @@ function statusTagType(status: string): 'success' | 'danger' | 'info' {
 
 watch(messages, () => void scrollToBottom(), { deep: true })
 
-onMounted(() => {
-  // 待办提示：进入页面即拉一次待确认提案（Q-8：仅会话内提示起步，不做全局角标）
-  void refreshProposals()
-})
+/*
+  挂载时**刻意不拉**待确认提案：此时既没有当前会话，也没有任何消息，
+  拉到的只能是"该用户跨会话的全部提案"，而卡片必须归位到自己的会话
+  （Q-8 的口径就是"仅会话内提示，不做全局角标"）。
+  卡片在进入/切回某个会话时由 loadConversation 按会话恢复（SYS-C-14）。
+*/
 
 onBeforeUnmount(() => {
   abortController?.abort()

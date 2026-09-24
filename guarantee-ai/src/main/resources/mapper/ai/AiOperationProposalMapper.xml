@@ -29,12 +29,21 @@
         SELECT <include refid="cols"/> FROM ai_operation_proposal WHERE proposal_no = #{proposalNo}
     </select>
 
+    <!--
+      conversationId 非 null 时只取该会话下的提案：确认卡必须**归位到自己的会话**。
+      真机故障（2026-09-24）：会话 485 里生成的用户角色分配提案，被会话 484 的
+      "本轮结束兜底刷新"一并拉到，前端渲染在当前消息流末尾——用户问"建个新角色"，
+      却看到一张 user0005 的角色分配危险操作卡。
+    -->
     <select id="selectByUserId" resultType="com.guarantee.ai.entity.AiOperationProposal">
         SELECT <include refid="cols"/>
         FROM ai_operation_proposal
         WHERE user_id = #{userId}
         <if test="status != null and status != ''">
             AND status = #{status}
+        </if>
+        <if test="conversationId != null">
+            AND conversation_id = #{conversationId}
         </if>
         ORDER BY id DESC
         LIMIT #{limit}

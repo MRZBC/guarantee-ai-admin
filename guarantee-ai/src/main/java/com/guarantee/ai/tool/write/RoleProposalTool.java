@@ -163,15 +163,19 @@ public class RoleProposalTool extends BaseProposalTool {
             List<String> targetCodes = request.permCodes() == null ? List.of() : request.permCodes();
             // 预检：ADMIN 不可授权 + 权限码必须已存在
             roleService.validateAssignPermissions(request.roleCode(), targetCodes);
+            // 展示用**中文权限名**：权限码是内部枚举码，直接铺在卡片上业务用户读不出改了什么
+            // （逻辑判定仍全部按编码，见 RoleService.permissionDisplayNames）
             List<ProposalPreview.ChangeItem> changes = List.of(new ProposalPreview.ChangeItem(
-                    "permCodes", "权限", String.join(", ", currentCodes), String.join(", ", targetCodes)));
+                    "permCodes", "权限",
+                    String.join("，", roleService.permissionDisplayNames(currentCodes)),
+                    String.join("，", roleService.permissionDisplayNames(targetCodes))));
             List<String> impact = List.of("影响面："
                     + ProposalPreview.formatImpact(roleService.assignPermissionsImpact(target, targetCodes)));
             List<String> warnings = new ArrayList<>();
             warnings.add("授权会立即改变该角色下所有用户的权限");
             if (targetCodes.contains(Permissions.AUDIT_VIEW)) {
-                warnings.add("本次授权包含 system:audit:view（全局操作审计），"
-                        + "该权限按 D-1a 仅应授予超级管理员");
+                warnings.add("本次授权包含「" + permissionDisplayName(Permissions.AUDIT_VIEW)
+                        + "」这一全局操作审计权限，按 D-1a 仅应授予超级管理员");
             }
             if (Roles.ADMIN.equalsIgnoreCase(target.getRoleCode())) {
                 throw new BizException("超级管理员（ADMIN）角色不允许变更权限");
@@ -225,9 +229,18 @@ public class RoleProposalTool extends BaseProposalTool {
         return required;
     }
 
+    /**
+     * 单个权限码的中文名（查不到就退回编码本身，绝不静默丢字）。
+     *
+     * <p>只用于**展示**：风险提示里点名的权限，用户要看得懂是哪一项。</p>
+     */
+    private String permissionDisplayName(String permCode) {
+        List<String> names = roleService.permissionDisplayNames(List.of(permCode));
+        return names.isEmpty() ? permCode : names.get(0);
+    }
+
     private static void addIfChanged(List<ProposalPreview.ChangeItem> changes, String field,
-                                     String label, Object before, Object after) {
-        if (after == null) {
+                                     String label, Object before, Object after) {        if (after == null) {
             return;
         }
         String b = before == null ? null : String.valueOf(before);

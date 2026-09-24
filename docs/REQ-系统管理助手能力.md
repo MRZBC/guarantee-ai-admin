@@ -24,6 +24,7 @@
 | 需求编号规则 | `SYS-Q-xx` 查询类、`SYS-W-xx` 写操作类、`SYS-C-xx` 确认机制与前端（含机构树形）类、`SYS-P-xx` 权限类、`SYS-A-xx` 审计类、`SYS-N-xx` 提示词类、`SYS-NF-xx` 非功能类 |
 | **已定稿决策** | **D-1**：`ANALYST` 获得系统管理**只读**能力（`ai:system:query` + 各域 `:view`），不含任何写权限；**D-1a（Q-11）**：`ANALYST` **不获得** `system:audit:view`，全局操作审计仅 ADMIN 可见，ANALYST 只能查自己的工具调用记录<br>**D-2**：用户写操作**只做 UPDATE / ENABLE-DISABLE / ASSIGN_ROLES**，本期不做新建用户、不做密码重置；**D-2a（Q-12）**：新建账号与密码重置**确定单独立项**（含密码分发与安全审批）<br>**D-3**：补充演示数据的机构层级（`parent_id` / `org_level`），使省级、市级数据范围可验证；**D-3a（Q-13）**：机构配置页**由列表改为树形**展示<br>**D-4**：审计的 `before_value` / `after_value` 对敏感字段**只记录字段名与是否变更，不记录具体值**，且该脱敏与操作者角色无关（ADMIN 同样脱敏） |
 | **暂缓项** | **Q-15**（系统管理页面用户列表的明文手机号/邮箱是否同步改掩码）与 **Q-16**（是否为 ANALYST 提供机构维度受限审计视图）**本期不处理**，仅登记在 15.4 备查；两者均不影响一/二期交付 |
+| **⚠️ D-2 已被部分推翻（2026-09-23，P-10）** | 本需求 D-2 的两条排除项中，**"不做新建用户"与"不做密码重置"均已失效**：用户决策改为一并交付，落地为独立立项 **P-10**，见 `docs/REQ-用户管理新增与修改.md`。现状为：**做新建用户 + 做自助改密 + 做管理员重置他人密码；仍不做"忘记密码"自助找回**（无邮件/短信通道）。**助手侧仍不支持新建与密码类操作**——这是技术约束（密码过不去提案脱敏链路，见该文档 §1.3-①），不是范围问题。阅读下文（§5.2.2 D-2、§5.2.3 用户动作表、`UserController` 不新增接口的表述）时请以此为准 |
 | **保留期决策** | 审计不做"永久在线"：**在线 24 个月 + 归档 36 个月（总 5 年）**，按月分区滚动 `DROP`（D-5）。系统管理域在线 2 年仅约 14.6 万行 / 438 MB（压力档），容量估算见 **5.7.3** |
 
 ---
@@ -219,7 +220,7 @@
 | --- | --- |
 | 入参 | `keyword`、`category`（TENDER / PERFORMANCE / OTHER）、`status`、`limit` |
 | 出参 | `items[{id, typeCode, typeName, category, baseRate, baseRatePercent, minAmount, maxAmount, status, description}]` |
-| 口径 | `baseRate` 同时给出小数（0.008000）与百分比（0.8%）两种表示，避免模型自行换算出错 |
+| 口径 | `baseRate` 同时给出小数（0.008000）与百分比（0.8%）两种表示，避免模型自行换算出错；`minAmount` / `maxAmount` 不设限时返回「不限」（库里以 0 表示），**不得念成"保额为 0"** |
 
 #### 5.1.7 `queryOperationAudit`（SYS-Q-06）
 
@@ -302,8 +303,8 @@ POST /api/ai/proposals/{proposalId}/confirm
 
 | 动作 | 必填参数 | 校验 |
 | --- | --- | --- |
-| CREATE | typeCode、typeName、category、baseRate、minAmount、maxAmount | `typeCode` 唯一；`baseRate` ∈ (0, 0.1]；`minAmount < maxAmount` |
-| UPDATE | id + 至少一个字段 | 目标存在；`typeCode` 不可改；已产生订单的险种禁止修改 `category`（影响历史口径） |
+| CREATE | typeCode、typeName、category、baseRate；minAmount / maxAmount **选填** | `typeCode` 唯一；`baseRate` ∈ (0, 0.1]；**不填 = 不限**（不设下限 / 不设上限），只有上下限都给了具体值时才要求 `minAmount < maxAmount` |
+| UPDATE | id + 至少一个字段 | 目标存在；`typeCode` 不可改；已产生订单的险种禁止修改 `category`（影响历史口径）；保额区间传 `0` = 清空成「不限」，不传 = 保持原值 |
 | ENABLE/DISABLE | id | 停用前置检查：是否被启用中的订单引用（返回影响条数，需在确认卡上明示） |
 
 **机构（SYS-W-02）**

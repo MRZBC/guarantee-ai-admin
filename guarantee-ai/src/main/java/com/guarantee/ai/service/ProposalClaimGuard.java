@@ -33,9 +33,21 @@ public class ProposalClaimGuard {
 
     private static final Logger log = LoggerFactory.getLogger(ProposalClaimGuard.class);
 
-    /** 追加的纠正文案。措辞必须如实、可操作，且不指责用户。 */
+    /**
+     * 追加的纠正文案。措辞必须如实、可操作，且不指责用户。
+     *
+     * <p><b>为什么要把"别拿它当事实"写进去</b>：这段文字不只是给用户看的，它还会**留在会话历史里**
+     * 被模型读回去。真机事故（2026-09-24 23:55 → 00:08）：模型编造了一条"角色改名已生成提案"，
+     * 系统补了纠正，但下一轮模型**把自己那条编造当成了既成事实**，回复用户
+     * 「这个角色现在名称是「行政」（编码 OPER_NO_SYS）」——而库里从未改过名，
+     * 用户看到的就是"编码一致、名称不一致"。所以纠正必须同时做两件事：
+     * ① 告诉用户它没发生；② 明确禁止把本条回复里的变更描述当作事实，并要求用只读工具重查现状。</p>
+     */
     public static final String CORRECTION =
-            "（系统提示：本次回复提到的提案并未生成，当前没有待确认的变更。请重新说明你要做的变更。）";
+            "（系统提示：本条回复里描述的变更**并未生成**，系统里没有产生任何提案。"
+                    + "请不要把本条回复中“已生成 / 已变更 / 已改名 / 已授权”这类说法当成事实；"
+                    + "需要确认某个角色、用户或险种现在是什么状态时，必须用只读工具重新查询。"
+                    + "当前没有待确认的变更。请重新说明你要做的变更。）";
 
     /**
      * 声称"提案已完成某个动作"的动词，必须与「提案」同句才计入。
@@ -96,6 +108,16 @@ public class ProposalClaimGuard {
      *
      * <p>按句判定而不是整段判定：一段话里既有如实说明又有编造时，
      * 整段判定会因为一个否定词而整体放过。</p>
+     *
+     * <p><b>两个分支都必须带完成态动词</b>。曾经"确认卡 + 点击"单独就能命中，
+     * 依据是"卡片只有提案生成后才存在"——但真机证明该假设不成立：模型**解释机制**时会写
+     * 「我再去核对具体权限项并生成变更提案（提案需要在确认卡上点击「确认执行」后才会生效）」，
+     * 这是将来时、并未声称生成任何东西，却被判为编造并追加了一句
+     * "本次回复提到的提案并未生成"，在**正常回复**后面贴了误导性提示（2026-09-24 实测两轮均误报）。</p>
+     *
+     * <p>真实故障形如「**我已生成**变更提案，需要在确认卡上点击『确认执行』后才会生效」，
+     * 同句含"已生成"，仅靠第一个分支即可命中——因此确认卡分支补上完成态要求后，
+     * 对真实故障并无损失，只是不再对"将来会生成"的表述误报。</p>
      */
     static boolean claimsProposal(String answer) {
         if (answer == null || answer.isBlank()) {
@@ -105,7 +127,13 @@ public class ProposalClaimGuard {
             if (sentence.isBlank() || isNegated(sentence)) {
                 continue;
             }
-            if (sentence.contains("提案") && containsAny(sentence, CLAIM_CUES)) {
+            boolean completed = containsAny(sentence, CLAIM_CUES);
+            if (!completed) {
+                // 没有完成态动词 = 只是"将要/可以/需要"生成，不是"已生成"。
+                // 提前跳过可同时挡住两个分支，避免"确认卡"分支被将来时表述命中。
+                continue;
+            }
+            if (sentence.contains("提案")) {
                 return true;
             }
             if (containsAny(sentence, CARD_CUES) && containsAny(sentence, CARD_ACTIONS)) {

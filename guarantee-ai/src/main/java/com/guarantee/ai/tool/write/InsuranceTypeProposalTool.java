@@ -50,12 +50,14 @@ public class InsuranceTypeProposalTool extends BaseProposalTool {
                     - category 只能是 TENDER（投标）/ PERFORMANCE（履约）/ OTHER。
                     - baseRate 是**小数**形式的基准费率，必须落在 (0, 0.1] 区间；例如 0.013 表示 1.3%。
                       不要传百分数（传 1.3 会被服务端拒绝）。
-                    - typeCode 不可修改；minAmount 必须小于 maxAmount。
+                    - typeCode 不可修改；**保额区间不填 = 不限**：minAmount 不填表示不设下限、
+                      maxAmount 不填（或传 0）表示不设上限；两者都给具体值时 minAmount 必须小于 maxAmount。
+                      上限要清空成"不限"就显式传 0（UPDATE 时不传该字段表示保持原值不动）。
                     - 已产生订单的险种禁止修改 category（会影响历史口径）。
                     - 停用前系统会给出被引用订单数，请在确认卡上明示（停用被引用**不禁止**）。
-                    - 删除与停用的关键差异：**被订单引用时删除会被拒绝**（这是设计刻意的差异，
-                      因为删除后历史订单会指向一条不存在的险种）。失败信息会带引用订单数，
-                      请如实转述并建议"这些订单需要先处理，或改用停用"。
+                    - **删除也不禁止**：被订单引用时同样可以删除。删除只表示"从配置列表移除、
+                      不再用于新业务"，历史订单仍显示该险种名称、也仍能按它筛选；恢复后回到删除前的状态。
+                      因此被引用订单数只是影响面提示，**不得**说成"被引用所以删不掉"。
                     - 删除属**危险动作**，确认卡上有二次确认；删除**不改变启用/停用状态**，
                       恢复后回到删除前的状态。删除后可恢复（「显示已删除」）。
                     - 用户说"停用/禁用/下架"时用 DISABLE，**不要**用 DELETE；用户说"删掉这个险种"时
@@ -63,7 +65,7 @@ public class InsuranceTypeProposalTool extends BaseProposalTool {
                     示例：把履约保函（标准）的基准费率改成 0.013 → action=UPDATE, id=4, baseRate=0.013。""")
     public WriteToolResult proposeInsuranceTypeChange(
             @ToolParam(description = "动作：CREATE / UPDATE / DISABLE / ENABLE / DELETE。"
-                    + "DELETE=逻辑删除（从默认列表移除、可恢复；被订单引用时会被拒绝），"
+                    + "DELETE=逻辑删除（从配置列表移除、可恢复；被订单引用也可删除，历史订单仍显示该险种），"
                     + "与 DISABLE=停用（暂停业务、可随时启用）语义不同",
                     required = true)
             String action,
@@ -164,9 +166,9 @@ public class InsuranceTypeProposalTool extends BaseProposalTool {
                     ProposalPreview.ChangeItem.created("baseRate", "基准费率",
                             percent(request.baseRate())),
                     ProposalPreview.ChangeItem.created("minAmount", "最小保额",
-                            plain(request.minAmount())),
+                            plainAmount(request.minAmount())),
                     ProposalPreview.ChangeItem.created("maxAmount", "最大保额",
-                            plain(request.maxAmount())));
+                            plainAmount(request.maxAmount())));
             // CREATE 没有既有实体可回填，名字仍取模型传入的 typeName（语义不变）
             return new PreviewResult(ProposalPreview.of("新增险种：" + request.typeName(), changes,
                     List.of(), List.of("费率将影响后续新订单的保费计算，请核对口径"), false), null);
@@ -196,10 +198,10 @@ public class InsuranceTypeProposalTool extends BaseProposalTool {
                         existing.getBaseRate().toPlainString() + "（" + percent(existing.getBaseRate()) + "）",
                         request.baseRate().toPlainString() + "（" + percent(request.baseRate()) + "）"));
             }
-            addIfChanged(changes, "minAmount", "最小保额", plain(existing.getMinAmount()),
-                    plain(request.minAmount()));
-            addIfChanged(changes, "maxAmount", "最大保额", plain(existing.getMaxAmount()),
-                    plain(request.maxAmount()));
+            addIfChanged(changes, "minAmount", "最小保额", plainAmount(existing.getMinAmount()),
+                    plainAmount(request.minAmount()));
+            addIfChanged(changes, "maxAmount", "最大保额", plainAmount(existing.getMaxAmount()),
+                    plainAmount(request.maxAmount()));
             addIfChanged(changes, "description", "描述", existing.getDescription(),
                     request.description());
             if (changes.isEmpty()) {
@@ -214,13 +216,9 @@ public class InsuranceTypeProposalTool extends BaseProposalTool {
         }
 
         // DELETE（逻辑删除，LD-01 / 设计 §7.4）
-        // 这里最能体现"删除 ≠ 停用"：停用被引用只是提示，删除被引用直接拒绝（§6.2）
+        // 删除与停用的差异是"是否从配置列表移除"，**不是**"能不能删"：被订单引用同样可删，
+        // 历史订单仍显示该险种名称并可据此筛选（见 docs/DEC-订单筛选下拉的选项口径.md）
         if ("DELETE".equals(action)) {
-            List<String> blockers = insuranceTypeService.deleteBlockers(existing);
-            if (!blockers.isEmpty()) {
-                throw new BizException("该险种不能删除：" + String.join("；", blockers)
-                        + "。如只需暂停业务，请改用「停用」。");
-            }
             List<ProposalPreview.ChangeItem> changes = List.of(new ProposalPreview.ChangeItem(
                     "isDeleted", "是否已删除", "否", "是"));
             List<String> impact = new ArrayList<>();
@@ -228,9 +226,9 @@ public class InsuranceTypeProposalTool extends BaseProposalTool {
                     + ProposalPreview.formatImpact(insuranceTypeService.deleteImpact(existing)));
             return new PreviewResult(ProposalPreview.of("删除险种：" + existing.getTypeName(), changes,
                     impact,
-                    List.of("删除后该险种**默认不再出现在列表中**，可通过「显示已删除」恢复",
+                    List.of("删除后该险种不再出现在配置列表与新建业务的候选中",
+                            "历史订单仍显示该险种名称，也仍能按它筛选",
                             "删除**不改变启用/停用状态**，恢复后回到删除前的状态",
-                            "与停用不同：被订单引用时删除会被拒绝",
                             "删除属危险动作，需二次确认"),
                     true), existingName);
         }
@@ -254,8 +252,14 @@ public class InsuranceTypeProposalTool extends BaseProposalTool {
         return rate.multiply(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString() + "%";
     }
 
-    private static String plain(BigDecimal value) {
-        return value == null ? null : value.toPlainString();
+    /**
+     * 保额展示：{@code 空 / 0} 一律渲染成「不限」。
+     *
+     * <p>口径是"不填 = 不限"，确认卡上若照实渲染成 {@code 0}，用户会读成"上限为 0"——
+     * 与语义正好相反，因此这里必须翻译一次（与前端配置页的展示口径一致）。</p>
+     */
+    private static String plainAmount(BigDecimal value) {
+        return value == null || value.signum() == 0 ? "不限" : value.toPlainString();
     }
 
     private static Set<String> requiredPermissions(String action) {

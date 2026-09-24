@@ -80,14 +80,32 @@ class ProposalClaimGuardIT {
      */
     static class FabricatingChatModel implements ChatModel {
 
+        /** 最近一次收到的系统提示（含服务端追加的「本会话的历史更正」）。 */
+        private volatile String lastSystemPrompt;
+
+        String lastSystemPrompt() {
+            return lastSystemPrompt;
+        }
+
         @Override
         public ChatResponse call(Prompt prompt) {
+            captureSystemPrompt(prompt);
             return textResponse();
         }
 
         @Override
         public Flux<ChatResponse> stream(Prompt prompt) {
+            captureSystemPrompt(prompt);
             return Flux.just(textResponse());
+        }
+
+        private void captureSystemPrompt(Prompt prompt) {
+            for (var message : prompt.getInstructions()) {
+                if (message instanceof org.springframework.ai.chat.messages.SystemMessage system) {
+                    lastSystemPrompt = system.getText();
+                    return;
+                }
+            }
         }
 
         private static ChatResponse textResponse() {
@@ -123,6 +141,9 @@ class ProposalClaimGuardIT {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private ChatModel chatModel;
 
     @Autowired
     private tools.jackson.databind.ObjectMapper objectMapper;
@@ -276,6 +297,39 @@ class ProposalClaimGuardIT {
         // 收尾
         jdbcTemplate.update("UPDATE ai_operation_proposal SET status = 'REJECTED' WHERE id = ?",
                 payload.proposalId());
+    }
+
+    // ==================================================================
+    // 四：编造落库后，下一轮必须显式告诉模型"那些话不算事实"
+    // ==================================================================
+
+    /**
+     * 真机事故（2026-09-24 23:55 → 00:08 / 00:16）：模型编造"角色已改名为行政"并落库，
+     * 之后连续两轮把自己那条编造当成既成事实——库里从未改名，用户看到的是
+     * 「编码一致、名称不一致」，最后拒绝了提案。
+     *
+     * <p>历史不能改写（保住"落库 = 用户所见"的口径），因此改为**每一轮都把这件事写进系统提示**。
+     * 本用例断言第二轮 LLM 请求的系统提示里确实出现了这段更正。</p>
+     */
+    @Test
+    @DisplayName("上一轮被判编造 → 下一轮系统提示注入「本会话的历史更正」，避免模型继续采信自己的编造")
+    void retractedClaimsAreInjectedIntoNextTurnSystemPrompt() {
+        long adminId = userId("admin");
+        AiConversation conversation = conversationService.resolveOrCreate(
+                adminId, null, "把投标保函（标准）停用", "stub-model");
+
+        // 第一轮：纯编造 → 落库的助手消息里带纠正标记
+        streamOnce(adminId, conversation.getId(), "把投标保函（标准）停用");
+        assertThat(lastAssistantMessage(conversation.getId()))
+                .as("前提自证：第一轮确实被判为编造并落库了纠正")
+                .contains(ProposalClaimGuard.CORRECTION);
+
+        // 第二轮：系统提示里必须出现历史更正
+        streamOnce(adminId, conversation.getId(), "那到底生成了没有？");
+
+        assertThat(((FabricatingChatModel) chatModel).lastSystemPrompt())
+                .as("不注入的话，模型会继续把自己上一轮编造的状态当成事实")
+                .contains(AiChatService.RETRACTION_MARKER);
     }
 
     // ==================================================================

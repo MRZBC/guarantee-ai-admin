@@ -44,6 +44,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * AI 聊天核心服务：SSE 流式输出 + Tool 调用循环 + 会话落库。
@@ -79,6 +80,69 @@ public class AiChatService {
     /** 防止模型陷入工具调用死循环。 */
     private static final int MAX_TOOL_ROUNDS = 4;
 
+    /**
+     * 自动重试指令的识别前缀（第三道兜底的**修复**动作）。
+     *
+     * <p>用 {@code public} 是为了让集成测试的假模型能识别"这一轮是修复轮"
+     * （见 {@code ProposalRepairIT}），不必去猜措辞。</p>
+     */
+    public static final String REPAIR_MARKER =
+            "【系统检测：你上一条回复声称已生成变更提案，但本轮没有任何写工具调用，"
+                    + "数据库里并没有生成提案，用户也看不到确认卡】";
+
+    /**
+     * 编造提案后的自动重试指令。
+     *
+     * <p>它只做一件事：把"必须真的调用写工具"这句话，连同**用户自己的上一条要求**一起，
+     * 再交给模型一轮。措辞刻意不指责、不要求道歉、不要求解释——模型多写一段检讨，
+     * 用户就多读一段废话。</p>
+     */
+    private static final String REPAIR_INSTRUCTION = REPAIR_MARKER + "\n"
+            + "请立刻纠正，不要道歉、不要解释、不要复述这句话本身。规则：\n"
+            + "1. 如果用户的要求确实是一次系统变更，现在就调用对应的写工具"
+            + "（proposeRoleChange / proposeUserChange / proposeOrgChange / "
+            + "proposeDepartmentChange / proposeInsuranceTypeChange）生成提案；"
+            + "参数不够就先用只读工具查清楚，不要猜。\n"
+            + "2. 严禁再写出任何「提案编号」——编号只能来自写工具的返回值。\n"
+            + "3. 如果用户的要求本来就不是变更（只是询问，或意图还不明确），就如实回答，不要提提案。\n";
+
+    /**
+     * 历史更正提示的标题（集成测试据此断言它被注入到下一轮的系统提示里）。
+     *
+     * <p>为什么要有这个提示：编造一旦落库，就会**二次伤害**——模型下一轮读回自己的话，
+     * 把它当成既成事实。真机事故（2026-09-24 23:55 编造"角色已改名为行政" → 00:08、00:16
+     * 两轮都答"这个角色现在名称是「行政」"，而库里 `updated_at = created_at` 证明从未改名；
+     * 00:16 那次更直接导致同屏卡片写「业务运营（无系统配置）」、正文写「行政」）。
+     * 已落库的历史不能改写（会破坏"落库 = 用户所见"的口径），因此改为**每一轮都显式告知模型：
+     * 那几条回复是判定过的编造，不要引用**。</p>
+     */
+    public static final String RETRACTION_MARKER = "# 本会话的历史更正（系统生成，必须遵守）";
+
+    /**
+     * 扫描历史，把"被判定为编造"的助手回复数量转成一段系统提示片段。
+     *
+     * @return 没有编造历史时返回空串（不改变既有提示词）
+     */
+    static String retractionNotice(List<Message> history) {
+        int retracted = 0;
+        for (Message message : history) {
+            if (message instanceof AssistantMessage assistant
+                    && assistant.getText() != null
+                    && assistant.getText().contains(ProposalClaimGuard.CORRECTION)) {
+                retracted++;
+            }
+        }
+        if (retracted == 0) {
+            return "";
+        }
+        return "\n\n" + RETRACTION_MARKER + "\n"
+                + "本会话里有 " + retracted + " 条**你此前的回复被系统判定为编造**（它们末尾带「系统提示」）。\n"
+                + "那些回复里描述的变更**没有发生**；其中出现的实体名称（角色 / 用户 / 险种等）、状态、"
+                + "提案编号**都不是事实**。\n"
+                + "用户若问到这些实体，必须**用只读工具重新查询**当前真实状态后再回答，"
+                + "严禁引用那几条回复里的任何描述。\n";
+    }
+
     private final ChatModel chatModel;
     private final ToolCallingManager toolCallingManager;
     private final AiConversationService conversationService;
@@ -87,6 +151,7 @@ public class AiChatService {
     private final AiToolRegistry toolRegistry;
     private final ProposalEventPublisher proposalEventPublisher;
     private final ProposalClaimGuard proposalClaimGuard;
+    private final DataSourceClaimGuard dataSourceClaimGuard;
     private final ObjectMapper objectMapper;
     private final String modelName;
 
@@ -98,6 +163,7 @@ public class AiChatService {
                          AiToolRegistry toolRegistry,
                          ProposalEventPublisher proposalEventPublisher,
                          ProposalClaimGuard proposalClaimGuard,
+                         DataSourceClaimGuard dataSourceClaimGuard,
                          ObjectMapper objectMapper,
                          @Value("${spring.ai.openai.chat.model:unknown}") String modelName) {
         this.chatModel = chatModel;
@@ -108,6 +174,7 @@ public class AiChatService {
         this.toolRegistry = toolRegistry;
         this.proposalEventPublisher = proposalEventPublisher;
         this.proposalClaimGuard = proposalClaimGuard;
+        this.dataSourceClaimGuard = dataSourceClaimGuard;
         this.objectMapper = objectMapper;
         this.modelName = modelName;
     }
@@ -130,7 +197,8 @@ public class AiChatService {
         conversationService.audit(conversationId, userId, "CHAT", "用户提问已受理");
 
         Optional<TimeRange> parsedTime = timeSemanticParser.parse(userText);
-        String systemPrompt = promptProvider.build(parsedTime);
+        // 历史里若有被判定为编造的回复，必须每轮显式提醒模型"那些话不算事实"（见 RETRACTION_MARKER）
+        String systemPrompt = promptProvider.build(parsedTime) + retractionNotice(history);
 
         Sinks.Many<ToolCallEvent> sink = Sinks.many().unicast().onBackpressureBuffer();
         Sinks.Many<ChatStreamEvents.Proposal> proposalSink = Sinks.many().unicast().onBackpressureBuffer();
@@ -150,10 +218,36 @@ public class AiChatService {
 
         StringBuilder answer = new StringBuilder();
         AtomicBoolean persisted = new AtomicBoolean(false);
-        AtomicBoolean failed = new AtomicBoolean(false);
+        /**
+         * 本轮请求内是否**执行过任何工具**（读或写）。
+         *
+         * <p>收尾兜底要用它：口径行只能由工具返回值生成，所以"零工具 + 有口径行"必然是编造。
+         * 用 {@code AtomicBoolean} 而不是普通 boolean 是因为工具循环在 Reactor 线程上跑。</p>
+         */
+        AtomicBoolean toolsExecuted = new AtomicBoolean(false);
+        /**
+         * 最后一轮真正发给模型的 Prompt。
+         *
+         * <p>收尾的自动重试要用它：重试必须**接着**最后一轮（含本轮已执行工具的结果），
+         * 而不是退回到最初的 {@code messages}——否则模型会把已经查过的东西再查一遍。</p>
+         */
+        AtomicReference<Prompt> lastPrompt = new AtomicReference<>();
 
-        Flux<ServerSentEvent<String>> contentEvents = runToolLoop(new Prompt(messages, options), answer, 0)
-                // 模型输出结束后关闭 tool 事件通道，merge 才会随之完成
+        Flux<ServerSentEvent<String>> contentEvents =
+                runToolLoop(new Prompt(messages, options), answer, 0, toolsExecuted, lastPrompt)
+                /*
+                  收尾必须挂在**内容流之内**，不能在 merge 之后另起一段 concatWith：
+
+                  ① 收尾的自动重试要让模型再调一次写工具，而写工具产出的提案是经
+                     proposalSink 推到前端的；sink 一旦先被 complete，推送会以
+                     FAIL_TERMINATED 失败——**提案落库了，用户却看不到卡片**（实测日志：
+                     "推送提案事件失败（FAIL_TERMINATED），提案 684 仅落库"）。
+                  ② 顺带保证了事件顺序：提案事件一定排在 done 之前。
+
+                  收尾跑完才关闭三个通道，merge 随之完成。
+                */
+                .concatWith(Flux.defer(() -> tailEvents(answer, lastPrompt, options, toolsExecuted,
+                        conversationId, userId, persisted)))
                 .doOnComplete(() -> {
                     sink.tryEmitComplete();
                     proposalSink.tryEmitComplete();
@@ -190,36 +284,110 @@ public class AiChatService {
                 Flux.merge(contentEvents, toolEvents, proposalEvents, proposalResultEvents));
 
         Flux<ServerSentEvent<String>> safe = streamed.onErrorResume(ex -> {
-            failed.set(true);
             log.error("AI 流式对话失败 conversationId={}", conversationId, ex);
             persistAssistant(persisted, conversationId, userId, answer.toString());
             conversationService.audit(conversationId, userId, "ERROR", safeMessage(ex));
             return Flux.just(event("error", new ChatStreamEvents.Error(safeMessage(ex))));
         });
 
-        return safe.concatWith(Flux.defer(() -> {
-            if (failed.get()) {
-                return Flux.empty();
-            }
-            // 收尾校验：正文声称"已生成/存在待确认提案"而会话内没有 PENDING 提案时，
-            // 把纠正文案**追加进本条助手消息**并同步推给前端。
-            // 刻意不调用 conversationService.appendMessage（即 ProposalService
-            // .appendResultMessage 的机制）：那会额外落一条 ASSISTANT 消息，
-            // 用户会看到"编造的原话"与"纠正"分成两个气泡，纠正反而像是无关的一句。
-            // 这里只有一条消息、一次落库，不存在消息重复。
-            Flux<ServerSentEvent<String>> correction = Flux.empty();
-            Optional<String> correctionText = proposalClaimGuard.correctionFor(
-                    userId, conversationId, answer.toString());
-            if (correctionText.isPresent()) {
-                String text = correctionText.get();
-                answer.append(text);
-                correction = Flux.just(event("delta", new ChatStreamEvents.Delta(text)));
-            }
-            Long messageId = persistAssistant(persisted, conversationId, userId, answer.toString());
-            conversationService.audit(conversationId, userId, "CHAT", "助手回答已完成");
-            return correction.concatWith(Flux.just(
-                    event("done", new ChatStreamEvents.Done(conversationId, messageId))));
-        })).doFinally(signal -> proposalEventPublisher.unregister(conversationId));
+        // 注意：收尾（自动重试 / 纠正 / 落库 / done）已在 contentEvents 之内，
+        // 出错时 concatWith 不会执行，与旧实现里 "failed 则跳过收尾" 等价。
+        return safe.doFinally(signal -> proposalEventPublisher.unregister(conversationId));
+    }
+
+    /**
+     * 收尾事件：编造提案的自动重试，或（无编造时）直接结束本轮。
+     *
+     * <p>判定顺序就是优先级：**先修，再判**。声称有提案而会话内没有 PENDING 提案时，
+     * 直接追加一句"并未生成"只解决"用户别被误导"，不解决"用户要的变更没发生"——
+     * 真机第三次复现（2026-09-24 23:55，用户只回了一句「确定」）：模型正文写
+     * 「我已生成变更提案…提案编号 OP202609242359135602」，而 {@code ai_tool_call} 一条都没有、
+     * 库里也不存在该编号，用户看到的是一条**自相矛盾**的回复（抬头写着编号、结尾说没生成），
+     * 还得自己重述一遍需求。</p>
+     */
+    private Flux<ServerSentEvent<String>> tailEvents(StringBuilder answer, AtomicReference<Prompt> promptRef,
+                                                     ToolCallingChatOptions options,
+                                                     AtomicBoolean toolsExecuted,
+                                                     Long conversationId, Long userId,
+                                                     AtomicBoolean persisted) {
+        Prompt finalPrompt = promptRef.get();
+        String produced = answer.toString();
+        if (finalPrompt != null
+                && proposalClaimGuard.correctionFor(userId, conversationId, produced).isPresent()) {
+            return repairFabricatedProposal(answer, finalPrompt, options, toolsExecuted,
+                    conversationId, userId, persisted, promptRef);
+        }
+        return finishTurn(answer, toolsExecuted, conversationId, userId, persisted);
+    }
+
+    /**
+     * 把「编造的提案」修成「真的提案」：追加一轮用户侧指令，要求模型立刻调用写工具。
+     *
+     * <p><b>为什么不是只贴一句纠正提示</b>：提示只解决"用户别被误导"，不解决"用户要的变更没发生"。
+     * 真机上用户已经确认过一次（"确定"），再让他重述一遍需求是把模型的错转嫁给用户。
+     * 这里是**一次**有界重试：重试后仍编造则退回纠正提示（见 {@link #finishTurn}）。</p>
+     *
+     * <p><b>必须先发 {@code reset}</b>：那段编造的正文已经流式显示给用户了，
+     * 不清掉就会与修复后的回答粘成一段（前端 {@code onReset} 会清空本条气泡）。</p>
+     *
+     * <p><b>落库只写修复后的正文</b>：编造内容不进入历史，用户刷新后不会再看到它。</p>
+     */
+    private Flux<ServerSentEvent<String>> repairFabricatedProposal(StringBuilder answer, Prompt sourcePrompt,
+                                                                   ToolCallingChatOptions options,
+                                                                   AtomicBoolean toolsExecuted,
+                                                                   Long conversationId, Long userId,
+                                                                   AtomicBoolean persisted,
+                                                                   AtomicReference<Prompt> promptRef) {
+        log.warn("回复声称已生成提案但会话内无 PENDING 提案，自动重试一轮让模型调用写工具 conversationId={}",
+                conversationId);
+        conversationService.audit(conversationId, userId, "CHAT", "检测到回复编造提案，自动重试一次");
+        // 重试轮的正文单独累积：只有它非空时才替换掉原来那段（否则保留原文，交给兜底纠正）
+        StringBuilder repaired = new StringBuilder();
+        List<Message> instructions = new ArrayList<>(sourcePrompt.getInstructions());
+        instructions.add(new AssistantMessage(answer.toString()));
+        instructions.add(new UserMessage(REPAIR_INSTRUCTION));
+        return Flux.concat(
+                Flux.just(event("reset", new ChatStreamEvents.Reset())),
+                runToolLoop(new Prompt(instructions, options), repaired, 0, toolsExecuted, promptRef),
+                Flux.defer(() -> {
+                    if (StringUtils.hasText(repaired)) {
+                        answer.setLength(0);
+                        answer.append(repaired);
+                    }
+                    return finishTurn(answer, toolsExecuted, conversationId, userId, persisted);
+                }));
+    }
+
+    /**
+     * 收尾：兜底校验 → 追加纠正（如有）→ 落库 → 结束事件。
+     *
+     * <p>纠正文案**追加进本条助手消息**并同步推给前端，刻意不调用
+     * {@code conversationService.appendMessage}（即 {@code ProposalService.appendResultMessage}
+     * 的机制）：那会额外落一条 ASSISTANT 消息，用户会看到"编造的原话"与"纠正"分成两个气泡，
+     * 纠正反而像是无关的一句。这里只有一条消息、一次落库，不存在消息重复。</p>
+     */
+    private Flux<ServerSentEvent<String>> finishTurn(StringBuilder answer, AtomicBoolean toolsExecuted,
+                                                     Long conversationId, Long userId,
+                                                     AtomicBoolean persisted) {
+        String produced = answer.toString();
+        List<String> corrections = new ArrayList<>(2);
+        // ① 声称有提案但会话内没有 PENDING 提案（自动重试后仍未解决时才会走到这里）
+        proposalClaimGuard.correctionFor(userId, conversationId, produced)
+                .ifPresent(corrections::add);
+        // ② 本轮零工具调用却出现「口径：」行
+        dataSourceClaimGuard.correctionFor(produced, toolsExecuted.get())
+                .ifPresent(corrections::add);
+
+        Flux<ServerSentEvent<String>> correction = Flux.empty();
+        if (!corrections.isEmpty()) {
+            answer.append(String.join("", corrections));
+            correction = Flux.fromIterable(corrections)
+                    .map(text -> event("delta", new ChatStreamEvents.Delta(text)));
+        }
+        Long messageId = persistAssistant(persisted, conversationId, userId, answer.toString());
+        conversationService.audit(conversationId, userId, "CHAT", "助手回答已完成");
+        return correction.concatWith(Flux.just(
+                event("done", new ChatStreamEvents.Done(conversationId, messageId))));
     }
 
     // ------------------------------------------------------------------
@@ -267,12 +435,16 @@ public class AiChatService {
      * {@code answer}。中间轮为了保持实时感仍会流式转发正文，但在进入下一轮前补发
      * {@code reset} 事件，让前端把这一轮已经显示的前言清掉。</p>
      */
-    private Flux<ServerSentEvent<String>> runToolLoop(Prompt prompt, StringBuilder answer, int depth) {
+    private Flux<ServerSentEvent<String>> runToolLoop(Prompt prompt, StringBuilder answer, int depth,
+                                                      AtomicBoolean toolsExecuted,
+                                                      AtomicReference<Prompt> lastPromptRef) {
         if (depth >= MAX_TOOL_ROUNDS) {
             log.warn("工具调用达到最大轮次 {}，停止循环", MAX_TOOL_ROUNDS);
             return Flux.empty();
         }
         return Flux.defer(() -> {
+            // 记下本轮 Prompt：收尾的自动重试要接着它继续（含本轮已执行工具的结果）
+            lastPromptRef.set(prompt);
             // doOnNext 是串行调用的，普通 ArrayList 足够
             List<ChatResponse> collected = new ArrayList<>();
             // 本轮正文：仅当本轮不产生工具调用时，才并入最终回答
@@ -305,13 +477,16 @@ public class AiChatService {
 
                 // 先让前端丢弃本轮前言，再执行工具并进入下一轮，避免前言与最终回答粘连。
                 // 工具执行是阻塞的，且 Tool 内部会通过 ToolContext 中的 sink 实时推送事件。
+                // 置位"本轮执行过工具"：收尾的「口径行」兜底据此判定是否存在编造
+                // （口径只能来自工具返回值，零工具 + 有口径行必然是编造）。
+                toolsExecuted.set(true);
                 return Flux.concat(
                         Flux.just(event("reset", new ChatStreamEvents.Reset())),
                         Flux.defer(() -> {
                             ToolExecutionResult result =
                                     toolCallingManager.executeToolCalls(prompt, aggregate(toolCalls));
                             Prompt next = new Prompt(result.conversationHistory(), prompt.getOptions());
-                            return runToolLoop(next, answer, depth + 1);
+                            return runToolLoop(next, answer, depth + 1, toolsExecuted, lastPromptRef);
                         }));
             }));
         });

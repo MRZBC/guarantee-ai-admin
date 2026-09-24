@@ -113,10 +113,13 @@ public class OrgProposalExecutor implements ProposalExecutor {
     /**
      * 机构逻辑删除（LD-01 / 设计 §6.2）。
      *
-     * <p><b>执行期必须重做删除前置检查</b>（SYS-C-05）："有没有下级机构 / 部门 / 用户 / 关联订单"
-     * 会随他人操作变化——生成提案时没有引用，确认时可能已经有人挂了一个部门上来。
-     * 这里显式重查一次再调用 {@code delete(...)}，后者内部还会再查一次：
-     * 多查一次计数换的是"被引用即拒绝、并把引用数量写在失败信息里"的确定性。</p>
+     * <p><b>执行期必须重做删除前置检查</b>（SYS-C-05）："有没有未删除的下级机构"会随他人操作变化
+     * ——生成提案时没有下级，确认时可能已经有人挂了一个机构上来。这里显式重查一次，
+     * 再到 {@code delete(...)} 内部再查一次：多查一次计数换的是"有下级即拒绝、并把数量写在失败信息里"的确定性。</p>
+     *
+     * <p><b>关联订单不再是阻碍项</b>：被订单引用可以删除——历史订单仍显示该机构名称、
+     * 也仍能按它筛选（见 {@code docs/DEC-订单筛选下拉的选项口径.md}），
+     * 因此这里不再把订单数当成失败理由。</p>
      *
      * <p>注意删除**不改变 status**（LD-02），因此 before/after 只记录 {@code isDeleted}。</p>
      */
@@ -133,8 +136,8 @@ public class OrgProposalExecutor implements ProposalExecutor {
         Map<String, Object> before = Map.of("isDeleted", 0);
         Map<String, Object> after = Map.of("isDeleted", 1);
         return ProposalExecutionResult.ok(
-                "机构「" + deleted.getOrgName() + "」已删除（默认不再出现在列表中，"
-                        + "可在「显示已删除」中恢复）", before, after,
+                "机构「" + deleted.getOrgName() + "」已删除（不再出现在配置列表与新建业务的候选中，"
+                        + "历史订单不受影响，可在「显示已删除」中恢复）", before, after,
                 List.of(),
                 List.of("删除不改变启用/停用状态，恢复后回到删除前的状态（LD-02）"));
     }

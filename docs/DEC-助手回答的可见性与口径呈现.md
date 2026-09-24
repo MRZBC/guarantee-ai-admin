@@ -463,6 +463,259 @@ WHERE r.role_code = 'ADMIN'          -- ← 缺 is_deleted = 0
 
 ---
 
+## 7.6 决策八：确认卡必须归位到自己的会话（跨会话泄漏）
+
+### 7.6.1 现象（用户截图）
+
+用户在助手面板里说「**建立个新角色吧，不要系统配置权限**」，助手正常回了"我来新建一个不含
+系统配置权限的角色，请先确认角色名称与编码……"。**回答正下方紧跟着一张卡片**：
+
+> 「危险操作 · 角色分配用户 — user0005」原值 只读用户 → 新值 只读用户；
+> 你的原话：把 user0005 的角色改为 VIEWER（只读用户）；15 分钟内有效（剩余 13:26）
+
+用户的判断很直接：**"我要建立新角色，为啥给我弹出了一个角色分配的弹窗"**。
+这张卡与提问毫无关系，看上去就是助手答非所问。
+
+### 7.6.2 取证（查库，不是推测）
+
+| 项 | 值 | 来源 |
+| --- | --- | --- |
+| 截图中该轮提问 / 回答 | 「建立个新角色吧，不要系统配置权限」/「好的，我来新建一个不含系统配置权限的角色…」 | `ai_message` 518 / 519（会话 **484**，23:39:42 / 23:39:43） |
+| 卡片对应的提案 | id=**673**，`conversation_id`=**485**，`PENDING`，`created_at`=23:38:35，`expires_at`=23:53:35 | `ai_operation_proposal` |
+| 该提案的 `request_payload.userText` | `把 user0005 的角色改为 VIEWER（只读用户）` | 与卡上「你的原话」逐字一致 |
+| 会话 484 本轮的工具调用 | **零**。该会话最后一条 `ai_tool_call` 是 23:34:13 的 `proposeUserChange` | `ai_tool_call` |
+| 剩余时间反推截图时刻 | 23:53:35 − 13:26 = **23:40:09**，正好在回答（23:39:43）之后 | 计算 |
+
+两条结论都被钉死：**卡片不是本轮生成的**（本轮一次写工具都没调），它是**另一个会话 485**
+里挂着的那张待确认卡。也就是说助手没有理解错，**是界面把别的会话的卡片搬过来了**。
+
+### 7.6.3 根因
+
+| 层 | 问题 |
+| --- | --- |
+| 后端 | `GET /api/ai/proposals` 只按 `user_id` 过滤（`listMine` → `selectByUserId`），返回该用户**跨会话**的全部 PENDING 提案 |
+| 前端 | `refreshProposals()` 用这个结果**整体替换** `proposals.value`；调用点有两处（本轮流结束的兜底刷新、组件挂载），**都没有带会话号** |
+| 前端 | 只有 `loadConversation()` 里手工补了一句按 `conversationId` 过滤——同一个语义散在两个地方，漏掉一处就泄漏 |
+| 渲染 | 模板里 `proposals` 区块位于**消息流末尾**（`v-if="proposals.length"`），卡片与消息之间没有归属关系，于是任何来源的卡片都会显示成"最新那条回答的产物" |
+
+> 这也解释了同一个 bug 的另一副面孔：`conversation_id` 为 NULL 的提案（只有"无会话"的直连
+> 路径会产生，例如测试夹具）此前也会被渲染进使用者的面板——正是决策七里"用户只问了一句
+> 纯查询，却冒出两张停用险种卡"的另一半原因。
+
+### 7.6.4 落地
+
+| 改动 | 说明 |
+| --- | --- |
+| `AiOperationProposalMapper#selectByUserId` | 增加可选 `conversationId`：非空即 `AND conversation_id = #{conversationId}` |
+| `ProposalService#listMine` | 增加 `conversationId` 参数并透传；**为 null 时语义不变**（跨会话待办视角） |
+| `AiController#proposals` | 新增可选查询参数 `conversationId` |
+| `api/ai.ts#listProposals` | 增加 `conversationId`，有会话号就带上 |
+| `AiCopilot#refreshProposals(scope)` | **只拉当前会话**；无当前会话（新会话还没发出第一条消息）时清空；过滤只认 `conversationId === 当前会话` |
+| `AiCopilot#loadConversation` | 改为 `refreshProposals(id)`，删掉那句手工过滤——口径收口到一处 |
+| `AiCopilot#onMounted` | **不再**拉跨会话清单（Q-8 的口径本就是"仅会话内提示，不做全局角标"）；卡片在进入/切回会话时按 SYS-C-14 恢复 |
+
+### 7.6.5 边界与复验
+
+| 项 | 结论 |
+| --- | --- |
+| 不带 `conversationId` 时 | 后端行为**逐字未变**（仍是跨会话清单），`ProposalFlowIT#pendingProposalsAreScopedToConversation` 显式断言了这一点 |
+| `conversation_id IS NULL` 的提案 | 不再出现在任何会话里（SQL 等值过滤天然排除 NULL），决策七的泄漏面随之收敛 |
+| 新会话（无会话号） | 不显示任何卡片：此时屏幕上没有对话上下文，卡片无从归位；发出第一条消息后由本轮兜底刷新补上 |
+| 这张卡本身 | 仍是**无变化提案**（原值=新值=只读用户）。`UserService.validateAssignRoles` 没有拦"变更后与当前完全一致"，属写工具预检语义，本轮**未动**，见 `REQ-用户管理新增与修改.md` §14.13 |
+| 生效条件 | 前端刷新页面即生效（dev server HMR 亦可）；后端需重启才带上新的查询参数 |
+
+---
+
+## 7.7 决策九：编造提案不再只"贴提示"，而是**自动重试一次真调用**
+
+### 7.7.1 现象（用户截图，同一类编造的第三次复现）
+
+上一轮助手说"确认后我立即发起提案"，用户只回了一个「确定」，助手回答：
+
+> 我已生成变更提案，需要在确认卡上点击『确认执行』后才会生效。
+> … 提案编号：**OP202609242359135602** … 有效期至 2026-09-25 00:14
+> （系统提示：本次回复提到的提案并未生成，当前没有待确认的变更。请重新说明你要做的变更。）
+
+**卡片没有出现**，而且这一条回复自相矛盾：抬头写着编号、结尾说没生成。
+
+### 7.7.2 取证（查库，不是推测）
+
+| 项 | 值 | 来源 |
+| --- | --- | --- |
+| 该轮消息 | 用户「确定」23:55:38；助手回答 23:55:39 | `ai_message` 526 / 527（会话 484） |
+| 该轮工具调用 | **零**。会话 484 的最后一条 `ai_tool_call` 是 23:53:45 的 `proposeRoleChange` | `ai_tool_call` 234/235 |
+| 编号 `OP202609242359135602` | 库里**不存在**；其内嵌时间 23:59:13 比这条回复还**晚 3 分半** | `ai_operation_proposal` 全表比对 |
+| 真实存在的提案 | 681 `OP202609242353458551`（23:53:45 新增角色，已执行） | 上一轮的提案 |
+
+结论：**模型把上一轮列好的变更内容（目标角色、新名称）当成了"已经做过的事"，
+用文字复述了一遍，并编了一个编号**；机制侧（工具注册、SSE、卡片）全程正常。
+提示词里其实早有约束（自检 B：「写了'已生成变更提案'就必须有对应的写工具调用记录」、
+第 30/31 条），但**模型不遵守时，提示词本身没有任何补救能力**。
+
+### 7.7.3 为什么"贴一句纠正"不够
+
+| 问题 | 说明 |
+| --- | --- |
+| 用户要的变更**没发生** | 用户已经确认过一次（「确定」），却要重新说一遍需求——模型的错被转嫁给了用户 |
+| 同一条回复自相矛盾 | 抬头是编造的编号，结尾是"并未生成"，用户不知道该信哪一句 |
+| 编造内容进了历史 | 落库的就是那段编造正文，下次进会话还看得到 |
+
+### 7.7.4 落地：一次有界的自动重试（**修复**，而不只是提示）
+
+| 改动 | 说明 |
+| --- | --- |
+| `AiChatService.REPAIR_MARKER` / `REPAIR_INSTRUCTION` | 检测到编造后，追加一轮用户侧指令：*你上一条回复声称已生成提案，但本轮没有任何写工具调用*，要求模型**现在就调用写工具**，并重申"编号只能来自工具返回值" |
+| 重试**只做一轮** | 重试后仍编造 → 退回原来的"追加纠正提示"（`ProposalClaimGuard` 不动） |
+| 重试前先发 `reset` | 编造的正文已经流式显示过，前端 `onReset` 会清空本条气泡，避免两段回答粘连 |
+| 落库只写修复后的正文 | 编造内容不进入历史；`persistAssistant` 仍然只调用一次（不存在两条助手消息） |
+| **收尾挂进 `contentEvents` 之内** | 见下——这是本轮**实测踩到的机制陷阱** |
+| 提示词自检 C 扩写 | 从"只回复选项（B / 方案二）"扩到**"确定 / 好的 / 可以 / 是的 / 嗯"这类纯确认**，并明确"上一轮已列清变更内容时，用户回'确定'就直接调工具" |
+
+**机制陷阱（由新集成测试在第一次运行时就抓到）**：收尾原先写在
+`safe.concatWith(Flux.defer(...))`——那是 `Flux.merge(contentEvents, toolEvents, proposalEvents, …)`
+**之后**的一段。而三个 sink 由 `contentEvents.doOnComplete` 关闭，于是重试轮里写工具产出的提案
+推送必然失败：
+
+```
+WARN ProposalEventPublisher - 推送提案事件失败（FAIL_TERMINATED），提案 684 仅落库，本轮前端不会出现确认卡
+```
+
+即"提案真的生成了，用户还是看不到卡片"。修法是把收尾（重试 / 纠正 / 落库 / `done`）
+**并入 `contentEvents`**，三个 sink 等它跑完再关闭，merge 随之完成。
+
+### 7.7.5 边界
+
+| 项 | 结论 |
+| --- | --- |
+| 重试次数 | **1 次**（`repairFabricatedProposal` 内部不再递归重试），不引入额外费用风险 |
+| 重试轮模型仍编造 | 保持旧行为：正文 + 「本次回复提到的提案并未生成…」纠正 |
+| 重试轮模型只调工具、不写正文 | 保留原因正文，由兜底校验重新判定（此时已有 PENDING 提案，不会再贴错误提示） |
+| 重试轮模型改口为"这不是变更" | 允许——指令第 3 条明确要求这种情况如实回答、不要提提案 |
+| 误伤风险 | 判定沿用 `ProposalClaimGuard.claimsProposal`（窄匹配 + 否定词豁免，已有 11 个单元测试与真机误报回归） |
+
+### 7.7.6 顺带修正：`ProposalFlowIT` 又一处软删除漏网
+
+全量 `mvn verify` 跑出一条与本次改动无关的失败：
+
+```
+ProposalFlowIT.departmentWithEnabledUsersCannotBeDisabled
+Expecting throwable message: "该部门下仍有 27 个启用中的用户，不能停用"
+to contain: "仍有 38 个启用中的用户" but did not.
+```
+
+查库确认：断言选的部门是「系统部」（id=1011），裸 `JdbcTemplate` 数出 `status = 1` 共
+**38** 行，而 Service 侧（经 `LogicalDeleteInnerInterceptor`）数是 **27** 行——
+差的那 11 行是 `status = 1 AND is_deleted = 1` 的**已删除历史账号**（P-10 的删除用户能力
+上线后，手工验证时删掉的账号）。也就是说：**Service 的文案是对的，测试的数法漏了
+`is_deleted = 0`**，与 §6.5 记录的 `sys_user_role` 那条是同一类漏网。
+
+处置：两处计数补 `AND is_deleted = 0`；「停用该部门全部用户 / 恢复」这两条 `UPDATE`
+同样收窄到 `is_deleted = 0`——否则测试会顺手改掉软删除行的 `status`，等于偷偷修改历史数据。
+
+### 7.7.7 残留：编造内容进了历史，被下一轮当成事实（2026-09-25 00:08 真机）
+
+修复上线前的编造已经落库，就会出现**二次伤害**：模型下一轮读回自己的话，把它当成既成事实。
+
+| 项 | 值 | 来源 |
+| --- | --- | --- |
+| 用户提问 | 「把张涛的角色改成无系统配置的权限」（00:08:14） | `ai_message` 576（会话 484） |
+| 助手回答 | 「**你要的目标角色**：你刚创建的那个角色，现在名称是**「行政」**（编码 OPER_NO_SYS）」 | `ai_message` 577（00:08:17） |
+| 该轮工具调用 | **零**——会话 484 自 23:53:45 之后一条 `ai_tool_call` 都没有 | `ai_tool_call` |
+| 角色真实状态 | `sys_role.id=425`：`role_name` 仍为**业务运营（无系统配置）**，`updated_at` = `created_at` = 23:54:18（**从未改名**），权限 0 项 | `sys_role` / `sys_role_permission` |
+| 改名提案 | **不存在**。会话 484 只有 681 一条提案（CREATE，23:54:18 确认并执行） | `ai_operation_proposal` |
+| 「行政」从哪来 | 用户 23:54:48 说「角色名称叫行政吧」→ 模型 23:55:39 编造了"改名提案已生成"（§7.7）→ 下一轮把自己的编造读成了事实 | 526~527 → 577 |
+
+于是用户看到的就是「**编码一致、名称不一致**」：编码 OPER_NO_SYS 来自真实创建，名称「行政」来自模型自己的编造。
+
+**处置（两处，都是"让纠正活到下一轮"）**
+
+| 改动 | 说明 |
+| --- | --- |
+| `ProposalClaimGuard.CORRECTION` 改写 | 纠正文案不只是给用户看的，**它会被模型在下一轮读回去**。新增两条硬约束：①「请不要把本条回复中"已生成/已变更/已改名/已授权"这类说法当成事实」；②「需要确认某个角色、用户或险种现在是什么状态时，**必须用只读工具重新查询**」 |
+| 提示词新增自检 **E** | 「实体的当前状态（角色名称与权限、用户的角色、险种启停…）只能来自**本轮**只读工具的返回值；你自己此前回复里写过的状态描述不是事实来源」。自检：本轮没有读工具调用时不得断言"某某现在是什么"，先查或如实说"我先查一下" |
+
+**为什么不做"改写历史"**：把已落库的编造内容删掉/改写，会让"落库内容 = 用户当时看到的内容"这条口径失效（`ProposalClaimGuardIT` 正是这么断言的）。这里选择让纠正**更强、更像事实更正**，而不是篡改历史。
+
+**已知残留**：修复上线**之前**产生的编造消息（如 527）仍留在会话 484 的历史里。规避方式：在该会话里直接要求"先查一下角色当前名称"，或**开新会话**（历史按会话加载，新会话不会读到它）。
+
+### 7.7.8 残留的第二次现场：卡片对了、正文还是「行政」（2026-09-25 00:16）
+
+修好"重试"之后，用户又跑了一次同样的诉求，结果变成了**半对**：
+
+| 项 | 值 |
+| --- | --- |
+| 工具调用 | `proposeUserChange` WRITE SUCCESS（00:16:42），参数正确：`roleCodes=["OPER_NO_SYS"]` |
+| 确认卡（前端按工具载荷渲染） | 「角色：只读用户 → **业务运营（无系统配置）**」——**正确** |
+| 模型正文（`ai_message` 585） | 「变更后角色：**行政**（编码 OPER_NO_SYS，原为只读用户）」——**错误** |
+| 提案 726 | 00:16:42 生成，00:18:00 被用户**拒绝**（正因为正文与卡片对不上） |
+
+两处成因，各修一处：
+
+| # | 成因 | 处置 |
+| --- | --- | --- |
+| 1 | **模型仍采信自己上一轮的编造**（§7.7.7）：它没有调用任何读工具，直接从记忆里取"名称=行政" | `AiChatService.retractionNotice`：**每轮**扫描历史，若存在带纠正标记（`ProposalClaimGuard.CORRECTION`）的助手回复，就把「本会话的历史更正」追加进本轮系统提示——*那些回复里描述的变更没有发生，其中的实体名称/状态/提案编号不是事实，问到就必须用只读工具重查*。历史不改写，但这个更正**每轮都在场** |
+| 2 | **写工具的返回里没有目标实体的名字**：`WriteToolResult` 只有 `summary`（"角色分配：user0005"）、提案编号、有效期——模型想照抄也**没有真值可抄** | `WriteToolResult` 新增 `changes`（与确认卡同源的「原值 → 新值」逐条明细）；提示词第 31 条补一条**硬要求**：正文「变更内容」必须逐字照抄工具返回的 `changes`，不得凭记忆改写角色/用户/险种名 |
+
+> 成因 2 是这一轮**最值得记住的一点**：卡片是前端按工具载荷渲染的，天然是真值；正文是模型自己写的，
+> 而它手上的工具返回里**根本没有那个中文名**。过去几轮都在"要求模型别编"，而这次是**先把真值给它**。
+
+**顺带修正的第三处软删除漏网（§6.5 / §7.7.6 的同族）**：全量 `mvn verify` 报
+`WebAuditIT.everyDomainShouldProduceWebAudit` → `BizException: 角色不存在: 5`。原因是该用例的
+`roleIdByCode` 用裸 `JdbcTemplate` 查 `sys_role`，而使用者在 00:07 于角色页**删除**了
+「覆盖检查角色」（逻辑删除，id=5）——于是它取到一条**已删除**的历史行 id，再去
+`roleService.update(id)` 就必然报"不存在"（业务代码是对的）。处置：`roleIdByCode` 补
+`AND is_deleted = 0`；`permissionCodesOfRole` 同步补 `r.is_deleted = 0` 与 `rp.is_deleted = 0`
+（后者是 UPSERT 语义，取消授权只把旧行置 1；不补的话"恢复原权限"会把历史行一起复活）。
+
+## 7.8 决策十：角色**授权**卡的「权限」也要显示中文名
+
+### 7.8.1 现象（用户截图）
+
+角色授权确认卡的「权限」一列与影响面铺的是权限码：
+
+```
+字段    原值                     新值
+权限                              dashboard:view, order:tender:view, order:performance:view,
+                                 analysis:overview:view, project:view, enterprise:view, ai:chat
+影响面  当前权限 -
+        变更后权限 dashboard:view、order:tender:view、order:performance:view、…
+```
+
+使用者的反馈就一句：**「这里应该显示中文吧」**。
+
+### 7.8.2 根因：决策四只修了"角色编码"，权限码是漏网的一批出口
+
+决策四（确认卡里的角色显示中文名）改的是 `UserService.roleDisplayNames` 的三个影响面与一处变更明细，
+**权限码从来没被翻译过**，而它在同一条链路上有四个出口：
+
+| # | 出口 | 原状 |
+| --- | --- | --- |
+| 1 | `RoleProposalTool` 的变更明细 | `String.join(", ", 权限码)` |
+| 2 | `RoleService.assignPermissionsImpact` 的影响面 | 「当前权限 / 变更后权限」直接放编码 List |
+| 3 | `RoleProposalTool` 的高危权限提示 | 直接写 `system:audit:view（全局操作审计）` |
+| 4 | `RoleProposalExecutor` 的**执行结果消息** | `"…权限已变更为 " + afterMap.get("permissionCodes")` → 把 `List.toString()`（`[dashboard:view, …]`）写进了会话消息 |
+
+第 4 条与决策四"只修提案预览、没覆盖执行结果"是同一个翻版。
+
+### 7.8.3 落地
+
+| 改动 | 说明 |
+| --- | --- |
+| 新增 `RoleService.permissionDisplayNames(Collection<String>)` | 批量按编码查 `sys_permission.perm_name`（复用 `selectPermissionEntitiesByCodes`，与授权校验**同源同过滤**），保持传入顺序、去重；**查不到的编码原样返回**（宁可偶尔露出一个编码，也不能静默丢掉一项权限——那会让"变更后权限"与实际授予不一致） |
+| 出口 1 / 2 | 变更明细的「原值 → 新值」与影响面改用它，分隔符统一为「，」 |
+| 出口 3 | 风险提示改为「本次授权包含**「全局操作审计」**这一全局操作审计权限，按 D-1a 仅应授予超级管理员」——不再直接甩编码 |
+| 出口 4 | 执行结果消息改为「角色「X」的权限已变更为 数据概览，AI 助手对话」；**权限为空**时明说「（已清空该角色的全部权限）」，不再打印空 List |
+
+**刻意保留的边界**
+
+| 项 | 结论 |
+| --- | --- |
+| 结构化审计 | `ai_operation_audit.before_value/after_value` **仍是权限码数组**（审计要回答"到底改了哪几项"，见 `REQ-角色管理与权限分配页面` §227） |
+| 逻辑判定 | `validateAssignPermissions`、白名单过滤、`Roles.ADMIN` 判定一律继续用编码 |
+| 未知编码 | 原样显示编码，绝不因翻译失败而少显示一项 |
+
+---
+
 ## 8. 验收清单
 
 | # | 验收项 | 证据 |
@@ -477,7 +730,17 @@ WHERE r.role_code = 'ADMIN'          -- ← 缺 is_deleted = 0
 | 8 | **影响面文案不含 `JWT` / `令牌` / `claims`，且不含角色编码** | `UserServiceRoleDisplayTest#impactTextsAvoidInternalJargon` / `#impactTextsAvoidRoleCodes` |
 | 9 | 复用待确认提案时照样推送确认卡；新建分支不退化 | `ProposalServiceReusePublishTest`，2 项 |
 | 10 | **集成测试跑完不在共享开发库留下待确认提案，也不残留险种状态** | 跑全量 `mvn verify` 后 `MAX(id)` 不变、险种状态不变（§7.5.4） |
-| 11 | 全量回归 | `mvn -B verify` BUILD SUCCESS（8 模块）；`npm run build` 通过 |
+| 11 | **确认卡按会话隔离**：带 `conversationId` 只返回该会话的提案，不带时仍是跨会话清单 | `ProposalFlowIT#pendingProposalsAreScopedToConversation`（实跑 1/1 通过） |
+| 12 | **编造提案会被自动修复**：模型先用文字假装生成、重试轮真的调用写工具，卡片与提案都到位，落库正文不含编造编号 | `ProposalRepairIT#fabricatedClaimIsRepairedByRealToolCall`（实跑 1/1 通过） |
+| 13 | 重试仍编造时退回纠正提示；确有 PENDING 时不误伤 | `ProposalClaimGuardIT`，3/3 通过 |
+| 14 | 既有工具链未退化（读工具循环、tool_call 事件按权限下发） | `AiToolChainIT`，3/3 通过 |
+| 15 | 全量回归 | `mvn -B verify` BUILD SUCCESS（8 模块）；`npm run build` 通过 |
+| 16 | `ProposalFlowIT` 部门用户计数按未删除口径 | §7.7.6（全量 `mvn verify` 由失败转绿） |
+| 17 | 纠正文案含"别把它当事实 + 用只读工具重查现状"；提示词自检 E 在位 | `ProposalClaimGuardTest` 11/11；`ProposalClaimGuardIT` 3/3（§7.7.7） |
+| 18 | **历史更正每轮注入**：上一轮被判编造 → 下一轮系统提示里出现「本会话的历史更正」 | `ProposalClaimGuardIT#retractedClaimsAreInjectedIntoNextTurnSystemPrompt`；纯函数另测 5 项（`AiChatServiceRetractionNoticeTest`） |
+| 19 | **写工具把卡片真值交给模型**：`WriteToolResult.changes` 与确认卡同源 | `WriteToolResultTest` 2 项（§7.7.8） |
+| 20 | `WebAuditIT` 角色查询按未删除口径 | §7.7.8 末（全量 `mvn verify` 由失败转绿） |
+| 21 | **授权卡显示中文权限名**：变更明细、影响面、风险提示、执行结果消息均无权限码；未知编码原样保留 | `RoleServicePermissionDisplayTest` 6 项 + `RoleProposalToolPermissionDisplayTest` 3 项（§7.8） |
 
 ---
 
@@ -489,3 +752,8 @@ WHERE r.role_code = 'ADMIN'          -- ← 缺 is_deleted = 0
 | （待填） | v1.1 | 追加两处：**决策四** 确认卡的角色显示中文名（`UserService.roleDisplayNames`，改 3 处影响面 + 1 处变更明细；含"逻辑判定仍按编码"的边界与"已存快照不改写"的说明）；**决策五** 复用既有待确认提案时漏推 SSE 的缺陷（`ProposalService.create` 复用分支补 `publishProposal`）。顺带修正 `ProposalFlowIT` 缺 `is_deleted = 0` 的历史行计数 |
 | （待填） | v1.2 | 追加**决策六**：面向用户文案清除内部技术术语（`JWT`/`令牌` 共 11 处用户可见文案 + 3 处工具说明/提示词，统一为「会被立即强制下线，需要重新登录」）；提示词新增第 42 条术语约束；顺带修掉 `UserProposalExecutor` 执行结果消息里的角色编码泄漏（决策四的漏网之处） |
 | （待填） | v1.3 | 追加**决策七**：集成测试污染共享开发库——`ProposalFlowIT` 留下的 PENDING 提案（`conversation_id` 为 NULL、归属 admin）会在真实使用者的助手面板里渲染成"没人提过的停用确认卡"；`WebAuditIT` 把「投标保函（标准）」留在停用状态。落地：新增 `ProposalFixture` 精确登记并清理、两个 IT 补 `@AfterEach`、险种状态改为快照精确还原。已清理历史残留 333 条测试提案；**经确认**：险种停用状态保留现状、审计噪声不清理，均仅登记 |
+| （待填） | v1.4 | 追加**决策八**：确认卡跨会话泄漏——用户问"建立个新角色"，回答末尾却跟着**另一个会话**里挂着的「角色分配 user0005」危险操作卡。查库取证：该卡是提案 673（`conversation_id`=485），而会话 484 本轮**零写工具调用**。落地：`GET /api/ai/proposals` 支持 `conversationId`、前端只按当前会话刷新与渲染、挂载时不再拉跨会话清单；`ProposalFlowIT#pendingProposalsAreScopedToConversation` 锁定服务端语义。顺带收敛决策七的另一半泄漏面（`conversation_id IS NULL` 的测试提案不再进任何会话） |
+| （待填） | v1.5 | 追加**决策九**：编造提案不再只贴提示，而是**自动重试一次真调用**。真机第三次复现（用户只回「确定」，助手复述上一轮变更并编造编号 `OP202609242359135602`，`ai_tool_call` 为零、编号在库里不存在且内嵌时间晚于回复 3 分半）。落地：`AiChatService` 检测到编造后追加一轮"立即调用写工具"的指令（有界 1 次）、先发 `reset` 丢弃编造正文、落库只写修复后正文，未修复才退回纠正提示；**收尾必须并入 `contentEvents`**——原先放在 merge 之后会让重试轮生成的提案以 `FAIL_TERMINATED` 推送失败（"提案生成了、用户仍看不到卡片"，由新 IT 首跑抓到）；提示词自检 C 扩写到"确定/好的/可以/是的/嗯"这类纯确认。新增 `ProposalRepairIT`；顺带修正 `ProposalFlowIT` 第二处软删除计数漏网（部门启用用户数，见 §7.7.6） |
+| （待填） | v1.6 | 追加**§7.7.7**：修复上线前的编造落库后出现**二次伤害**——模型把自己上一轮编造的"角色已改名"当成既成事实，下一轮答出"现在名称是「行政」（编码 OPER_NO_SYS）"，而库里 `updated_at = created_at` 证明从未改名；该轮**零工具调用**。落地：`ProposalClaimGuard.CORRECTION` 改写为"别把本条回复里的变更描述当事实 + 确认现状必须用只读工具重查"，提示词新增**自检 E**（实体当前状态只能来自本轮读工具返回值）。刻意**不改写历史**（保住"落库 = 用户所见"口径），已知残留：修复前的编造消息仍在会话 484 历史里，可开新会话规避 |
+| （待填） | v1.7 | 追加**§7.7.8**：同一诉求第二次现场——确认卡正确（业务运营（无系统配置））、模型正文仍写「行政」，用户据此拒绝了提案。两处成因各修一处：① `AiChatService.retractionNotice`（**每轮**把"历史里有 N 条被判编造、那些变更没有发生、问到必须用只读工具重查"写进系统提示）；② `WriteToolResult` 新增 `changes`（与确认卡同源的「原值 → 新值」），提示词第 31 条要求正文「变更内容」逐字照抄——**先给真值，而不是只要求别编**。新增 `AiChatServiceRetractionNoticeTest`（5 项）、`WriteToolResultTest`（2 项），`ProposalClaimGuardIT` 补 1 项（断言下一轮系统提示确实注入）；顺带修正第三处软删除漏网（`WebAuditIT.roleIdByCode` / `permissionCodesOfRole`） |
+| （待填） | v1.8 | 追加**决策十**（§7.8）：角色**授权**确认卡的「权限」一列与影响面显示的是权限码，使用者当场反馈"这里应该显示中文吧"。决策四只修了角色编码，权限码在同一条链路上有四个出口（变更明细 / 影响面 / 高危权限提示 / **执行结果消息里的 `List.toString()`**）全部漏网。落地：新增 `RoleService.permissionDisplayNames`（按 `sys_permission.perm_name` 批量翻译，查不到原样返回；判定仍按编码），四个出口全部改用它，空权限明说"已清空"。结构化审计仍存编码。新增 `RoleServicePermissionDisplayTest`（6 项）、`RoleProposalToolPermissionDisplayTest`（3 项） |

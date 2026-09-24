@@ -104,25 +104,19 @@ public class InsuranceTypeProposalExecutor implements ProposalExecutor {
     /**
      * 险种逻辑删除（LD-01 / 设计 §6.2）。
      *
-     * <p><b>与停用的关键差异</b>：停用只提示被引用订单数、不禁；删除**被引用即拒绝**
-     * ——删除后历史订单会指向一条"不存在"的险种。因此执行期必须重新统计引用数
-     * （订单随时可能新增），并把数量写进失败信息，同时给出"改用停用"的替代路径。</p>
+     * <p><b>与停用的差异是"从配置列表移除"而不是"能不能删"</b>：被订单引用同样可删——
+     * 历史订单仍显示该险种名称、也仍能按它筛选（订单列表与分布图的维度 join 不带
+     * {@code is_deleted}；筛选下拉按"被订单引用"口径收录）。因此执行期**不再做引用数前置拒绝**，
+     * 引用数只作为影响面出现在提案里。</p>
      */
     private ProposalExecutionResult delete(AiOperationProposal proposal,
                                            ProposalExecutionContext context) {
-        var existing = insuranceTypeService.getEntityById(proposal.getTargetId());
-        java.util.List<String> blockers = insuranceTypeService.deleteBlockers(existing);
-        if (!blockers.isEmpty()) {
-            throw new com.guarantee.common.exception.BizException(
-                    "该险种不能删除：" + String.join("；", blockers)
-                            + "。如只需暂停业务，请改用「停用」。");
-        }
         var deleted = insuranceTypeService.delete(proposal.getTargetId(), context.userId());
         Map<String, Object> before = Map.of("isDeleted", 0);
         Map<String, Object> after = Map.of("isDeleted", 1);
         return ProposalExecutionResult.ok(
-                "险种「" + deleted.typeName() + "」已删除（默认不再出现在列表中，"
-                        + "可在「显示已删除」中恢复）", before, after,
+                "险种「" + deleted.typeName() + "」已删除（不再出现在配置列表与新建业务的候选中，"
+                        + "历史订单不受影响，可在「显示已删除」中恢复）", before, after,
                 java.util.List.of(),
                 java.util.List.of("删除不改变启用/停用状态，恢复后回到删除前的状态（LD-02）；"
                         + "恢复时要求险种编码未被有效险种占用"));

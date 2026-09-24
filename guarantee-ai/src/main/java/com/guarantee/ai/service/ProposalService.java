@@ -198,10 +198,19 @@ public class ProposalService {
     // 查询
     // ==================================================================
 
+    /**
+     * 当前用户的提案列表。
+     *
+     * @param conversationId 非 null 时只返回该会话下的提案。**确认卡是会话内资产**：
+     *                       不带会话过滤会把别的会话里挂着的待确认卡喂给前端，
+     *                       前端把它渲染在当前消息流末尾，用户就会在一句
+     *                       "我来新建角色"的回答后面看到一张"角色分配 user0005"的卡片。
+     *                       为 null 时才退化为"该用户全部提案"（跨会话待办视角）。
+     */
     @Transactional(readOnly = true)
-    public List<ProposalPayload> listMine(Long userId, String status, int limit) {
+    public List<ProposalPayload> listMine(Long userId, String status, int limit, Long conversationId) {
         int effective = limit <= 0 ? LIST_LIMIT : Math.min(limit, LIST_LIMIT);
-        return proposalMapper.selectByUserId(userId, status, effective).stream()
+        return proposalMapper.selectByUserId(userId, status, effective, conversationId).stream()
                 .map(entity -> toPayload(entity, readPreview(entity), null))
                 .toList();
     }
