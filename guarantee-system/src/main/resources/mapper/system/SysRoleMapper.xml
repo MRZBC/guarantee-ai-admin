@@ -220,9 +220,17 @@
         ORDER BY sort_no ASC, id ASC
     </select>
 
+    <!--
+      权限主数据全量清单（queryRole 的 PERMISSION 模式，也是"存在哪些权限码"的口径来源）。
+
+      必须过滤 is_deleted = 0：与授权校验 selectPermissionEntitiesByCodes（同样带 is_deleted = 0）
+      同口径。否则模型会被告知存在一个实际不可授权的权限码，进而生成注定失败的授权提案；
+      页面侧同款问题见 SysPermissionMapper.selectAllOrdered。
+    -->
     <select id="selectAllPermissionsOrdered" resultType="com.guarantee.system.entity.SysPermission">
         SELECT id, perm_code, perm_name, perm_type, parent_id, path, component, icon, sort_no, created_at
         FROM sys_permission
+        WHERE is_deleted = 0
         ORDER BY sort_no ASC, id ASC
     </select>
 

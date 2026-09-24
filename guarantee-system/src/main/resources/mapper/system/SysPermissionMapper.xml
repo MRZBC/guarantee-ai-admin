@@ -3,7 +3,15 @@
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.guarantee.system.mapper.SysPermissionMapper">
 
-    <!-- 前端按 parentId 自行组树，这里只保证 sort_no 有序返回。 -->
+    <!--
+      前端按 parentId 自行组树，这里只保证 sort_no 有序返回。
+
+      必须过滤 is_deleted = 0：本接口的语义是"**可被授予**的权限清单"（角色授权树的数据源），
+      而已删除的权限码在授权侧会被拒绝——RoleService.validateAssignPermissions 走的
+      selectPermissionEntitiesByCodes 带 is_deleted = 0。若这里放行，界面就会出现
+      "勾了必然提交失败"的选项，用户只会看到「以下权限码不存在，不能授权」而误以为是前端 bug。
+      两个出口必须同口径（另一个出口见 SysRoleMapper.selectAllPermissionsOrdered）。
+    -->
     <select id="selectAllOrdered" resultType="com.guarantee.system.vo.PermissionVO">
         SELECT id        AS id,
                perm_code AS permCode,
@@ -17,6 +25,7 @@
                is_deleted AS isDeleted,
                deleted_at AS deletedAt
         FROM sys_permission
+        WHERE is_deleted = 0
         ORDER BY sort_no ASC, id ASC
     </select>
 

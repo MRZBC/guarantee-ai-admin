@@ -373,11 +373,50 @@ public class RoleService {
     public Map<String, Object> assignPermissionsImpact(SysRole role, List<String> targetPermCodes) {
         Map<String, Object> impact = new LinkedHashMap<>();
         RoleVO current = getById(role.getId());
-        impact.put("当前权限", current.getPermissionCodes());
-        impact.put("变更后权限", normalize(targetPermCodes));
+        // 影响面是**给业务用户看的正文**：权限码是内部枚举码，必须换成中文权限名
+        // （与角色分配卡同款处置，见 UserService.roleDisplayNames 的决策四）
+        impact.put("当前权限", permissionDisplayNames(current.getPermissionCodes()));
+        impact.put("变更后权限", permissionDisplayNames(normalize(targetPermCodes)));
         impact.put("影响用户数", sysRoleMapper.selectUserIdsByRoleCode(role.getRoleCode()).size());
         impact.put("影响", "持有该角色的用户会被立即强制下线，需要重新登录（新权限随即生效）");
         return impact;
+    }
+
+    /**
+     * 权限编码 → 中文权限名（**仅用于展示**：确认卡的「原值/新值」与影响面）。
+     *
+     * <p><b>为什么必须转换</b>：角色授权卡此前直接把编码铺在「权限」一列上——
+     * {@code dashboard:view, order:tender:view, analysis:overview:view, …}，
+     * 业务用户根本读不出变更了什么。真机上使用者当场就问"这里应该显示中文吧"。
+     * 角色分配卡的同类问题已在决策四修掉，授权卡是漏网的一处。</p>
+     *
+     * <p><b>查不到的编码原样返回</b>：宁可偶尔露出一个编码，也不能静默丢掉一项权限——
+     * 那会让「变更后权限」与实际授予的不一致，比不好看严重得多。</p>
+     *
+     * <p><b>逻辑判定仍按编码</b>：{@code validateAssignPermissions}、权限白名单过滤、
+     * {@code Roles.ADMIN} 判定等一律继续用编码，本方法只服务展示。</p>
+     */
+    @Transactional(readOnly = true)
+    public List<String> permissionDisplayNames(java.util.Collection<String> permCodes) {
+        if (permCodes == null || permCodes.isEmpty()) {
+            return List.of();
+        }
+        List<String> codes = permCodes.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(code -> !code.isEmpty())
+                .distinct()
+                .toList();
+        if (codes.isEmpty()) {
+            return List.of();
+        }
+        Map<String, String> names = sysRoleMapper.selectPermissionEntitiesByCodes(codes).stream()
+                .filter(permission -> permission.getPermCode() != null)
+                .collect(Collectors.toMap(SysPermission::getPermCode,
+                        permission -> permission.getPermName() == null || permission.getPermName().isBlank()
+                                ? permission.getPermCode() : permission.getPermName(),
+                        (first, second) -> first));
+        return codes.stream().map(code -> names.getOrDefault(code, code)).toList();
     }
 
     private static List<String> normalize(List<String> codes) {
