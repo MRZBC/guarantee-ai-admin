@@ -20,10 +20,16 @@ spring:
 
   # schema.sql 全部使用 CREATE TABLE IF NOT EXISTS，可重复执行；
   # 集成测试依赖它保证新表（ai_operation_*）存在。
+  #
+  # region.sql 是行政区划字典的种子数据（INSERT IGNORE，幂等）：地区下拉与机构区划校验
+  # 都依赖这份字典，测试环境必须与生产走同一条路径，否则会出现"字典是空的"这类
+  # 与断言无关的失败。两个文件都通过 guarantee-system/pom.xml 的 testResource 从
+  # guarantee-web/src/main/resources/db 复制过来（唯一定义源在那里）。
   sql:
     init:
       mode: always
       schema-locations: classpath:db/schema.sql
+      data-locations: classpath:db/seed/region.sql
       continue-on-error: false
       encoding: UTF-8
 

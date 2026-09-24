@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.system.mapper.SysRegionMapper">
+
+    <sql id="cols">
+        code, name, short_name AS shortName, level, parent_code AS parentCode,
+        status, sort_no AS sortNo, created_at AS createdAt, updated_at AS updatedAt,
+        is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
+    </sql>
+
+    <!-- 层级/上级都可选；排序按国标 sort_no，保证下拉顺序稳定 -->
+    <select id="selectByLevel" resultType="com.guarantee.system.entity.SysRegion">
+        SELECT <include refid="cols"/>
+        FROM sys_region
+        <where>
+            <if test="level != null">
+                AND level = #{level}
+            </if>
+            <if test="parentCode != null and parentCode != ''">
+                AND parent_code = #{parentCode}
+            </if>
+        </where>
+        ORDER BY sort_no ASC, code ASC
+    </select>
+
+    <select id="selectByCode" resultType="com.guarantee.system.entity.SysRegion">
+        SELECT <include refid="cols"/> FROM sys_region WHERE code = #{code}
+    </select>
+
+    <select id="selectByNameOrShortName" resultType="com.guarantee.system.entity.SysRegion">
+        SELECT <include refid="cols"/>
+        FROM sys_region
+        WHERE name = #{name} OR short_name = #{name}
+        ORDER BY level ASC, sort_no ASC
+        LIMIT 1
+    </select>
+
+    <!--
+      业务数据里出现过的区划码（去重）。
+
+      ⚠️ 顶层 UNION 不被逻辑删除拦截器支持（它会明确抛异常而不是只过滤一个分支），
+      因此每个分支都**显式**写 is_deleted = 0：显式出现即整句跳过，注入不会发生。
+      五张表的 region_code 都是"下单/建档时的区划快照"，所以这里取并集即可。
+
+      性能：region_code 上没有索引，这条语句是 5 次扫描（当前约 15.6 万行）。
+      因此调用方必须走缓存（RegionService.usedRegionCodes()），不要放在每次请求的路径上。
+    -->
+    <select id="selectUsedRegionCodes" resultType="java.lang.String">
+        SELECT DISTINCT region_code FROM tender_order
+         WHERE is_deleted = 0 AND region_code IS NOT NULL AND region_code &lt;&gt; ''
+        UNION
+        SELECT DISTINCT region_code FROM performance_order
+         WHERE is_deleted = 0 AND region_code IS NOT NULL AND region_code &lt;&gt; ''
+        UNION
+        SELECT DISTINCT region_code FROM sys_org
+         WHERE is_deleted = 0 AND region_code IS NOT NULL AND region_code &lt;&gt; ''
+        UNION
+        SELECT DISTINCT region_code FROM enterprise
+         WHERE is_deleted = 0 AND region_code IS NOT NULL AND region_code &lt;&gt; ''
+        UNION
+        SELECT DISTINCT region_code FROM project
+         WHERE is_deleted = 0 AND region_code IS NOT NULL AND region_code &lt;&gt; ''
+    </select>
+
+</mapper>

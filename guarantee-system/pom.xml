@@ -71,12 +71,16 @@
               两份定义会漂移：一旦新表（例如 ai_operation_audit 的分区定义）只加在
               guarantee-web，本模块的集成测试就会在"表不存在"上失败，而且失败原因看起来
               与 schema 无关。用构建期复制把"重复定义"变成不可能。
+
+              seed/region.sql 同理：行政区划字典在集成测试里也要有数据（地区下拉与机构
+              区划校验都依赖它），否则测试会以"字典是空的"这种与断言无关的面孔失败。
             -->
             <testResource>
                 <directory>${project.basedir}/../guarantee-web/src/main/resources/db</directory>
                 <targetPath>db</targetPath>
                 <includes>
                     <include>schema.sql</include>
+                    <include>seed/region.sql</include>
                 </includes>
             </testResource>
         </testResources>

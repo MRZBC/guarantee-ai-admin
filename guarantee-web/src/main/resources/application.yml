@@ -32,6 +32,9 @@ spring:
     init:
       mode: always
       schema-locations: classpath:db/schema.sql
+      # 基础字典的种子数据（行政区划）。与 schema 一样**每次启动**执行，因此必须幂等：
+      # region.sql 用 INSERT IGNORE —— 既不会覆盖人工改动，也不会让已逻辑删除的地区"复活"。
+      data-locations: classpath:db/seed/region.sql
       continue-on-error: false
       encoding: UTF-8
 
