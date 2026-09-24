@@ -70,11 +70,24 @@ public class OrgController {
         return Result.ok(orgService.tree(query, currentScope()));
     }
 
-    /** 下拉框使用：仅启用机构，不分页。 */
+    /**
+     * 下拉框使用：不分页。
+     *
+     * <p><b>授权刻意宽于本页其它方法</b>：这个接口同时是订单页「机构」筛选下拉的数据源，
+     * 而"能看订单"与"能进机构配置页"是两个独立授权域（见
+     * {@link Permissions#ORG_OPTIONS_READ}）。只挂 {@code system:org:view} 会让
+     * "有订单权限、没有系统配置权限"的角色一进订单页就吃 403。
+     * 配置页自身的读路径（{@code /}、{@code /tree}、{@code /{id}}）保持不变。</p>
+     *
+     * <p><b>选项口径</b>是"能筛出数据"而不是"可用于新业务"：启用中且未删除的机构，
+     * **加上**被订单引用的机构（不论已停用、已逻辑删除）——
+     * 停用机构名下的历史订单仍在列表里，筛选下拉就必须还能选到它
+     * （见 {@code OrgService#listFilterOptions}）。</p>
+     */
     @GetMapping("/options")
-    @PreAuthorize("hasAuthority('" + Permissions.ORG_VIEW + "')")
+    @PreAuthorize(Permissions.ORG_OPTIONS_READ)
     public Result<List<OrgOptionVO>> options() {
-        return Result.ok(orgService.listOptions());
+        return Result.ok(orgService.listFilterOptions());
     }
 
     @GetMapping("/{id}")

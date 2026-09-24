@@ -61,6 +61,22 @@ public class InsuranceTypeService {
                 .toList();
     }
 
+    /**
+     * 订单筛选下拉的可选险种：启用中且未删除的险种，**或**被订单引用的险种
+     * （不论已停用、已逻辑删除）。
+     *
+     * <p>与 {@link #listAllEnabled()}（"可用于新业务"口径）刻意分开：历史订单不会因为险种
+     * 停用/被直连删除而从列表里消失，筛选下拉就必须还能选到它，否则用户看到的是
+     * "列表里全是这个险种、筛选里却没有这一项"。停用/删除状态由前端在选项文案上标注，
+     * 后端只负责"能不能筛"。</p>
+     */
+    @Transactional(readOnly = true)
+    public List<InsuranceTypeVO> listFilterOptions() {
+        return insuranceTypeMapper.selectFilterOptions().stream()
+                .map(InsuranceTypeService::toVO)
+                .toList();
+    }
+
     @Transactional(readOnly = true)
     public InsuranceTypeVO getById(Long id) {
         InsuranceType entity = insuranceTypeMapper.selectById(id);
@@ -80,6 +96,26 @@ public class InsuranceTypeService {
         return entity;
     }
 
+    /**
+     * 保额区间的「不限」哨兵值。
+     *
+     * <p>产品口径：**不填 = 不限**（不设下限 / 不设上限）。库列是
+     * {@code NOT NULL DEFAULT 0}，因此 {@code 0} 与 {@code null} 在语义上都表示"不限"，
+     * 不引入新列、不改可空性（DDL 不动）。写入时把 {@code null} 归一成 {@code 0}，
+     * 读取时前端把 {@code 0} 显示成「不限」。</p>
+     */
+    private static final BigDecimal AMOUNT_UNLIMITED = BigDecimal.ZERO;
+
+    /** 空 → 不限；显式 0 也是不限。 */
+    private static BigDecimal orUnlimited(BigDecimal amount) {
+        return amount == null ? AMOUNT_UNLIMITED : amount;
+    }
+
+    /** 是否"不限"（空或 0）。 */
+    private static boolean isUnlimited(BigDecimal amount) {
+        return amount == null || amount.signum() == 0;
+    }
+
     @Transactional
     public InsuranceTypeVO create(InsuranceTypeDto.CreateRequest request) {
         validateCreate(request);
@@ -88,8 +124,9 @@ public class InsuranceTypeService {
         entity.setTypeName(request.getTypeName());
         entity.setCategory(request.getCategory());
         entity.setBaseRate(request.getBaseRate());
-        entity.setMinAmount(request.getMinAmount());
-        entity.setMaxAmount(request.getMaxAmount());
+        // 不填 = 不限：库列 NOT NULL，归一成 0（以前直接把 null 写进去，撞约束报 500）
+        entity.setMinAmount(orUnlimited(request.getMinAmount()));
+        entity.setMaxAmount(orUnlimited(request.getMaxAmount()));
         entity.setStatus(1);
         entity.setDescription(request.getDescription());
 
@@ -108,6 +145,12 @@ public class InsuranceTypeService {
         return toVO(insuranceTypeMapper.selectById(entity.getId()));
     }
 
+    /**
+     * 修改险种。
+     *
+     * <p><b>保额区间的三种取值</b>：传具体值 → 改成该值；传 {@code 0} → 改成「不限」（清空区间）；
+     * 不传（{@code null}）→ 保持原值不动（部分更新语义，AI 工具只改一个字段时依赖它）。</p>
+     */
     @Transactional
     public InsuranceTypeVO update(Long id, InsuranceTypeDto.UpdateRequest request) {
         validateUpdate(id, request);
@@ -230,9 +273,18 @@ public class InsuranceTypeService {
         }
     }
 
+    /**
+     * 保额区间校验（口径：不填 = 不限）。
+     *
+     * <p>只有"下限与上限都给了具体值"时才比较大小；上限为空或 0 表示**不设上限**，
+     * 此时下限随便填（例如"100 万起、上不封顶"）。</p>
+     */
     private static void validateAmount(BigDecimal minAmount, BigDecimal maxAmount) {
-        if (minAmount != null && maxAmount != null && minAmount.compareTo(maxAmount) >= 0) {
-            throw BizException.badRequest("最小保额必须小于最大保额");
+        if (isUnlimited(maxAmount)) {
+            return;
+        }
+        if (minAmount != null && minAmount.compareTo(maxAmount) >= 0) {
+            throw BizException.badRequest("最小保额必须小于最大保额（最高担保金额留空表示不限）");
         }
     }
 
@@ -305,19 +357,16 @@ public class InsuranceTypeService {
     /**
      * 险种逻辑删除。
      *
-     * <p>与停用的差异（§6.2）：停用只提示被引用条数、不禁；**删除被引用即拒绝**——
-     * 删除后历史订单会指向一条"不存在"的险种。</p>
+     * <p><b>被订单引用不拦删除</b>（口径已调整，见 {@code docs/DEC-订单筛选下拉的选项口径.md}）：
+     * 删除只表示"从配置列表移除、不再用于新业务"，历史订单仍照常展示该险种名称、也仍能按它筛选
+     * （订单列表与分布图的维度 join 不带 {@code is_deleted} 条件；筛选下拉按"被订单引用"口径收录）。
+     * 恢复后回到删除前的状态，因此"删错了"是可逆的。</p>
      */
     @Transactional
     public InsuranceTypeVO delete(Long id, Long operatorUserId) {
         InsuranceType existing = insuranceTypeMapper.selectById(id);
         if (existing == null) {
             throw BizException.notFound("险种不存在: " + id);
-        }
-        List<String> blockers = deleteBlockers(existing);
-        if (!blockers.isEmpty()) {
-            throw new BizException("该险种不能删除：" + String.join("；", blockers)
-                    + "。如只需暂停业务，请改用「停用」。");
         }
         InsuranceTypeVO before = toVO(existing);
         int affected = insuranceTypeMapper.softDelete(id, operatorId(operatorUserId));
@@ -334,20 +383,12 @@ public class InsuranceTypeService {
                 before.updatedAt(), deleted.getIsDeleted(), deleted.getDeletedAt(), deleted.getDeletedBy());
     }
 
-    /** 删除阻碍项（§6.2）：被订单引用即拒绝。 */
-    public List<String> deleteBlockers(InsuranceType type) {
-        long orders = insuranceTypeMapper.countOrderByType(type.getId());
-        if (orders > 0) {
-            return List.of("已被 " + orders + " 条订单引用");
-        }
-        return List.of();
-    }
-
-    /** 删除影响面（确认卡明示）。 */
+    /** 删除影响面（确认卡明示）：引用订单数只作提示，**不拦删除**。 */
     public Map<String, Object> deleteImpact(InsuranceType type) {
         Map<String, Object> impact = new LinkedHashMap<>();
         impact.put("引用订单数", insuranceTypeMapper.countOrderByType(type.getId()));
-        impact.put("影响", "该险种默认不再出现在列表中；被订单引用时会被拒绝，可在「显示已删除」中恢复");
+        impact.put("影响", "该险种不再出现在配置列表与新建业务的候选中；历史订单仍显示其名称、仍可按它筛选，"
+                + "可在「显示已删除」中恢复");
         return impact;
     }
 

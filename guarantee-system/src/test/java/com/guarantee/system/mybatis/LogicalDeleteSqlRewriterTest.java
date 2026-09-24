@@ -145,13 +145,14 @@ class LogicalDeleteSqlRewriterTest {
     // ==================================================================
 
     @Test
-    @DisplayName("受管表恰好 18 张，且 ai_operation_secret 不在其中（LD-EX-01）")
-    void managedTablesAreExactly18AndExcludeSecret() {
-        assertThat(LogicalDeleteTables.MANAGED).hasSize(18);
+    @DisplayName("受管表恰好 19 张（含 sys_region），且 ai_operation_secret 不在其中（LD-EX-01）")
+    void managedTablesAreExactly19AndExcludeSecret() {
+        assertThat(LogicalDeleteTables.MANAGED).hasSize(19);
         assertThat(LogicalDeleteTables.isManaged("ai_operation_secret")).isFalse();
         assertThat(LogicalDeleteTables.isManaged("AI_OPERATION_SECRET")).isFalse();
         assertThat(LogicalDeleteTables.isManaged("sys_user")).isTrue();
         assertThat(LogicalDeleteTables.isManaged("SYS_USER")).as("大小写不敏感").isTrue();
+        assertThat(LogicalDeleteTables.isManaged("sys_region")).as("行政区划字典也在受管清单里").isTrue();
         // 未登记的表不注入：否则会因为列不存在直接报 SQL 错误
         assertThat(LogicalDeleteTables.isManaged("t_dt")).isFalse();
     }

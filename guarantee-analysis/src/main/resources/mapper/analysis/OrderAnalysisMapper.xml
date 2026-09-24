@@ -17,7 +17,10 @@
             AND apply_date &lt;= #{c.endDate}
         </if>
         <if test="c.regionCode != null and c.regionCode != ''">
-            AND region_code = #{c.regionCode}
+            <!-- 层级前缀匹配：选省 = 含其全部市/区县（与订单列表同一口径） -->
+            <bind name="regionPrefix"
+                  value="@com.guarantee.common.region.RegionCodePrefix@of(c.regionCode)"/>
+            AND region_code LIKE CONCAT(#{regionPrefix}, '%')
         </if>
         <if test="c.orgId != null">
             AND org_id = #{c.orgId}
@@ -114,7 +117,16 @@
         LIMIT #{limit}
     </select>
 
-    <!-- 险种分布：join insurance_type 补齐编码/名称/分类 -->
+    <!--
+      险种分布：join insurance_type 补齐编码/名称/分类。
+
+      ⚠️ join 条件**刻意不带 status / is_deleted**（原先写的是
+      AND t.status = 1 AND t.is_deleted = 0）：COUNT(*) 统计的是订单子查询 o，
+      维度表条件只影响"能不能取到名字"。带上它就会出现"占比 44% 的那一条没有名字"——
+      现场实测：insuranceTypeId=1「投标保函（标准）」因被停用而 typeName 为空，
+      而它名下有 44064 条投标订单。历史订单的名称不该因为主数据停用/删除而消失，
+      与订单列表同一口径（见 docs/DEC-订单筛选下拉的选项口径.md）。
+    -->
     <select id="selectInsuranceDistribution" resultType="com.guarantee.analysis.vo.OrderInsuranceVO">
         SELECT
             o.insurance_type_id                      AS insuranceTypeId,
@@ -127,12 +139,17 @@
         FROM (
             <include refid="orderSource"/>
         ) o
-        LEFT JOIN insurance_type t ON t.id = o.insurance_type_id AND t.status = 1 AND t.is_deleted = 0
+        LEFT JOIN insurance_type t ON t.id = o.insurance_type_id
         GROUP BY o.insurance_type_id
         ORDER BY `orderCount` DESC, o.insurance_type_id ASC
     </select>
 
-    <!-- 机构分布：join sys_org 补齐机构编码/名称，按订单量倒序取前 limit 条 -->
+    <!--
+      机构分布：join sys_org 补齐机构编码/名称，按订单量倒序取前 limit 条。
+
+      ⚠️ 同险种分布：join 条件**刻意不带 status / is_deleted**，否则被停用/删除的机构
+      在榜单里会变成一行没有名字的数据。
+    -->
     <select id="selectInstitutionDistribution" resultType="com.guarantee.analysis.vo.OrderInstitutionVO">
         SELECT
             o.org_id                                                             AS orgId,
@@ -147,7 +164,7 @@
         FROM (
             <include refid="orderSource"/>
         ) o
-        LEFT JOIN sys_org g ON g.id = o.org_id AND g.status = 1 AND g.is_deleted = 0
+        LEFT JOIN sys_org g ON g.id = o.org_id
         GROUP BY o.org_id, o.region_code
         ORDER BY `orderCount` DESC, o.org_id ASC
         LIMIT #{limit}

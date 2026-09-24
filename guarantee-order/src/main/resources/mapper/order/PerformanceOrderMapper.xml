@@ -32,13 +32,27 @@
         o.expire_date         AS expireDate
     </sql>
 
-    <!-- 关联链：项目 -> 企业，险种，承保机构。 -->
+    <!--
+      关联链：项目 -> 企业，险种，承保机构。
+
+      ⚠️ 险种（it）与机构（so）**刻意不带 is_deleted 条件**：订单是历史事实，
+      主数据被停用或被删除后，订单列表仍要显示下单时的险种名 / 机构名。否则会出现
+      "筛选下拉里能选到某个已停用/已删除机构（口径见 OrgService#listFilterOptions），
+      筛出来的那几行该列却是空的"——筛了等于没筛。
+        逻辑删除字段与 LD 体系都没有取消（DDL 不变），只是这两个维度不参与
+      "已删除即不显示"的过滤；项目（p）/企业（e）在订单页还没有筛选入口，维持原状。
+
+      ⚠️ 本片段仍保留 is_deleted 条件（p / e，配合 queryWhere 的 o）是有意的：
+      逻辑删除拦截器"整句已含 is_deleted 条件即跳过"（LogicalDeleteSqlRewriter），
+      否则它会给 it / so 自动注入 is_deleted = 0，把上面这条口径悄悄抵消掉。
+      改动本片段前请先读 docs/DEC-订单筛选下拉的选项口径.md。
+    -->
     <sql id="fromJoin">
         FROM performance_order o
         LEFT JOIN project p ON p.id = o.project_id AND p.is_deleted = 0
         LEFT JOIN enterprise e ON e.id = o.enterprise_id AND e.is_deleted = 0
-        LEFT JOIN insurance_type it ON it.id = o.insurance_type_id AND it.is_deleted = 0
-        LEFT JOIN sys_org so ON so.id = o.org_id AND so.is_deleted = 0
+        LEFT JOIN insurance_type it ON it.id = o.insurance_type_id
+        LEFT JOIN sys_org so ON so.id = o.org_id
     </sql>
 
     <!-- selectPage 与 countByQuery 共用，保证总数与列表口径永远一致。 -->
@@ -50,7 +64,10 @@
                 AND o.order_no LIKE CONCAT('%', #{q.orderNo}, '%')
             </if>
             <if test="q.regionCode != null and q.regionCode != ''">
-                AND o.region_code = #{q.regionCode}
+                <!-- 层级前缀匹配：选省 = 含其全部市/区县（规则见 RegionCodePrefix） -->
+                <bind name="regionPrefix"
+                      value="@com.guarantee.common.region.RegionCodePrefix@of(q.regionCode)"/>
+                AND o.region_code LIKE CONCAT(#{regionPrefix}, '%')
             </if>
             <if test="q.orgId != null">
                 AND o.org_id = #{q.orgId}

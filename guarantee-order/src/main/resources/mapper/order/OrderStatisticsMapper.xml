@@ -17,7 +17,10 @@
             AND apply_date &lt;= #{c.endDate}
         </if>
         <if test="c.regionCode != null and c.regionCode != ''">
-            AND region_code = #{c.regionCode}
+            <!-- 层级前缀匹配：选省 = 含其全部市/区县（与订单列表同一口径） -->
+            <bind name="regionPrefix"
+                  value="@com.guarantee.common.region.RegionCodePrefix@of(c.regionCode)"/>
+            AND region_code LIKE CONCAT(#{regionPrefix}, '%')
         </if>
         <if test="c.orgId != null">
             AND org_id = #{c.orgId}

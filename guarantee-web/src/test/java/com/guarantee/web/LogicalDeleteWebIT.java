@@ -12,6 +12,7 @@ import com.guarantee.system.scope.DataScope;
 import com.guarantee.system.scope.DataScopeService;
 import com.guarantee.system.service.OrgService;
 import com.guarantee.system.service.UserService;
+import com.guarantee.system.vo.OrgOptionVO;
 import com.guarantee.system.vo.OrgVO;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,7 +38,8 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
  * LD-T8（已删除用户登录提示与密码错误完全一致，防账号枚举）、
  * LD-T12（删除 / 恢复都落 {@code ai_operation_audit}，source=WEB，敏感字段脱敏）、
  * LD-T21（{@code ai_operation_secret} 保持**物理删除**，LD-EX-01）。
- * 另外补一条 AC-8：被订单引用的机构删除被拒绝并给出引用数。</p>
+ * 另外补一条 AC-8：**被订单引用的机构可以删除**，且删除后历史订单仍可按它筛选
+ * （口径调整见 {@code docs/DEC-订单筛选下拉的选项口径.md}）。</p>
  */
 @SpringBootTest(
         classes = GuaranteeAiAdminApplication.class,
@@ -83,6 +85,7 @@ class LogicalDeleteWebIT {
     @AfterEach
     void cleanup() {
         CurrentUser.clear();
+        jdbcTemplate.update("DELETE FROM tender_order WHERE order_no LIKE ?", P + "%");
         jdbcTemplate.update("UPDATE sys_user SET status = 1 WHERE username LIKE ?", P + "%");
         jdbcTemplate.update("DELETE FROM ai_operation_audit WHERE target_type = 'USER' AND target_id IN "
                 + "(SELECT id FROM sys_user WHERE username LIKE ?)", P + "%");
@@ -152,7 +155,7 @@ class LogicalDeleteWebIT {
         OrgDto.CreateRequest request = new OrgDto.CreateRequest();
         request.setOrgCode(P + "audit");
         request.setOrgName("LD-T12 审计夹具机构");
-        request.setRegionCode("000000");
+        request.setRegionCode("330000");   // 必须来自地区字典，见 RegionService.requireEnabledRegion
         request.setOrgLevel(2);
         request.setParentId(hq);
         OrgVO org = orgService.create(request, adminScope());
@@ -176,28 +179,39 @@ class LogicalDeleteWebIT {
     }
 
     // ==================================================================
-    // AC-8：被引用的机构删除被拒绝并给出引用数
+    // AC-8（口径已调整）：被订单引用的机构**可以删除**
     // ==================================================================
 
     @Test
-    @DisplayName("AC-8 被订单引用的机构删除被拒绝，错误信息带引用条数")
-    void referencedOrgCannotBeDeleted() {
-        Long orgId = jdbcTemplate.queryForObject(
-                "SELECT org_id FROM tender_order GROUP BY org_id LIMIT 1", Long.class);
-        long orders = jdbcTemplate.queryForObject(
-                "SELECT (SELECT COUNT(*) FROM tender_order WHERE org_id = ?) "
-                        + "+ (SELECT COUNT(*) FROM performance_order WHERE org_id = ?)",
-                Long.class, orgId, orgId);
+    @DisplayName("AC-8 被订单引用的机构可以删除；删除后历史订单仍可按它筛选（下拉仍收录）")
+    void referencedOrgCanStillBeDeleted() {
+        // 夹具机构 + 一条引用它的订单
+        Long orgId = orgService.create(orgRequest(P + "ac8", "AC-8 夹具"), adminScope()).getId();
+        String orderNo = P + "ac8order";
+        jdbcTemplate.update("""
+                INSERT INTO tender_order (order_no, project_id, enterprise_id, insurance_type_id, org_id,
+                                          region_code, region_name, guarantee_amount, premium_amount, premium_rate,
+                                          status, apply_date)
+                VALUES (?, (SELECT id FROM project LIMIT 1), (SELECT id FROM enterprise LIMIT 1),
+                        (SELECT id FROM insurance_type LIMIT 1), ?, '000000', '未指定', 100, 1, 0.01,
+                        'DRAFT', CURDATE())
+                """, orderNo, orgId);
 
-        assertThatThrownBy(() -> orgService.delete(orgId, adminScope(), adminId()))
-                .as("删除比停用更严格：被引用即拒绝（设计 §6.2）")
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining("不能删除")
-                .hasMessageContaining(String.valueOf(orders));
+        assertThat(orgService.deleteBlockers(orgService.getEntityById(orgId)))
+                .as("关联订单不再是删除阻碍项；只有'未删除的下级机构'才拦")
+                .isEmpty();
 
-        Integer isDeleted = jdbcTemplate.queryForObject(
-                "SELECT is_deleted FROM sys_org WHERE id = ?", Integer.class, orgId);
-        assertThat(isDeleted).as("被拒绝的删除不得留下任何痕迹").isZero();
+        OrgVO deleted = orgService.delete(orgId, adminScope(), adminId());
+
+        assertThat(deleted.getIsDeleted()).as("被订单引用不再是拒绝理由，删除必须成功").isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject("SELECT org_id FROM tender_order WHERE order_no = ?",
+                Long.class, orderNo))
+                .as("历史订单仍指向该机构：记录还在，只是退出配置列表")
+                .isEqualTo(orgId);
+        assertThat(orgService.listFilterOptions())
+                .extracting(OrgOptionVO::getId)
+                .as("已删除但被订单引用的机构仍必须出现在订单筛选下拉里")
+                .contains(orgId);
     }
 
     // ==================================================================
@@ -273,6 +287,18 @@ class LogicalDeleteWebIT {
     private long deptId() {
         return jdbcTemplate.queryForObject(
                 "SELECT id FROM sys_department WHERE is_deleted = 0 ORDER BY id LIMIT 1", Long.class);
+    }
+
+    /** 机构夹具：编码带 {@code __ldtw_} 前缀，{@code @AfterEach} 物理清理。 */
+    private static OrgDto.CreateRequest orgRequest(String code, String name) {
+        OrgDto.CreateRequest request = new OrgDto.CreateRequest();
+        request.setOrgCode(code);
+        request.setOrgName(name);
+        // 行政区划必须来自地区字典（省级）：机构写入按字典校验
+        request.setRegionCode("330000");
+        request.setOrgLevel(1);
+        request.setParentId(0L);
+        return request;
     }
 
     private long headquartersId() {

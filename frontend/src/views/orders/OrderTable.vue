@@ -1,9 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { pageEnterprises } from '@/api/enterprise'
 import { getPerformanceOrder, getTenderOrder, pagePerformanceOrders, pageTenderOrders } from '@/api/orders'
+import { pageProjects } from '@/api/project'
 import { listInsuranceTypeOptions, listOrgOptions } from '@/api/system'
+import RegionSelect from '@/components/RegionSelect.vue'
 import { formatAmount, formatDate, formatPercent } from '@/utils/format'
+import type { EnterpriseItem } from '@/types/enterprise'
 import type { OrderItem, OrderQuery, PerformanceOrderItem } from '@/types/order'
+import type { ProjectItem } from '@/types/project'
 import type { InsuranceTypeOption, OrgOption } from '@/types/system'
 
 const props = defineProps<{
@@ -27,6 +32,8 @@ const query = reactive<OrderQuery>({
   regionCode: '',
   orgId: null,
   insuranceTypeId: null,
+  projectId: null,
+  enterpriseId: null,
   status: '',
   startDate: '',
   endDate: ''
@@ -81,6 +88,8 @@ function buildParams(): OrderQuery {
     regionCode: query.regionCode || undefined,
     orgId: query.orgId ?? undefined,
     insuranceTypeId: query.insuranceTypeId ?? undefined,
+    projectId: query.projectId ?? undefined,
+    enterpriseId: query.enterpriseId ?? undefined,
     status: query.status || undefined,
     startDate: dateRange.value?.[0] || undefined,
     endDate: dateRange.value?.[1] || undefined
@@ -114,8 +123,17 @@ function handleReset(): void {
   query.regionCode = ''
   query.orgId = null
   query.insuranceTypeId = null
+  query.projectId = null
+  query.enterpriseId = null
   query.status = ''
   dateRange.value = null
+  // 搜索型筛选项要把"已选 + 关键词 + 候选"一起复位，否则会留下上一位项目的标签
+  selectedProject.value = null
+  selectedEnterprise.value = null
+  projectOptions.value = []
+  enterpriseOptions.value = []
+  projectKeyword.value = ''
+  enterpriseKeyword.value = ''
   query.pageNum = 1
   void loadData()
 }
@@ -156,11 +174,146 @@ async function loadOptions(): Promise<void> {
   try {
     const [orgs, insurances] = await Promise.all([listOrgOptions(), listInsuranceTypeOptions()])
     orgOptions.value = orgs ?? []
-    insuranceOptions.value = insurances ?? []
+    /*
+      险种按下单页面的**订单类别**过滤：接口返回的是两类险种的全集
+      （启用中的 + 已停用但仍有历史订单的），
+      投标订单页混进「履约保函」只会让用户选中后得到一张空列表——
+      本页真正要保证的是"下拉里出现的每一项都能筛出数据"。
+    */
+    insuranceOptions.value = (insurances ?? []).filter((item) => item.category === props.orderType)
   } catch {
     orgOptions.value = []
     insuranceOptions.value = []
   }
+}
+
+/**
+ * 下拉选项文案的状态后缀。
+ *
+ * 停用/已删除的机构与险种**仍然可选**——它们的名字就出现在列表的历史订单里，
+ * 筛不了等于"看得到、筛不到"。标注只是避免用户以为它们还能用于新业务。
+ */
+function optionLabel(name: string, item: { status?: number | null; isDeleted?: number | null }): string {
+  if (item.isDeleted === 1) return `${name}（已删除）`
+  if (item.status === 0) return `${name}（已停用）`
+  return name
+}
+
+const insuranceLabel = (item: InsuranceTypeOption): string => optionLabel(item.typeName, item)
+const orgLabel = (item: OrgOption): string => optionLabel(item.orgName, item)
+
+/* ---------------- 项目 / 企业：模糊搜索（不用全量下拉） ----------------
+ *
+ * 项目与企业各有数千条：全量下拉既渲染不动、也没法用（要在一屏里翻三千项）。
+ * 因此走 el-select 的 remote 模式——输入 **至少 2 个字** 才向后端要数据，
+ * 300ms 防抖，最多取 20 条，并在候选项里带上编码/区域，便于区分重名。
+ * 复用的是既有的分页查询接口（`/api/projects?projectName=`、`/api/enterprises?entName=`），
+ * 两者都是"登录即可访问"的业务接口，所以这个筛选不需要任何额外权限。
+ */
+
+/** 少于这个字数不查：单字关键词会把全表扫一遍且结果没有区分度 */
+const MIN_KEYWORD_LEN = 2
+const SEARCH_PAGE_SIZE = 20
+const SEARCH_DEBOUNCE_MS = 300
+
+const projectOptions = ref<ProjectItem[]>([])
+const enterpriseOptions = ref<EnterpriseItem[]>([])
+const projectSearching = ref(false)
+const enterpriseSearching = ref(false)
+const projectKeyword = ref('')
+const enterpriseKeyword = ref('')
+/** 已选项要一直留在候选里，否则远程搜索把列表换掉后，标签会退化成裸 id */
+const selectedProject = ref<ProjectItem | null>(null)
+const selectedEnterprise = ref<EnterpriseItem | null>(null)
+
+const projectNoDataText = computed(() =>
+  projectKeyword.value.trim().length < MIN_KEYWORD_LEN
+    ? `请输入至少 ${MIN_KEYWORD_LEN} 个字`
+    : '无匹配项目'
+)
+const enterpriseNoDataText = computed(() =>
+  enterpriseKeyword.value.trim().length < MIN_KEYWORD_LEN
+    ? `请输入至少 ${MIN_KEYWORD_LEN} 个字`
+    : '无匹配企业'
+)
+
+const projectLabel = (item: ProjectItem): string => `${item.projectName}（${item.projectCode}）`
+const enterpriseLabel = (item: EnterpriseItem): string => `${item.entName}（${item.entCode}）`
+
+function withSelectedProject(list: ProjectItem[]): ProjectItem[] {
+  const selected = selectedProject.value
+  if (!selected || list.some((item) => item.id === selected.id)) return list
+  return [selected, ...list]
+}
+
+function withSelectedEnterprise(list: EnterpriseItem[]): EnterpriseItem[] {
+  const selected = selectedEnterprise.value
+  if (!selected || list.some((item) => item.id === selected.id)) return list
+  return [selected, ...list]
+}
+
+let projectTimer: ReturnType<typeof setTimeout> | undefined
+let enterpriseTimer: ReturnType<typeof setTimeout> | undefined
+
+function searchProjects(keyword: string): void {
+  const kw = (keyword ?? '').trim()
+  projectKeyword.value = kw
+  clearTimeout(projectTimer)
+  if (kw.length < MIN_KEYWORD_LEN) {
+    projectOptions.value = withSelectedProject([])
+    projectSearching.value = false
+    return
+  }
+  projectSearching.value = true
+  projectTimer = setTimeout(() => {
+    void (async () => {
+      try {
+        const page = await pageProjects({ pageNum: 1, pageSize: SEARCH_PAGE_SIZE, projectName: kw })
+        projectOptions.value = withSelectedProject(page?.list ?? [])
+      } catch {
+        projectOptions.value = withSelectedProject([])
+      } finally {
+        projectSearching.value = false
+      }
+    })()
+  }, SEARCH_DEBOUNCE_MS)
+}
+
+function searchEnterprises(keyword: string): void {
+  const kw = (keyword ?? '').trim()
+  enterpriseKeyword.value = kw
+  clearTimeout(enterpriseTimer)
+  if (kw.length < MIN_KEYWORD_LEN) {
+    enterpriseOptions.value = withSelectedEnterprise([])
+    enterpriseSearching.value = false
+    return
+  }
+  enterpriseSearching.value = true
+  enterpriseTimer = setTimeout(() => {
+    void (async () => {
+      try {
+        const page = await pageEnterprises({ pageNum: 1, pageSize: SEARCH_PAGE_SIZE, entName: kw })
+        enterpriseOptions.value = withSelectedEnterprise(page?.list ?? [])
+      } catch {
+        enterpriseOptions.value = withSelectedEnterprise([])
+      } finally {
+        enterpriseSearching.value = false
+      }
+    })()
+  }, SEARCH_DEBOUNCE_MS)
+}
+
+/** 选中时把整条记录留在候选里（清空则一并清掉） */
+function handleProjectChange(id: number | null): void {
+  selectedProject.value = id == null
+    ? null
+    : projectOptions.value.find((item) => item.id === id) ?? selectedProject.value
+}
+
+function handleEnterpriseChange(id: number | null): void {
+  selectedEnterprise.value = id == null
+    ? null
+    : enterpriseOptions.value.find((item) => item.id === id) ?? selectedEnterprise.value
 }
 
 onMounted(() => {
@@ -185,8 +338,9 @@ onMounted(() => {
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
-            <el-form-item label="区域编码">
-              <el-input v-model="query.regionCode" placeholder="如 330100" clearable />
+            <el-form-item label="地区">
+              <!-- 地区下拉（行政区划字典）：替代原先手填"区域编码"，只列当前有数据的地区 -->
+              <RegionSelect v-model="query.regionCode" />
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
@@ -195,7 +349,7 @@ onMounted(() => {
                 <el-option
                   v-for="org in orgOptions"
                   :key="org.id"
-                  :label="org.orgName"
+                  :label="orgLabel(org)"
                   :value="org.id"
                 />
               </el-select>
@@ -212,7 +366,57 @@ onMounted(() => {
                 <el-option
                   v-for="item in insuranceOptions"
                   :key="item.id"
-                  :label="item.typeName"
+                  :label="insuranceLabel(item)"
+                  :value="item.id"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :md="8" :lg="6">
+            <el-form-item label="项目">
+              <!--
+                项目有数千条，不做全量下拉：远程模糊搜索，≥2 个字才查，300ms 防抖，最多 20 条。
+                候选项带项目编码，便于区分"浙江省水利工程项目0681"这类重名。
+              -->
+              <el-select
+                v-model="query.projectId"
+                placeholder="项目名称（至少 2 个字）"
+                clearable
+                filterable
+                remote
+                remote-show-suffix
+                :remote-method="searchProjects"
+                :loading="projectSearching"
+                :no-data-text="projectNoDataText"
+                @change="handleProjectChange"
+              >
+                <el-option
+                  v-for="item in projectOptions"
+                  :key="item.id"
+                  :label="projectLabel(item)"
+                  :value="item.id"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :md="8" :lg="6">
+            <el-form-item label="企业">
+              <el-select
+                v-model="query.enterpriseId"
+                placeholder="企业名称（至少 2 个字）"
+                clearable
+                filterable
+                remote
+                remote-show-suffix
+                :remote-method="searchEnterprises"
+                :loading="enterpriseSearching"
+                :no-data-text="enterpriseNoDataText"
+                @change="handleEnterpriseChange"
+              >
+                <el-option
+                  v-for="item in enterpriseOptions"
+                  :key="item.id"
+                  :label="enterpriseLabel(item)"
                   :value="item.id"
                 />
               </el-select>

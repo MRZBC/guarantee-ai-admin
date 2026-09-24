@@ -42,12 +42,14 @@ public class OrgService {
     private final SysOrgMapper sysOrgMapper;
     private final DataScopeService dataScopeService;
     private final WebAuditor webAuditor;
+    private final RegionService regionService;
 
     public OrgService(SysOrgMapper sysOrgMapper, DataScopeService dataScopeService,
-                      WebAuditor webAuditor) {
+                      WebAuditor webAuditor, RegionService regionService) {
         this.sysOrgMapper = sysOrgMapper;
         this.dataScopeService = dataScopeService;
         this.webAuditor = webAuditor;
+        this.regionService = regionService;
     }
 
     // ==================================================================
@@ -82,10 +84,18 @@ public class OrgService {
         return list;
     }
 
-    /** 下拉框使用：仅启用机构。 */
+    /**
+     * 下拉框使用：**能筛出数据**的机构全集——启用中且未删除的，或被订单引用的
+     * （不论已停用、已逻辑删除）。
+     *
+     * <p>这里刻意不叫"仅启用机构"：订单页的「机构」筛选下拉用的是这份数据，
+     * 而机构停用**不拦"名下有订单"**，只按 {@code status = 1} 过滤会让"停用机构 + 历史订单"
+     * 在筛选里彻底消失（列表里还有它的订单）。写操作/新建场景需要的"仅启用"口径走
+     * {@link #listEnabledOrgEntities()}，两者不要互相替换。</p>
+     */
     @Transactional(readOnly = true)
-    public List<OrgOptionVO> listOptions() {
-        return sysOrgMapper.selectEnabledOptions();
+    public List<OrgOptionVO> listFilterOptions() {
+        return sysOrgMapper.selectFilterOptions();
     }
 
     @Transactional(readOnly = true)
@@ -216,10 +226,14 @@ public class OrgService {
         SysOrg entity = new SysOrg();
         entity.setOrgCode(request.getOrgCode().trim());
         entity.setOrgName(request.getOrgName().trim());
-        entity.setRegionCode(request.getRegionCode().trim());
-        entity.setRegionName(request.getRegionName() != null
+        // 行政区划按字典规范化：编码统一成字典里的值，名称缺省时取字典全称
+        // （原实现是从上级机构继承名称、兜底"未指定"，现在以地区字典为准）
+        com.guarantee.system.entity.SysRegion region =
+                regionService.requireEnabledRegion(request.getRegionCode());
+        entity.setRegionCode(region.getCode());
+        entity.setRegionName(request.getRegionName() != null && !request.getRegionName().isBlank()
                 ? request.getRegionName()
-                : resolveRegionName(request.getParentId()));
+                : region.getName());
         entity.setOrgLevel(request.getOrgLevel());
         entity.setParentId(request.getParentId());
         entity.setStatus(1);
@@ -252,8 +266,18 @@ public class OrgService {
         SysOrg entity = new SysOrg();
         entity.setId(id);
         entity.setOrgName(request.getOrgName());
-        entity.setRegionCode(request.getRegionCode());
-        entity.setRegionName(request.getRegionName());
+        if (request.getRegionCode() != null && !request.getRegionCode().isBlank()) {
+            // 改了区划：编码按字典规范化；名称缺省时同步成字典全称，避免"码新名旧"
+            com.guarantee.system.entity.SysRegion region =
+                    regionService.requireEnabledRegion(request.getRegionCode());
+            entity.setRegionCode(region.getCode());
+            entity.setRegionName(request.getRegionName() != null && !request.getRegionName().isBlank()
+                    ? request.getRegionName()
+                    : region.getName());
+        } else {
+            entity.setRegionCode(null);
+            entity.setRegionName(request.getRegionName());
+        }
         entity.setParentId(request.getParentId());
         entity.setOrgLevel(request.getOrgLevel());
         entity.setSortNo(request.getSortNo());
@@ -321,6 +345,8 @@ public class OrgService {
         if (sysOrgMapper.selectEntityByCode(code) != null) {
             throw new BizException("机构编码已存在: " + code);
         }
+        // 行政区划必须来自地区字典（可传编码或名称），省/市/区县都可以
+        regionService.requireEnabledRegion(request.getRegionCode());
         Long parentId = request.getParentId();
         Integer level = request.getOrgLevel();
         if (parentId == null || parentId == 0L) {
@@ -346,6 +372,10 @@ public class OrgService {
     /** 预检修改，返回变更前实体（不落库）。 */
     public SysOrg validateUpdate(Long id, OrgDto.UpdateRequest request, DataScope scope) {
         SysOrg existing = dataScopeService.requireVisibleOrg(scope, id);
+        if (request.getRegionCode() != null && !request.getRegionCode().isBlank()) {
+            // 改了行政区划也要过字典（null/空 = 不修改，沿用既有值）
+            regionService.requireEnabledRegion(request.getRegionCode());
+        }
         if (request.getParentId() != null) {
             Long newParentId = request.getParentId();
             if (newParentId.equals(id)) {
@@ -394,14 +424,6 @@ public class OrgService {
         return impact;
     }
 
-    /** 区域名称继承上级；顶级机构缺失时回退为"未指定"。 */
-    private String resolveRegionName(Long parentId) {
-        if (parentId == null || parentId == 0L) {
-            return "未指定";
-        }
-        SysOrg parent = sysOrgMapper.selectEntityById(parentId);
-        return parent == null || parent.getRegionName() == null ? "未指定" : parent.getRegionName();
-    }
     // ==================================================================
     // 逻辑删除 / 恢复（LD-02 / LD-04）
     // ==================================================================
@@ -409,9 +431,12 @@ public class OrgService {
     /**
      * 机构逻辑删除。
      *
-     * <p>前置检查**比停用更严格**（设计 §6.2）：停用只拦"启用中的下级机构"，
-     * 删除要求机构下不存在任何未删除的下级机构与关联订单——
-     * 删除后被引用的历史会指向一条"不存在"的记录，因此被引用即拒绝。</p>
+     * <p>前置检查（设计 §6.2）：机构下**不得存在未删除的下级机构**（否则会产生悬挂层级）。</p>
+     *
+     * <p><b>被订单引用不拦删除</b>（口径已调整，见 {@code docs/DEC-订单筛选下拉的选项口径.md}）：
+     * 删除只表示"从配置列表移除、不再用于新业务"，历史订单仍照常展示该机构名称、也仍能按它筛选
+     * （订单列表与分布图的维度 join 不带 {@code is_deleted} 条件；筛选下拉按"被订单引用"口径收录）。
+     * 恢复后回到删除前的状态，因此"删错了"是可逆的。</p>
      *
      * <p>阶段一 O3：原"未删除的部门 / 用户"检查已移除（部门与用户都已不挂机构）。</p>
      */
@@ -441,10 +466,11 @@ public class OrgService {
     }
 
     /**
-     * 删除阻碍项（§6.2）：下级机构 / 关联订单必须全部为"未删除"。
+     * 删除阻碍项（§6.2）：下级机构必须全部为"未删除"。
      *
      * <p>阶段一 O3：部门与用户都已不挂机构，原"未删除的部门数 / 用户数"检查已无意义，故移除；
-     * 下级机构与订单这两道守卫必须保留——机构仍被它们引用，删除会产生悬挂引用。</p>
+     * <b>关联订单也不再是阻碍项</b>——历史订单保留机构名称与筛选能力，删除不会造成
+     * "看不见的数据"，因此只保留"下级机构"这一道层级守卫。</p>
      */
     public List<String> deleteBlockers(SysOrg org) {
         List<String> blockers = new ArrayList<>();
@@ -452,19 +478,16 @@ public class OrgService {
         if (children > 0) {
             blockers.add("存在 " + children + " 个未删除的下级机构");
         }
-        long orders = sysOrgMapper.countOrderByOrg(org.getId());
-        if (orders > 0) {
-            blockers.add("存在 " + orders + " 条关联订单");
-        }
         return blockers;
     }
 
-    /** 删除影响面（确认卡明示）。 */
+    /** 删除影响面（确认卡明示）：关联订单数只作提示，**不拦删除**。 */
     public Map<String, Object> deleteImpact(SysOrg org) {
         Map<String, Object> impact = new LinkedHashMap<>();
         impact.put("下级机构数", sysOrgMapper.countChildren(org.getId()));
         impact.put("关联订单数", sysOrgMapper.countOrderByOrg(org.getId()));
-        impact.put("影响", "该机构默认不再出现在列表中；被下级机构或订单引用时会被拒绝，可在「显示已删除」中恢复");
+        impact.put("影响", "该机构不再出现在配置列表与新建业务的候选中；历史订单仍显示其名称、仍可按它筛选，"
+                + "可在「显示已删除」中恢复");
         return impact;
     }
 

@@ -2,8 +2,11 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { changeOrgStatus, deleteOrg, listOrgTree } from '@/api/system'
+import RegionSelect from '@/components/RegionSelect.vue'
 import { useUserStore } from '@/stores/user'
+import { confirmText } from '@/utils/confirmText'
 import { formatDateTime } from '@/utils/format'
+import { regionMatches } from '@/utils/region'
 import { isEnabled, statusLabel, statusParam, STATUS_OPTIONS } from '@/utils/status'
 import type { OrgItem, OrgTreeNode, OrgTreeQuery } from '@/types/system'
 
@@ -80,7 +83,8 @@ const treeData = computed<OrgTreeNode[]>(() => {
       continue
     }
     const nameHit = keyword === '' || (row.orgName || '').toLowerCase().includes(keyword)
-    const regionHit = regionCode === '' || (row.regionCode || '') === regionCode
+    // 与后端同一口径：选省 = 含其下所有市/区县（机构现在可以填到区县）
+    const regionHit = regionMatches(row.regionCode, regionCode)
     const statusHit = !statusSelected || row.status === status
     if (nameHit && regionHit && statusHit) {
       matched.add(row.id)
@@ -230,7 +234,10 @@ async function toggleStatus(node: OrgTreeNode): Promise<void> {
   try {
     await ElMessageBox.confirm(
       next === 0
-        ? `确认停用「${node.orgName}」？存在启用中的下级机构或启用用户时系统会拒绝。`
+        ? confirmText(`确认停用机构「${node.orgName}」？`, [
+            '存在启用中的下级机构或启用用户时，系统会拒绝停用',
+            '停用不是删除，记录仍然保留，可随时重新启用'
+          ])
         : `确认启用「${node.orgName}」？`,
       `${word}机构`,
       { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' }
@@ -252,10 +259,11 @@ async function toggleStatus(node: OrgTreeNode): Promise<void> {
 async function handleDelete(node: OrgTreeNode): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      `确认删除机构「${node.orgName}」？`
-        + '① 删除后该机构不再出现在默认列表中；'
-        + '② 删除后该记录不再出现在列表中，且页面不提供恢复入口——如只是暂停业务，请改用「停用」；'
-        + '③ 若该机构已被其它数据引用，删除会被拒绝并给出引用数量。',
+      confirmText(`确认删除机构「${node.orgName}」？`, [
+        '删除后该机构不再出现在默认列表中，且页面不提供恢复入口——如只是暂停业务，请改用「停用」',
+        '删除不影响历史订单：订单里仍显示该机构名称，也仍能按它筛选',
+        '停用可随时启用，删除不可'
+      ]),
       '删除机构',
       { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }
     )
@@ -290,8 +298,9 @@ onMounted(loadData)
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
-            <el-form-item label="区域编码">
-              <el-input v-model="query.regionCode" placeholder="如 330000" clearable />
+            <el-form-item label="地区">
+              <!-- 地区下拉（行政区划字典）：替代原先手填"区域编码"；下方树仍是本地过滤 -->
+              <RegionSelect v-model="query.regionCode" />
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8" :lg="6">

@@ -9,6 +9,7 @@ import {
   updateInsuranceType
 } from '@/api/system'
 import { useUserStore } from '@/stores/user'
+import { confirmText } from '@/utils/confirmText'
 import { formatAmount, formatDateTime, formatPercent } from '@/utils/format'
 import {
   dictLabel,
@@ -62,6 +63,29 @@ function categoryLabel(row: InsuranceTypeItem): string {
 }
 
 type CategoryValue = 'TENDER' | 'PERFORMANCE' | 'QUALITY' | 'ADVANCE' | 'OTHER'
+
+/**
+ * 保额区间的口径：**不填 = 不限**。
+ *
+ * <p>库里两列是 `NOT NULL DEFAULT 0`，所以"不限"在存储层就是 0；界面上则显示「不限」、
+ * 输入框留空。三处口径必须一起改：表单显示（0 → 空）、提交（空 → 0）、列表/详情展示（0 → 不限）。</p>
+ */
+const AMOUNT_UNLIMITED_TEXT = '不限（留空即可）'
+
+/** 后端值 → 表单值：0/空 都当作"不限"，输入框显示为空 */
+function toFormAmount(value: number | null | undefined): number | null {
+  return value === null || value === undefined || Number(value) === 0 ? null : Number(value)
+}
+
+/** 表单值 → 提交值：留空统一送 0（UPDATE 时送 0 表示"清空为不限"，不送才是"保持原值"） */
+function toSubmitAmount(value: number | null): number {
+  return value === null || value === undefined || Number(value) === 0 ? 0 : Number(value)
+}
+
+/** 列表展示：0/空 → 「不限」 */
+function amountText(value: number | null | undefined): string {
+  return value === null || value === undefined || Number(value) === 0 ? '不限' : formatAmount(value)
+}
 
 const form = reactive<{
   id: number | null
@@ -120,7 +144,9 @@ const rules = computed<FormRules>(() => ({
       trigger: 'blur'
     }
   ],
-  minAmount: [{ required: true, message: '请输入最低担保金额(元)', trigger: 'blur' }],
+  // 保额区间可留空 = 不限，因此只校验非负，不做必填
+  minAmount: [{ type: 'number', min: 0, message: '最低担保金额不能为负数（留空表示不限）', trigger: 'blur' }],
+  maxAmount: [{ type: 'number', min: 0, message: '最高担保金额不能为负数（留空表示不限）', trigger: 'blur' }],
   status: [{ required: true, message: '请选择状态', trigger: 'change' }]
 }))
 
@@ -195,8 +221,8 @@ function openEdit(row: InsuranceTypeItem): void {
   form.typeName = row.typeName
   form.category = (row.category?.toUpperCase() as CategoryValue) ?? 'TENDER'
   form.baseRate = row.baseRate ?? null
-  form.minAmount = row.minAmount ?? null
-  form.maxAmount = row.maxAmount ?? null
+  form.minAmount = toFormAmount(row.minAmount)
+  form.maxAmount = toFormAmount(row.maxAmount)
   form.status = row.status ?? STATUS_ENABLED
   form.description = row.description ?? ''
   dialogVisible.value = true
@@ -207,12 +233,13 @@ async function handleSubmit(): Promise<void> {
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
 
+  // 上限为"不限"（空/0）时不比较大小：不设上限时下限随便填
   if (
     form.minAmount !== null &&
-    form.maxAmount !== null &&
+    toSubmitAmount(form.maxAmount) !== 0 &&
     Number(form.maxAmount) < Number(form.minAmount)
   ) {
-    ElMessage.error('最高担保金额不能小于最低担保金额')
+    ElMessage.error('最高担保金额不能小于最低担保金额（留空表示不限）')
     return
   }
 
@@ -223,8 +250,8 @@ async function handleSubmit(): Promise<void> {
         typeName: form.typeName,
         category: form.category,
         baseRate: form.baseRate,
-        minAmount: form.minAmount,
-        maxAmount: form.maxAmount,
+        minAmount: toSubmitAmount(form.minAmount),
+        maxAmount: toSubmitAmount(form.maxAmount),
         status: form.status,
         description: form.description
       }
@@ -236,8 +263,8 @@ async function handleSubmit(): Promise<void> {
         typeName: form.typeName,
         category: form.category,
         baseRate: form.baseRate,
-        minAmount: form.minAmount,
-        maxAmount: form.maxAmount,
+        minAmount: toSubmitAmount(form.minAmount),
+        maxAmount: toSubmitAmount(form.maxAmount),
         description: form.description
       }
       await createInsuranceType(payload)
@@ -257,8 +284,9 @@ async function handleSubmit(): Promise<void> {
 /**
  * 启停险种。
  *
- * <p>停用**不校验订单引用**：后端会正常改状态，历史订单因此不受影响（只有逻辑删除才因
- * "已被 N 条订单引用"被拒绝）。所以这里不能写"被引用会被拒绝"这类后端做不到的承诺。</p>
+ * <p>停用**不校验订单引用**：后端会正常改状态，历史订单因此不受影响。
+ * 删除同样不校验订单引用（口径已调整：删除只退出配置列表，历史订单仍显示名称、仍可筛选）。
+ * 所以这里不能写"被引用会被拒绝"这类后端做不到的承诺。</p>
  */
 async function toggleStatus(row: InsuranceTypeItem): Promise<void> {
   const next = isEnabled(row.status) ? 0 : 1
@@ -266,9 +294,10 @@ async function toggleStatus(row: InsuranceTypeItem): Promise<void> {
   try {
     await ElMessageBox.confirm(
       next === 0
-        ? `确认停用「${row.typeName}」？`
-          + '① 停用后该险种不再出现在新订单的可选列表中，历史订单不受影响；'
-          + '② 停用不是删除，记录仍然保留，可随时重新启用。'
+        ? confirmText(`确认停用「${row.typeName}」？`, [
+            '停用后该险种不再出现在新订单的可选列表中，历史订单不受影响',
+            '停用不是删除，记录仍然保留，可随时重新启用'
+          ])
         : `确认启用「${row.typeName}」？`,
       `${word}险种`,
       { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' }
@@ -290,10 +319,11 @@ async function toggleStatus(row: InsuranceTypeItem): Promise<void> {
 async function handleDelete(row: InsuranceTypeItem): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      `确认删除险种「${row.typeName}」？`
-        + '① 删除后该险种不再出现在默认列表中；'
-        + '② 删除后该记录不再出现在列表中，且页面不提供恢复入口——如只是暂停业务，请改用「停用」；'
-        + '③ 若该险种已被其它数据引用，删除会被拒绝并给出引用数量。',
+      confirmText(`确认删除险种「${row.typeName}」？`, [
+        '删除后该险种不再出现在默认列表中，且页面不提供恢复入口——如只是暂停业务，请改用「停用」',
+        '删除不影响历史订单：订单里仍显示该险种名称，也仍能按它筛选',
+        '停用可随时启用，删除不可'
+      ]),
       '删除险种',
       { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }
     )
@@ -386,10 +416,10 @@ onMounted(loadData)
           <template #default="{ row }">{{ formatPercent(row.baseRate) }}</template>
         </el-table-column>
         <el-table-column prop="minAmount" label="最低担保金额(元)" width="170" align="right">
-          <template #default="{ row }">{{ formatAmount(row.minAmount) }}</template>
+          <template #default="{ row }">{{ amountText(row.minAmount) }}</template>
         </el-table-column>
         <el-table-column prop="maxAmount" label="最高担保金额(元)" width="170" align="right">
-          <template #default="{ row }">{{ formatAmount(row.maxAmount) }}</template>
+          <template #default="{ row }">{{ amountText(row.maxAmount) }}</template>
         </el-table-column>
         <el-table-column prop="status" label="状态" width="90" align="center">
           <template #default="{ row }">
@@ -475,11 +505,13 @@ onMounted(loadData)
           />
         </el-form-item>
         <el-form-item label="最低担保金额(元)" prop="minAmount">
+          <!-- 留空 = 不限（不设下限）：提交时统一转成 0，后端 0/空同义 -->
           <el-input-number
             v-model="form.minAmount"
             :min="0"
             :precision="2"
             :step="10000"
+            :placeholder="AMOUNT_UNLIMITED_TEXT"
             controls-position="right"
             style="width: 100%"
           />
@@ -490,6 +522,7 @@ onMounted(loadData)
             :min="0"
             :precision="2"
             :step="10000"
+            :placeholder="AMOUNT_UNLIMITED_TEXT"
             controls-position="right"
             style="width: 100%"
           />

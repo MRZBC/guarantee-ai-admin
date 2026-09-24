@@ -38,6 +38,14 @@ export interface OrderQuery extends PageQuery {
   regionCode?: string
   orgId?: number | null
   insuranceTypeId?: number | null
+  /**
+   * 项目 / 企业不走下拉框，走**模糊搜索**（≥2 个字才查）。
+   *
+   * <p>项目与企业各有数千条，全量下拉不可用；这里传的是搜索选中项的 id，
+   * 名称由 `/api/projects`、`/api/enterprises` 的关键词查询提供。</p>
+   */
+  projectId?: number | null
+  enterpriseId?: number | null
   status?: string
   startDate?: string
   endDate?: string

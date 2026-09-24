@@ -45,7 +45,9 @@ public class InsuranceTypeQueryTool {
                     （「显示已删除」）时传 includeDeleted=true；该参数需要 system:insurance:delete 权限，
                     无权限时工具会返回明确的无权限说明，此时不得猜测或编造已删除数据。
                     返回值中的 isDeleted/deletedAt 用于区分"已删除"与"未删除"：
-                    对 isDeleted=true 的险种**不要**再提出删除或其他变更提案。""")
+                    对 isDeleted=true 的险种**不要**再提出删除或其他变更提案。
+                    保额区间若不设限，minAmount/maxAmount 返回「不限」（原值为 0/空），
+                    不要把它念成"保额为 0"。""")
     public InsuranceTypeQueryToolResult queryInsuranceType(
             @ToolParam(description = "险种名称或编码的模糊关键字，例如 履约保函 或 PERF_STD。不传表示不限", required = false)
             String keyword,
@@ -90,8 +92,8 @@ public class InsuranceTypeQueryTool {
                     vo.id(), vo.typeCode(), vo.typeName(), vo.category(), vo.categoryName(),
                     vo.baseRate() == null ? null : vo.baseRate().toPlainString(),
                     vo.baseRatePercent() == null ? null : vo.baseRatePercent().toPlainString(),
-                    vo.minAmount() == null ? null : vo.minAmount().toPlainString(),
-                    vo.maxAmount() == null ? null : vo.maxAmount().toPlainString(),
+                    amountText(vo.minAmount()),
+                    amountText(vo.maxAmount()),
                     vo.status(),
                     vo.status() == null ? "未知" : (vo.status() == 1 ? "启用" : "停用"),
                     vo.description(),
@@ -115,5 +117,15 @@ public class InsuranceTypeQueryTool {
             return DEFAULT_LIMIT;
         }
         return Math.min(limit, MAX_LIMIT);
+    }
+
+    /**
+     * 保额展示：{@code 空 / 0} 一律渲染成「不限」。
+     *
+     * <p>库里用 0 表示"不设限"（列是 {@code NOT NULL DEFAULT 0}）。若原样返回 0，
+     * 模型会答出"最高担保金额为 0"——与语义正好相反，因此必须在工具出参处翻译一次。</p>
+     */
+    private static String amountText(java.math.BigDecimal amount) {
+        return amount == null || amount.signum() == 0 ? "不限" : amount.toPlainString();
     }
 }

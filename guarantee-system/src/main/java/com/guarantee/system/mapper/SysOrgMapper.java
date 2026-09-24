@@ -32,8 +32,18 @@ public interface SysOrgMapper {
 
     OrgVO selectVoById(@Param("id") Long id);
 
-    /** 供下拉框使用：仅启用机构。 */
-    List<OrgOptionVO> selectEnabledOptions();
+    /**
+     * 订单筛选下拉的可选机构（"能筛出数据"口径）：启用中且未删除的机构，
+     * **或**被订单引用的机构（不论已停用、已逻辑删除）。
+     *
+     * <p>机构停用不拦"名下有订单"，因此"停用机构 + 历史订单"是常规可达状态，
+     * 只按 {@code status = 1} 过滤会让它在筛选里消失；"已删除 + 被引用"则由
+     * 删除守卫拦在门外，只可能来自数据库直连删除（{@code deleted_by = 'DB'}）。</p>
+     *
+     * <p>原先的"仅启用"下拉语句已随本口径删除：同一张表留两份近似的选项查询，
+     * 下一次改口径必然只改一处。</p>
+     */
+    List<OrgOptionVO> selectFilterOptions();
 
     /** 供其它模块使用：全部启用机构实体。 */
     List<SysOrg> selectAllEnabled();

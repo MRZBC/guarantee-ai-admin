@@ -43,8 +43,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *
  * <p>对应设计文档 §11：LD-T1（列表默认不显示已删除 + includeDeleted）、LD-T3（恢复回到删除前状态）、
  * LD-T4（父未恢复则拒绝恢复子）、LD-T5（关联表 UPSERT 循环）、LD-T6（**鉴权路径：删角色即失去权限**）、
- * LD-T7（**数据范围递归不穿过已删除机构**）、LD-T9（令牌撤销）、LD-T10（被引用即拒绝删除）、
- * LD-T11（危险动作）、LD-T13（停用前置检查口径）、LD-T15（唯一性校验忽略已删除）。</p>
+ * LD-T7（**数据范围递归不穿过已删除机构**）、LD-T9（令牌撤销）、LD-T10（**被订单引用的险种仍可删除**，
+ * 且删除后仍在订单筛选下拉里）、LD-T11（危险动作）、LD-T13（停用前置检查口径）、LD-T15（唯一性校验忽略已删除）。</p>
  *
  * <p><b>测试数据纪律</b>：夹具一律以 {@code __ldt} 前缀建行，{@code @AfterEach} 物理清理，
  * 以免影响演示数据相关的既有断言（300 用户 / 21 机构）。</p>
@@ -109,6 +109,7 @@ class LogicalDeleteServiceIntegrationTest {
     @AfterEach
     void cleanup() {
         revoker.clear();
+        jdbc.update("DELETE FROM tender_order WHERE order_no LIKE ?", P + "%");
         jdbc.update("DELETE FROM sys_user_role WHERE user_id IN (SELECT id FROM sys_user WHERE username LIKE ?)", P + "%");
         jdbc.update("DELETE FROM sys_role_permission WHERE role_id IN (SELECT id FROM sys_role WHERE role_code LIKE ?)", P + "%");
         jdbc.update("DELETE FROM sys_user WHERE username LIKE ?", P + "%");
@@ -478,26 +479,39 @@ class LogicalDeleteServiceIntegrationTest {
     }
 
     // ==================================================================
-    // LD-T10：被引用的险种禁止删除（且给出引用数）
+    // LD-T10：被订单引用的险种**仍然可以删除**（口径已调整）
     // ==================================================================
 
     @Test
-    @DisplayName("LD-T10 被订单引用的险种禁止删除，错误信息带引用条数")
-    void referencedInsuranceTypeCannotBeDeleted() {
-        Long typeId = jdbc.queryForObject("""
-                SELECT insurance_type_id FROM tender_order GROUP BY insurance_type_id LIMIT 1
-                """, Long.class);
-        long orders = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM tender_order WHERE insurance_type_id = ?", Long.class, typeId);
+    @DisplayName("LD-T10 被订单引用的险种可以删除：删除只退出配置列表，历史订单继续显示与筛选")
+    void referencedInsuranceTypeCanStillBeDeleted() {
+        // 夹具险种 + 一条引用它的订单：口径要求"被引用"不再是删除阻碍
+        jdbc.update("INSERT INTO insurance_type (type_code, type_name, category, base_rate, status)"
+                + " VALUES (?, '夹具-被引用险种', 'TENDER', 0.01, 1)", P + "t10type");
+        Long typeId = jdbc.queryForObject(
+                "SELECT id FROM insurance_type WHERE type_code = ?", Long.class, P + "t10type");
+        String orderNo = P + "t10order";
+        jdbc.update("""
+                INSERT INTO tender_order (order_no, project_id, enterprise_id, insurance_type_id, org_id,
+                                          region_code, region_name, guarantee_amount, premium_amount, premium_rate,
+                                          status, apply_date)
+                VALUES (?, (SELECT id FROM project LIMIT 1), (SELECT id FROM enterprise LIMIT 1), ?,
+                        (SELECT id FROM sys_org LIMIT 1), '000000', '未指定', 100, 1, 0.01, 'DRAFT', CURDATE())
+                """, orderNo, typeId);
 
-        assertThatThrownBy(() -> insuranceTypeService.delete(typeId, adminUserId()))
-                .isInstanceOf(BizException.class)
-                .hasMessageContaining("不能删除")
-                .hasMessageContaining(String.valueOf(orders));
+        InsuranceTypeVO deleted = insuranceTypeService.delete(typeId, adminUserId());
 
-        Integer stillActive = jdbc.queryForObject(
-                "SELECT is_deleted FROM insurance_type WHERE id = ?", Integer.class, typeId);
-        assertThat(stillActive).as("被拒绝的删除不得留下任何痕迹").isZero();
+        assertThat(deleted.isDeleted()).as("被订单引用不再是删除阻碍，删除必须成功").isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT is_deleted FROM insurance_type WHERE id = ?",
+                Integer.class, typeId)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT insurance_type_id FROM tender_order WHERE order_no = ?",
+                Long.class, orderNo))
+                .as("历史订单仍指向该险种（不是悬挂引用：记录还在，只是退出配置列表）")
+                .isEqualTo(typeId);
+        assertThat(insuranceTypeService.listFilterOptions())
+                .extracting(InsuranceTypeVO::id)
+                .as("已删除但被订单引用的险种仍必须出现在订单筛选下拉里，否则那些订单筛不出来")
+                .contains(typeId);
     }
 
     // ==================================================================
@@ -626,7 +640,8 @@ class LogicalDeleteServiceIntegrationTest {
         OrgDto.CreateRequest request = new OrgDto.CreateRequest();
         request.setOrgCode(code);
         request.setOrgName(name);
-        request.setRegionCode("000000");
+        // 行政区划必须来自地区字典（省级）：机构写入按字典校验
+        request.setRegionCode("330000");
         request.setOrgLevel(1);
         request.setParentId(0L);
         return request;

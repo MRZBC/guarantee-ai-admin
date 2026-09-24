@@ -36,7 +36,10 @@
                 AND en.ent_name LIKE CONCAT('%', #{q.entName}, '%')
             </if>
             <if test="q.regionCode != null and q.regionCode != ''">
-                AND en.region_code = #{q.regionCode}
+                <!-- 层级前缀匹配：选省 = 含其全部市/区县（规则见 RegionCodePrefix） -->
+                <bind name="regionPrefix"
+                      value="@com.guarantee.common.region.RegionCodePrefix@of(q.regionCode)"/>
+                AND en.region_code LIKE CONCAT(#{regionPrefix}, '%')
             </if>
             <if test="q.industry != null and q.industry != ''">
                 AND en.industry = #{q.industry}

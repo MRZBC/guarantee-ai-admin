@@ -39,8 +39,19 @@ public interface InsuranceTypeMapper {
 
     InsuranceType selectByCode(@Param("typeCode") String typeCode);
 
-    /** 供 AI Tool 与下拉框使用：全部启用险种。 */
+    /** 供 AI Tool 与写操作使用：全部启用险种（"可用于新业务"口径）。 */
     List<InsuranceType> selectAllEnabled();
+
+    /**
+     * 订单筛选下拉的可选险种（"能筛出数据"口径）：启用中且未删除的险种，
+     * **或**被订单引用的险种（不论已停用、已逻辑删除）。
+     *
+     * <p>与 {@link #selectAllEnabled()} 分开是刻意的：停用只表示"不能再承保新业务"，
+     * 删除则受"被订单引用即拒绝"守卫保护；但历史订单仍在列表里展示该险种，
+     * 下拉若按 {@code status = 1} 过滤，就会出现"列表里全是这个险种、筛选里却选不到"
+     * （现场：「投标保函（标准）」名下 4.4 万条投标订单，因 {@code status = 0} 而缺席下拉）。</p>
+     */
+    List<InsuranceType> selectFilterOptions();
 
     /** 写操作目标解析：按名称/编码模糊匹配（SYS-W-10）。 */
     List<InsuranceType> selectCandidates(@Param("keyword") String keyword, @Param("limit") int limit);

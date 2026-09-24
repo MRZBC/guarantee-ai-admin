@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { getEnterprise, pageEnterprises } from '@/api/enterprise'
+import RegionSelect from '@/components/RegionSelect.vue'
 import { formatAmount } from '@/utils/format'
 import { dictLabel, isEnabled, statusLabel, statusParam, STATUS_OPTIONS } from '@/utils/status'
 import type { EnterpriseDetail, EnterpriseItem, EnterpriseQuery } from '@/types/enterprise'
@@ -142,8 +143,9 @@ onMounted(loadData)
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
-            <el-form-item label="区域编码">
-              <el-input v-model="query.regionCode" placeholder="如 330100" clearable />
+            <el-form-item label="地区">
+              <!-- 地区下拉（行政区划字典）：替代原先手填"区域编码" -->
+              <RegionSelect v-model="query.regionCode" />
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8" :lg="6">

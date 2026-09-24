@@ -73,7 +73,10 @@
                 AND org_code LIKE CONCAT('%', #{q.orgCode}, '%')
             </if>
             <if test="q.regionCode != null and q.regionCode != ''">
-                AND region_code = #{q.regionCode}
+                <!-- 层级前缀匹配：选省 = 含其全部下级区划的机构（机构现在可填到区县） -->
+                <bind name="regionPrefix"
+                      value="@com.guarantee.common.region.RegionCodePrefix@of(q.regionCode)"/>
+                AND region_code LIKE CONCAT(#{regionPrefix}, '%')
             </if>
             <if test="q.orgLevel != null">
                 AND org_level = #{q.orgLevel}
@@ -142,13 +145,33 @@
         SELECT <include refid="voCols"/> FROM sys_org WHERE id = #{id}
     </select>
 
-    <select id="selectEnabledOptions" resultType="com.guarantee.system.vo.OrgOptionVO">
-        SELECT id         AS id,
-               org_name   AS orgName,
+    <!--
+      订单筛选下拉的可选机构：**"能筛出数据"的全集** =
+        ① 启用中且未删除的机构；或
+        ② 被订单引用的机构（不论已停用，还是已逻辑删除）。
+
+      为什么不能只按 status = 1：机构停用**不拦"名下有订单"**（停用只拦启用中的下级机构），
+      因此"停用机构 + 历史订单"是常规可达状态，按下拉原有口径就会出现
+      "列表里有这个机构、筛选里却选不到"。"已删除 + 被引用"则由应用层守卫挡在门外
+      （被订单引用即拒绝删除），只可能来自数据库直连删除（deleted_by = 'DB'）或历史数据，
+      ② 是对那条路径的兜底。
+
+      本语句显式含 is_deleted 条件 → 逻辑删除拦截器整句跳过，因此 ① 的 is_deleted = 0
+      必须自己写；子查询同理（拦截器只管最外层 FROM/JOIN，设计 §5.2）。
+    -->
+    <select id="selectFilterOptions" resultType="com.guarantee.system.vo.OrgOptionVO">
+        SELECT id          AS id,
+               org_name    AS orgName,
                region_code AS regionCode,
-               region_name AS regionName
+               region_name AS regionName,
+               status      AS status,
+               is_deleted  AS isDeleted
         FROM sys_org
-        WHERE status = 1
+        WHERE (status = 1 AND is_deleted = 0)
+           OR EXISTS (SELECT 1 FROM tender_order t
+                       WHERE t.org_id = sys_org.id AND t.is_deleted = 0)
+           OR EXISTS (SELECT 1 FROM performance_order p
+                       WHERE p.org_id = sys_org.id AND p.is_deleted = 0)
         ORDER BY sort_no ASC, id ASC
     </select>
 

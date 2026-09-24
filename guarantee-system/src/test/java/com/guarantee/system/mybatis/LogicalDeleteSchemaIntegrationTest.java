@@ -44,9 +44,9 @@ class LogicalDeleteSchemaIntegrationTest {
 
     private static final List<String> TABLES = List.of(
             "sys_org", "sys_department", "sys_user", "sys_role", "sys_permission",
-            "sys_user_role", "sys_role_permission", "insurance_type", "enterprise", "project",
-            "tender_order", "performance_order", "ai_conversation", "ai_message", "ai_tool_call",
-            "ai_audit_log", "ai_operation_proposal", "ai_operation_audit");
+            "sys_user_role", "sys_role_permission", "sys_region", "insurance_type", "enterprise",
+            "project", "tender_order", "performance_order", "ai_conversation", "ai_message",
+            "ai_tool_call", "ai_audit_log", "ai_operation_proposal", "ai_operation_audit");
 
     private static final List<String[]> UNIQUE_KEYS = List.of(
             new String[]{"sys_user", "uk_sys_user_username", "username"},
@@ -91,7 +91,7 @@ class LogicalDeleteSchemaIntegrationTest {
     // ==================================================================
 
     @Test
-    @DisplayName("LD-T18 18 张表的 deleted_at 必须是 DATETIME(6) 且 DEFAULT NULL")
+    @DisplayName("LD-T18 19 张表的 deleted_at 必须是 DATETIME(6) 且 DEFAULT NULL")
     void deletedAtMustBeMicrosecondAndNullable() {
         for (String table : TABLES) {
             Map<String, Object> col = jdbc.queryForMap("""
@@ -109,7 +109,7 @@ class LogicalDeleteSchemaIntegrationTest {
     }
 
     @Test
-    @DisplayName("LD-T18 18 张表的 is_deleted / deleted_by 定义正确，且都有 is_deleted 索引")
+    @DisplayName("LD-T18 19 张表的 is_deleted / deleted_by 定义正确，且都有 is_deleted 索引")
     void deletedFlagAndOperatorColumns() {
         for (String table : TABLES) {
             Map<String, Object> flag = jdbc.queryForMap("""
@@ -136,13 +136,13 @@ class LogicalDeleteSchemaIntegrationTest {
                 SELECT COUNT(DISTINCT TABLE_NAME) FROM information_schema.COLUMNS
                 WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'is_deleted'
                 """, Integer.class);
-        assertThat(count).as("受管表必须恰好 18 张（新增表需同步 LogicalDeleteTables）").isEqualTo(18);
+        assertThat(count).as("受管表必须恰好 19 张（新增表需同步 LogicalDeleteTables）").isEqualTo(19);
 
         Integer idx = jdbc.queryForObject("""
                 SELECT COUNT(DISTINCT TABLE_NAME) FROM information_schema.STATISTICS
                 WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME LIKE 'idx\\_%\\_deleted'
                 """, Integer.class);
-        assertThat(idx).as("每张受管表都要有 is_deleted 索引").isEqualTo(18);
+        assertThat(idx).as("每张受管表都要有 is_deleted 索引").isEqualTo(19);
     }
 
     // ==================================================================

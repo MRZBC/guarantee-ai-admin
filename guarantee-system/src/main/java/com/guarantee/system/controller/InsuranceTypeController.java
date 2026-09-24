@@ -47,11 +47,24 @@ public class InsuranceTypeController {
         return Result.ok(insuranceTypeService.page(query));
     }
 
-    /** 下拉框使用：不分页。 */
+    /**
+     * 下拉框使用：不分页。
+     *
+     * <p><b>授权刻意宽于本页其它方法</b>：这个接口同时是订单页「险种」筛选下拉的数据源，
+     * 而"能看订单"与"能进险种配置页"是两个独立授权域（见
+     * {@link Permissions#INSURANCE_OPTIONS_READ}）。只挂 {@code system:insurance:view}
+     * 会让"有订单权限、没有系统配置权限"的角色一进订单页就吃 403。
+     * 配置页自身的读路径（{@code /}、{@code /{id}}）保持不变。</p>
+     *
+     * <p><b>选项口径</b>是"可作为筛选条件"而不是"可用于新业务"：启用中的险种 **加上**
+     * 已停用但仍有历史订单引用的险种（见 {@code InsuranceTypeService#listFilterOptions}）。
+     * 订单页的「险种」筛选若按 {@code status = 1} 过滤，会让名下有 4.4 万条投标订单的
+     * 「投标保函（标准）」在列表里有数据、在筛选里却选不到。</p>
+     */
     @GetMapping("/options")
-    @PreAuthorize("hasAuthority('" + Permissions.INSURANCE_VIEW + "')")
+    @PreAuthorize(Permissions.INSURANCE_OPTIONS_READ)
     public Result<List<InsuranceTypeVO>> options() {
-        return Result.ok(insuranceTypeService.listAllEnabled());
+        return Result.ok(insuranceTypeService.listFilterOptions());
     }
 
     @GetMapping("/{id}")

@@ -65,6 +65,34 @@
         SELECT <include refid="cols"/> FROM insurance_type WHERE status = 1 ORDER BY id ASC
     </select>
 
+    <!--
+      订单筛选下拉的可选险种：**"能筛出数据"的全集** =
+        ① 启用中且未删除的险种；或
+        ② 被订单引用的险种（不论已停用，还是已逻辑删除）。
+
+      ② 是这条口径的重点：险种一旦被历史订单引用，它的名字就出现在订单列表里，
+      筛选下拉就必须还能选到它——否则用户看到的是"列表里有这个险种、筛选里却没有"，
+      或者"选了履约保函却是空列表"（现场两个毛病都出现过）。
+
+      两个前提必须写清楚：
+      · 应用层对"被订单引用的险种"是**禁止删除**的（险种删除前置检查 / LD-T10），
+        因此"已删除 + 被引用"只可能来自**数据库直连删除**（deleted_by = 'DB'）、
+        迁移脚本或历史数据。② 是对这条路径的兜底，不是常规路径。
+      · 本语句显式含 is_deleted 条件 → 逻辑删除拦截器整句跳过（避免重复注入），
+        所以 ① 的 is_deleted = 0 必须自己写；子查询同理（拦截器只管最外层 FROM/JOIN，
+        设计 §5.2，与 countOrderByType 同一写法），漏写会把已删订单算作"仍在引用"。
+    -->
+    <select id="selectFilterOptions" resultType="com.guarantee.system.entity.InsuranceType">
+        SELECT <include refid="cols"/>
+        FROM insurance_type
+        WHERE (status = 1 AND is_deleted = 0)
+           OR EXISTS (SELECT 1 FROM tender_order t
+                       WHERE t.insurance_type_id = insurance_type.id AND t.is_deleted = 0)
+           OR EXISTS (SELECT 1 FROM performance_order p
+                       WHERE p.insurance_type_id = insurance_type.id AND p.is_deleted = 0)
+        ORDER BY id ASC
+    </select>
+
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO insurance_type
             (type_code, type_name, category, base_rate, min_amount, max_amount, status, description)
