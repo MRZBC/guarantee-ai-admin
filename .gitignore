@@ -113,3 +113,40 @@ replay_pid*
 .verify8/
 tmp/
 temp/
+
+# ---------------------------------------------------------------------
+# Portable Knowledge OS —— 本机身份/接入配置，**不入库**
+#
+# 这是一个为「分享出去」准备的项目仓库：别人拿到仓库后应当只看到
+# Java 后端 + Vue 前端本体，clone 下来 `docker compose up -d mysql redis`
+# 再 `mvn -pl guarantee-web -am spring-boot:run` 就能完整跑起来。
+#
+# 下面这些是**作者本机**的 AI Agent 接入配置与私有绑定，对启动项目零贡献，
+# 因此从版本库中排除（磁盘上的文件保留，本机照常使用）：
+#
+#   .agent/      项目↔Vault 身份配置（含本机私有的 vault.local.yaml）
+#   .agents/     Agent Skill（canonical，含 SKILL.md 与 references）
+#   .mcp.json    项目级 MCP 配置（本机路径绑定）
+#   adapters/    各 Runtime（dsh / OpenCode / Codex CLI / Claude Code）接入说明
+#
+# 注意：本段**不排除** `knowledge/` 与 `tools/knowledge-os-mcp/`。
+# 项目 STATE 把它们当仓库内的正式资产，而不是本机辅助：
+#   - Handoff Notes 第 3 条：知识库的源在仓库 `knowledge/`，改完必须重跑
+#     `node tools/knowledge-os-mcp/scripts/apply-knowledge.mjs`；
+#   - Completed 列表把 MCP Server 与 `apply-knowledge.mjs` 记为已交付物。
+# 排除它们会让这两条指令在别人的 clone 里无法执行（源文件与脚本都不存在），
+# 属自相矛盾，故按 STATE 的口径保留在版本库中。
+# 这两个子树内部的 `node_modules/`、`dist/`、`target/` 仍由上方通用规则排除。
+#
+# 若你的团队确实想共用这套「跨 Agent 项目上下文」能力，把本段整体删掉即可 ——
+# 各部分的用途与接入方式都有独立 README。
+# ---------------------------------------------------------------------
+.agent/
+.agents/
+.mcp.json
+adapters/
+
+# Runtime 兼容层（`.claude/skills/knowledge-continuity` 是指向 .agents/skills
+# 的目录联接）。git 不会把 Windows junction 当符号链接，而是穿透进去读真实文件，
+# 于是会把同一份 SKILL.md 提交成第二份副本 —— 必须排除。
+.claude/

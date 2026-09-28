@@ -1,0 +1,43 @@
+[
+  {
+    "name": "knowledge_create_decision",
+    "arguments": {
+      "title": "Knowledge OS 采用标准 MCP over stdio",
+      "decision": "把跨 Agent 的项目知识与状态访问层实现为一个**独立的标准 MCP Server**（tools/knowledge-os-mcp），通过 stdio 传输；同时把工作方法写成一份 canonical Agent Skill（.agents/skills/knowledge-continuity）。三者职责严格分离：Skill = 怎么用，MCP = 怎么安全访问，Vault Markdown = 真正的持久化数据，Agent Runtime = 可替换的消费者。",
+      "why": "需要同时服务 Codex、OpenCode、Claude Code、DeepSeek Harness 以及将来未知的 Runtime。若为每个 Runtime 写插件，就会出现 N 份会逐渐分叉的核心逻辑，而真正的知识管理逻辑只有一份。把能力层做成标准 MCP 之后，Runtime 只负责「怎么启动这个 Server」，替换 Runtime 不影响知识库，也不影响 Skill。同时，把访问层独立出来才能对「写进错误的 Vault」这件事做统一、不可绕过的拦截。",
+      "context": "该代码仓库（guarantee-ai-admin）与它的 Obsidian Vault 是两个物理独立的目录。在本次工作之前，项目没有 .agent/ 目录、没有任何 agent 配置文件（无 AGENTS.md / .mcp.json / .agents / .claude / .codex / .opencode / .dsh），而 Vault 已经存在并已有自己的一套中文协议与结构（AGENTS.md、00_System/SCHEMA.md、模板扩展名 .md.template、决策页命名「决策 - <标题>.md」）。因此新引入的机制必须能在不改动既有 Vault 约定的前提下工作。",
+      "alternatives": [
+        "为每个 Runtime 写原生插件 —— 会导致多份分叉的核心逻辑，且新增 Runtime 的成本是「重写一遍」；规范明确禁止把核心逻辑放进 Runtime 专属目录",
+        "只做 Skill 不做 MCP —— Skill 没有文件系统能力，无法实现路径守卫、三层身份校验、原子写与并发保护；而「静默写进错误 Vault」是不可接受的失败模式",
+        "做成一个共享 npm 库由 Agent 直接调用 —— 绑定了 Node 运行时与调用方实现，失去了标准协议带来的可移植性，也无法被非 Node 的 Runtime 使用",
+        "做成 HTTP 服务 —— 对单机、单用户、单 Vault 的场景引入了不必要的守护进程、端口与鉴权负担；stdio 的生命周期天然跟随 Agent 会话"
+      ],
+      "constraints": [
+        "不得依赖 Claude SDK / Codex SDK / OpenCode SDK / DeepSeek Harness SDK —— 只实现标准 MCP",
+        "Node.js >= 20（本机与开发环境为 Node 24）",
+        "不依赖 Obsidian 专有 API 或第三方插件（Dataview / Templater / Tasks）",
+        "核心数据必须是普通 Markdown / YAML，且事实真源只能是 Vault 里的文件",
+        "第一版不引入 embedding / 向量数据库 / RAG / Elasticsearch",
+        "必须遵守既有 Vault 的约定：不迁移、不重命名、不批量重写既有笔记",
+        "Vault 路径只能来自 .agent/vault.local.yaml，禁止扫描磁盘寻找 Vault"
+      ],
+      "consequences": [
+        "换 Agent 不影响知识库；核心逻辑只有一份；新增 Runtime 的接入成本接近零（只写一份「怎么启动」的适配说明）",
+        "第一次接入每个 Runtime 仍需要手工配置其 MCP 启动方式（dsh 的 profile patch、OpenCode 的 opencode.json、Codex 的 config.toml、Claude Code 的 .mcp.json）",
+        "stdio 场景下无法做长任务的服务端主动推送，也没有跨进程共享的会话状态",
+        "调试比 HTTP 略麻烦（需要手写 JSON-RPC 帧）；本次因此专门写了 scripts/kos.mjs 与一个最小 stdio 客户端来支撑测试与人工验证",
+        "把安全边界集中到 MCP 之后，「写错 Vault」只可能因为配置本身错误，而配置错误会被三层身份校验拦下"
+      ],
+      "revisitConditions": [
+        "当某个需要支持的目标 Runtime 不支持 stdio 传输的 MCP 时（届时应新增 streamable-http 传输，而不是放弃标准 MCP）",
+        "当需要多个 Agent 跨机器共享同一个 Vault，且出现频繁写冲突时",
+        "当 Vault 规模增长到本地文件系统检索明显变慢（例如超过数千个 Markdown 文件）时，再评估 SQLite FTS5 或混合检索",
+        "当出现「必须由服务端主动推送状态变化」的真实需求时"
+      ],
+      "related": [
+        "知识 OS 的 Vault 结构",
+        "guarantee-ai-admin"
+      ]
+    }
+  }
+]

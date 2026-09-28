@@ -1,0 +1,37 @@
+[
+  {
+    "name": "knowledge_append_log",
+    "arguments": {
+      "type": "MIGRATION",
+      "summary": "建立 Portable Knowledge OS，并把本 Vault 与 guarantee-ai-admin 代码仓库正式绑定。本次只**新增**基础设施，未删除、未迁移、未重命名、未批量重写任何既有笔记。",
+      "completed": [
+        "三层身份：新建 VAULT_ID.md；代码侧新建 .agent/project.yaml 与 .agent/vault.local.yaml(.example)；三层 id 全部校验一致",
+        "项目工作区：knowledge_bootstrap 创建 04_Work/Active/guarantee-ai-admin/{PROJECT.md,STATE.md,TASKS.md,decisions/,artifacts/}",
+        "全局状态：STATE.md 的 active_project 由空填为 guarantee-ai-admin，active_phase 由 idle 改为 implementation",
+        "决策：新建 [[决策 - Knowledge OS 采用标准 MCP over stdio]]",
+        "长期知识：新建 [[Knowledge OS 的路径安全与身份校验]]",
+        "代码侧：tools/knowledge-os-mcp（Node/TS/ESM/stdio，10 个语义化工具）+ .agents/skills/knowledge-continuity（canonical Skill）",
+        "Runtime 适配：adapters/{deepseek-harness,opencode,codex,claude}；.mcp.json；.claude/skills junction"
+      ],
+      "verification": [
+        "knowledge_health → status: healthy, identityStatus: ok, canWrite: true（对真实 Vault 实跑）",
+        "三层身份校验：project.id == vault.id == VAULT_ID.md.project_id == \"guarantee-ai-admin\"",
+        "MCP Server：tsc 构建通过；124 个自动化测试全绿（8 个测试文件），含真实 stdio JSON-RPC 握手",
+        "集成测试断言：代码仓库内除 .agent/ 外不写入任何 Vault 内容",
+        "身份不一致/缺失时所有写工具（含 knowledge_bootstrap）被拒绝 —— 已实测",
+        "未验证：各 Runtime（dsh/OpenCode/Codex/Claude Code）UI 中工具是否真的出现；Obsidian 应用内渲染效果"
+      ],
+      "decisions": [
+        "[[决策 - Knowledge OS 采用标准 MCP over stdio]]"
+      ],
+      "stateChange": {
+        "before": "Vault 存在且结构完整，但身份未绑定、未跟踪任何项目（active_project 为空，只有一份待审的迁移提案）；代码仓库侧完全没有 .agent/ 与任何 agent 配置",
+        "after": "Vault 与 guarantee-ai-admin 三层身份绑定完成，active_project 已填写，项目工作区与状态层就位；代码侧具备标准 MCP Server + canonical Skill + 四个 Runtime 适配入口；knowledge_health 为 healthy"
+      },
+      "blockers": [
+        "四个 Runtime 的真实接入未验证（本环境未安装 OpenCode / Codex CLI / Claude Code，且未改动 dsh 的用户级 profile 配置）"
+      ],
+      "nextAction": "按 04_Work/Active/guarantee-ai-admin/STATE.md 的「Next Action 下一步行动」执行：给 dsh profile 加上 mcp-knowledge-os 记录并验证 mcp__knowledge-os__knowledge_health 出现。"
+    }
+  }
+]

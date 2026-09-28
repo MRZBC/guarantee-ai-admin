@@ -1,0 +1,41 @@
+[
+  {
+    "name": "knowledge_update_state",
+    "arguments": {
+      "scope": "global",
+      "activeProject": "guarantee-ai-admin",
+      "phase": "implementation",
+      "currentObjective": "把 guarantee-ai-admin 的项目上下文从聊天历史中抽离出来，形成独立、持久化、跨 Agent 的 Knowledge OS；任何 Agent 在任意新会话中都能恢复上下文并继续工作。",
+      "currentMilestone": "Knowledge OS 基础设施已建立，等待各 Runtime 接入验证",
+      "completed": [
+        "注册第一个真实项目：guarantee-ai-admin（本文件 active_project 已填写）",
+        "建立本 Vault 的身份层：VAULT_ID.md，并与代码仓库的 .agent/project.yaml / vault.local.yaml 三层校验一致",
+        "建立项目工作区 04_Work/Active/guarantee-ai-admin/（PROJECT.md / STATE.md / TASKS.md / decisions / artifacts）",
+        "代码侧实现标准 MCP Server 与 canonical Skill（详见 [[决策 - Knowledge OS 采用标准 MCP over stdio]]）"
+      ],
+      "inProgress": [
+        "各 Runtime（DeepSeek Harness / OpenCode / Codex CLI / Claude Code）的 MCP 接入验证"
+      ],
+      "nextAction": "打开 04_Work/Active/guarantee-ai-admin/STATE.md 的「Next Action 下一步行动」一节，执行其中那一条：把 dsh profile 的 MCP 记录加上并验证 mcp__knowledge-os__knowledge_health 出现。完成后回到本文件更新 active_phase，并追加 LOG。",
+      "blockers": [
+        "四个 Runtime 的真实接入均未验证：本环境未安装 OpenCode / Codex CLI / Claude Code，且未改动 dsh 的用户级 profile 配置"
+      ],
+      "verification": {
+        "verified": [
+          "本 Vault 的身份文件 VAULT_ID.md 已建立，三层 ID 校验通过（knowledge_health → identityStatus: ok, canWrite: true）",
+          "项目工作区与 TASKS.md 已由 knowledge_bootstrap 创建",
+          "PROJECT.md 与项目 STATE.md 已由 knowledge_update_state 写入",
+          "MCP Server：tsc 构建通过，124 个自动化测试全绿"
+        ],
+        "notVerified": [
+          "Obsidian 应用内的渲染效果",
+          "各 Runtime 中 MCP 工具是否真的出现"
+        ]
+      },
+      "handoffNotes": "本 Vault 在本次工作之前已经存在并已有自己的协议与惯例（见 AGENTS.md / 00_System/SCHEMA.md），本次只**新增**基础设施，没有迁移、重命名或重写任何既有笔记。特别是：模板扩展名保持 .md.template、决策页文件名保持「决策 - <标题>.md」、LOG.md 只追加。下一步的权威指针在项目自己的 STATE.md。",
+      "importantDecisions": [
+        "[[决策 - Knowledge OS 采用标准 MCP over stdio]]"
+      ]
+    }
+  }
+]

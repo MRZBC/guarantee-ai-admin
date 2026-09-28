@@ -1,0 +1,14 @@
+[
+  {
+    "name": "knowledge_upsert_wiki",
+    "arguments": {
+      "type": "technology",
+      "title": "Knowledge OS 的路径安全与身份校验",
+      "status": "active",
+      "related": [
+        "决策 - Knowledge OS 采用标准 MCP over stdio"
+      ],
+      "content": "knowledge-os MCP Server 对「写进错误的 Vault」这件事有两道独立防线。\n\n## 三层身份校验\n\n`project.id == vault.id == VAULT_ID.md.project_id`。前两层都来自本机配置（`.agent/project.yaml`、`.agent/vault.local.yaml`），第三层在 Vault 内部。\n\n只有前两层时，如果复制仓库或改错配置，两层可能「看起来自洽」却指向错误的 Vault。`VAULT_ID.md` 是唯一的「对方自报身份」，构成真正的双向确认。\n\n校验不通过时：读操作放行（Agent 需要诊断），一切写操作返回 `identity_mismatch`。\n\n**唯一的例外**是初始化：Vault 里还没有 `VAULT_ID.md` 且配置两层 id 一致时，`knowledge_bootstrap` 允许**只创建该身份文件**。否则会出现「没有身份文件就不许写、不许写就永远建不出身份文件」的死锁。这个例外被刻意限制到单个文件、且要求配置两层先一致。\n\n## 路径守卫\n\n所有 Vault 内访问都经过 `pathguard.ts`，纯字符串检查 + 符号链接 realpath 检查两层：\n\n- 拒绝：`..`、POSIX 绝对路径、Windows 盘符（含 `C:relative`）、UNC、`\\\\?\\` 设备命名空间、Windows 保留设备名（`CON`/`NUL`/`COM1`…）、NTFS 备用数据流（`file.md:ads`）、以点或空格结尾的路径段、`~`、控制字符\n- 反斜杠一律当作分隔符 —— 只检查 `/` 的实现会被 `a\\..\\..\\b` 绕过\n- 符号链接检查用「最近的存在祖先」做 realpath：目标文件可能还不存在（新建笔记），但某个祖先目录可能是指向 Vault 外的链接\n- Windows / macOS 大小写不敏感，包含性判断统一小写比较，否则 `VAULT/x` 能绕过 `vault/` 前缀检查\n\n## 写操作只有一条路径\n\n`resolve project → resolve vault → validate identity → resolve semantic target → validate target path → write`。任何一步失败都禁止写入。工具层不提供 `write_file(path, content)`，模型只能表达语义意图（例如 `nextAction`），路径由 Server 决定。\n\n## 并发与原子性\n\n- 写重要文件用「同目录临时文件 → fsync → 原子 rename」，绝不半截覆盖\n- `knowledge_update_state` 支持 `expectedHash` 乐观锁：磁盘已被其他 Agent 改动则返回 `conflict`，拒绝覆盖\n- `LOG.md` 用 append-only，天然不冲突\n- 读写时探测并保持原换行风格（LF / CRLF），不把用户的 CRLF 笔记整体改成 LF\n\n## 已知代价\n\nWindows 上 rename 覆盖已存在文件可能间歇性遇到 `EPERM`/`EBUSY`（杀毒、索引器持句柄）。实现选择**短暂退避重试**，而不是「先删目标再写」—— 后者会破坏原子性承诺。"
+    }
+  }
+]
