@@ -116,6 +116,44 @@ export interface OrgTreeQuery {
   status?: number | null
 }
 
+/**
+ * 机构修改入参（对应后端 `OrgDto.UpdateRequest`）。
+ *
+ * <p><b>为什么字段几乎都是可选的</b>：后端把 `null` 解释为"不修改该字段"
+ * （`updateById` 的 `<if test="xxx != null">` 逐列跳过，`validateUpdate` 同样只在
+ * 非空时校验）。因此这里只要求调用方"提交要改的字段"，不必回传全量对象。</p>
+ *
+ * <p><b>但 `orgCode` 刻意不在其中</b>：机构编码创建后不可修改（后端
+ * `updateById` 不接受该列），传了也会被忽略——不放进类型，让"改编码"在编译期就不可表达。</p>
+ *
+ * <p><b>页面始终回传 `parentId` / `orgLevel` / `regionCode` 的当前值</b>，即使没有改动：
+ * 三者的空值语义都会踩坑。`regionCode` 置空会落进后端的 `else` 分支写掉 `regionName`
+ * （"码没变名变了"）；`parentId` / `orgLevel` 不传则旧值原样保留，改了上级却留着旧层级
+ * 会造出不一致的树——而后者后端**只在新增时校验**。</p>
+ */
+export interface OrgUpdateParams {
+  orgName?: string
+  regionCode?: string
+  regionName?: string
+  /** 上级机构；0 表示顶级（仅总部）。null/不传 = 不修改 */
+  parentId?: number
+  /** 层级 1总部 2省级 3市级；必须与上级保持一致（父层级 + 1） */
+  orgLevel?: number
+  sortNo?: number
+}
+
+/** 机构新增入参（对应后端 `OrgDto.CreateRequest`）。 */
+export interface OrgCreateParams {
+  orgCode: string
+  orgName: string
+  regionCode: string
+  regionName?: string
+  orgLevel: number
+  /** 上级机构；0 表示顶级（仅总部） */
+  parentId: number
+  sortNo?: number
+}
+
 export interface OrgOption {
   id: number
   orgName: string

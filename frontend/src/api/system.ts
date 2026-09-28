@@ -10,10 +10,12 @@ import type {
   InsuranceTypeOption,
   InsuranceTypeQuery,
   InsuranceTypeUpdateParams,
+  OrgCreateParams,
   OrgItem,
   OrgOption,
   OrgQuery,
   OrgTreeQuery,
+  OrgUpdateParams,
   PermissionItem,
   RegionOption,
   RoleAssignPermissionsParams,
@@ -107,11 +109,11 @@ export function listOrgOptions() {
 }
 
 /** 机构写操作（权限：system:org:create / :update / :disable） */
-export function createOrg(data: Record<string, unknown>) {
+export function createOrg(data: OrgCreateParams) {
   return http.post<OrgItem>('/system/orgs', data)
 }
 
-export function updateOrg(id: number, data: Record<string, unknown>) {
+export function updateOrg(id: number, data: OrgUpdateParams) {
   return http.put<OrgItem>(`/system/orgs/${id}`, data)
 }
 

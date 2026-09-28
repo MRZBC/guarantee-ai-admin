@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import {
   changeDepartmentStatus,
@@ -12,6 +12,13 @@ import { useUserStore } from '@/stores/user'
 import { confirmText } from '@/utils/confirmText'
 import { formatDateTime } from '@/utils/format'
 import { isEnabled, statusLabel, statusParam, STATUS_OPTIONS } from '@/utils/status'
+import {
+  collectExpandableKeys,
+  pruneKeysToTree,
+  readOpenKeysFromDom,
+  setRowExpansion,
+  type ExpandableTable
+} from '@/utils/treeExpand'
 import type {
   DepartmentItem,
   DepartmentTreeNode,
@@ -47,7 +54,7 @@ const userStore = useUserStore()
 const loading = ref(false)
 /** 全量部门（扁平，来自 /tree 接口）——**不能**用分页接口，否则树会静默缺节点 */
 const flatRows = ref<DepartmentItem[]>([])
-const expandedKeys = ref<string[]>([])
+const expandedKeys = ref<Set<string>>(new Set())
 const filterHint = ref('')
 
 const query = reactive<DepartmentTreeQuery>({
@@ -178,32 +185,78 @@ const treeData = computed<DepartmentNode[]>(() => {
 
 const totalDepartments = computed(() => flatRows.value.length)
 
-/** 默认展开所有有子节点的部门（本项目数据只有两级，等价于全展开） */
-function initExpanded(): void {
-  const keys: string[] = []
-  const walk = (nodes: DepartmentNode[]): void => {
-    for (const node of nodes) {
-      if (node.children.length > 0) keys.push(node.key)
-      walk(node.children)
+/** 树形表格的行键取用器（部门用 `dept-<id>` 作为 row-key，避免与其它实体 id 语义混淆）。 */
+const deptKeyOf = (node: DepartmentNode): string => node.key
+const deptChildrenOf = (node: DepartmentNode): DepartmentNode[] => node.children
+
+const tableRef = ref<ExpandableTable | null>(null)
+
+/** 是否已完成首次加载（用于区分"首次默认展开"与"用户手动收起后的刷新"）。 */
+const loadedOnce = ref(false)
+
+/**
+ * 展开态：把"期望值"落到表格上。
+ *
+ * <p>与机构配置页共用同一套口径：以 DOM 回读的展开态为准（见
+ * `utils/treeExpand.ts` 的 `readOpenKeysFromDom`）。两阶段下发——先按实际展开态关闭，
+ * 再按期望值打开，避免 `toggleRowExpansion` 的切换语义被当前态抵消。</p>
+ */
+function reconcileExpansion(target: ReadonlySet<string>): void {
+  const table = tableRef.value
+  if (table) {
+    const openNow = readOpenKeysFromDom(treeData.value, deptKeyOf, deptChildrenOf)
+    if (openNow.size > 0) {
+      setRowExpansion(table, openNow, () => false, treeData.value, deptKeyOf, deptChildrenOf)
+    }
+    if (target.size > 0) {
+      setRowExpansion(table, new Set<string>(), (key) => target.has(key), treeData.value, deptKeyOf, deptChildrenOf)
     }
   }
-  walk(treeData.value)
-  expandedKeys.value = keys
+  expandedKeys.value = readOpenKeysFromDom(treeData.value, deptKeyOf, deptChildrenOf)
 }
 
-function handleExpandChange(row: DepartmentNode, expanded: DepartmentNode[] | boolean): void {
-  // Element Plus 对树形表格的 expand-change 会传 (row, expandedRows)，这里以传入行为准做增量维护
-  const isExpanded = Array.isArray(expanded) ? expanded.some((r) => r.key === row.key) : expanded
-  if (isExpanded) {
-    if (!expandedKeys.value.includes(row.key)) expandedKeys.value = [...expandedKeys.value, row.key]
-  } else {
-    expandedKeys.value = expandedKeys.value.filter((key) => key !== row.key)
-  }
+/** "全部展开/收起"：以当前 `expandedKeys` 作为期望值下发。 */
+function syncExpansionToTable(): void {
+  reconcileExpansion(expandedKeys.value)
+}
+
+/**
+ * 首次进入的默认展开：展开所有**有子节点**的部门（本项目数据只有两级，等价于全展开）。
+ *
+ * 与「全部展开」共用同一实现——两者只是在不同时机对同一个 `expandedKeys` 赋值，
+ * 不存在"默认展开"与"按钮展开"两套状态。
+ */
+function defaultExpandedKeys(nodes: DepartmentNode[]): Set<string> {
+  return new Set(collectExpandableKeys(nodes, deptKeyOf, deptChildrenOf))
+}
+
+async function expandAll(): Promise<void> {
+  expandedKeys.value = new Set(collectExpandableKeys(treeData.value, deptKeyOf, deptChildrenOf))
+  await nextTick()
+  syncExpansionToTable()
+}
+
+async function collapseAll(): Promise<void> {
+  expandedKeys.value = new Set()
+  await nextTick()
+  syncExpansionToTable()
+}
+
+/**
+ * 行内箭头展开/收起：只把展开态同步成"表格实际渲染的结果"。
+ *
+ * <p>不做增量记账：`expand-change` 可能因程序化下发而触发，增量维护会与真实状态漂移。</p>
+ */
+function handleExpandChange(): void {
+  expandedKeys.value = readOpenKeysFromDom(treeData.value, deptKeyOf, deptChildrenOf)
 }
 
 /* ---------------- 数据加载 ---------------- */
 
 async function loadData(): Promise<void> {
+  // 刷新前先从 DOM 收下用户当前的展开态（表格重挂载后 DOM 会被重建，之后就读不到了）
+  const previousOpen = readOpenKeysFromDom(treeData.value, deptKeyOf, deptChildrenOf)
+
   loading.value = true
   try {
     const list = await listDepartmentTree({
@@ -211,7 +264,17 @@ async function loadData(): Promise<void> {
       status: statusParam(query.status)
     })
     flatRows.value = list ?? []
-    initExpanded()
+    // 期望展开态：首次加载套默认（全展开有子节点的部门）；之后沿用仍然存在的键。
+    // 用 size 判断而非只认 loadedOnce：handleReset 会显式清空以求重套默认展开
+    const target = loadedOnce.value && previousOpen.size > 0
+      ? new Set(pruneKeysToTree(previousOpen, treeData.value, deptKeyOf, deptChildrenOf))
+      : defaultExpandedKeys(treeData.value)
+
+    loadedOnce.value = true
+    // 新数据渲染完成后 DOM 里所有行都是收起的，直接按期望值打开即可
+    expandedKeys.value = new Set()
+    await nextTick()
+    reconcileExpansion(target)
   } catch {
     flatRows.value = []
   } finally {
@@ -226,7 +289,8 @@ function handleSearch(): void {
 function handleReset(): void {
   query.deptName = ''
   query.status = null
-  expandedKeys.value = []
+  // 重置筛选时清空展开态，让下方 loadData 重新套用默认展开（与"第一次打开页面"一致）
+  expandedKeys.value = new Set()
   void loadData()
 }
 
@@ -482,20 +546,25 @@ onMounted(() => {
         <span class="table-toolbar__title">
           部门树 · 共 {{ totalDepartments }} 个部门
         </span>
-        <el-button v-if="canCreate" type="primary" icon="Plus" @click="openCreate()">
-          新增部门
-        </el-button>
+        <div class="table-toolbar__actions">
+          <!-- 与机构配置页保持一致的工具栏结构：写入口 + 展开/收起 -->
+          <el-button v-if="canCreate" type="primary" size="small" icon="Plus" @click="openCreate()">
+            新增部门
+          </el-button>
+          <el-button size="small" @click="expandAll">全部展开</el-button>
+          <el-button size="small" @click="collapseAll">全部收起</el-button>
+        </div>
       </div>
 
       <div v-if="filterHint" class="filter-hint text-muted">{{ filterHint }}</div>
 
       <el-table
+        ref="tableRef"
         v-loading="loading"
         :data="treeData"
         border
         row-key="key"
         :tree-props="{ children: 'children' }"
-        :expand-row-keys="expandedKeys"
         height="520"
         @expand-change="handleExpandChange"
       >
@@ -608,9 +677,22 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .table-toolbar__title {
   font-weight: 600;
   color: #303133;
+}
+
+.table-toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .filter-hint {
