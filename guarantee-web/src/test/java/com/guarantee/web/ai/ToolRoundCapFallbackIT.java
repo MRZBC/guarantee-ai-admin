@@ -11,6 +11,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -30,6 +32,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -43,13 +46,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code Flux.empty()} 收场 → 正文一个字都没有 → 前端只剩一个空气泡。
  * 用户原话：「为何无法正确响应，就算有bug或者做不了，也应该兜底一下吧」。</p>
  *
- * <p>本测试用可编排的假模型复现这条路径，断言两件事：</p>
+ * <p>本测试用可编排的假模型复现这条路径，断言三件事：</p>
  * <ol>
  *   <li><b>轮次用尽不再等于"不回答"</b>：收尾轮会**摘掉工具**再要一次回答，
  *       模型只能用已查到的数据作答（{@link ScriptedChatModel} 在"没有工具"时才吐答案，
  *       这与真实模型的行为一致）；</li>
  *   <li><b>真的没有正文时必须有兜底文案</b>：用户看到"这次没成 + 为什么 + 下一步"，
  *       而不是空气泡。</li>
+ *   <li><b>单轮工具调用超过 12 次仍必须产出可读回答</b>（REQ-BA-06）：
+ *       超出的那几次不执行、只回灌可读说明，模型下一轮继续，用户最终拿到结论。</li>
  * </ol>
  *
  * <p>需要可用的 MySQL（见 application.yml）。运行方式：{@code mvn verify}。</p>
@@ -80,7 +85,8 @@ class ToolRoundCapFallbackIT {
     /**
      * 可编排的假模型：模拟"一直在调工具、就是不收口"的真实行为。
      *
-     * <p>三种模式对应三条要守的路径：轮次用尽后收口、模型彻底空回答、模型连收尾轮都想调工具。</p>
+     * <p>四种模式对应四条要守的路径：轮次用尽后收口、模型彻底空回答、模型连收尾轮都想调工具、
+     * 以及**单轮要一大批工具**（专门用来验证单轮 12 次上限）。</p>
      */
     static class ScriptedChatModel implements ChatModel {
 
@@ -98,15 +104,34 @@ class ToolRoundCapFallbackIT {
         private final AtomicInteger toolRounds = new AtomicInteger();
         /** 没有工具的调用次数（= 收尾轮） */
         private final AtomicInteger noToolRounds = new AtomicInteger();
+        /** 单轮要多少个工具调用（默认 1；>12 用来验证单轮上限） */
+        private volatile int toolCallsPerRound = 1;
+        /** 前几个工具轮次会继续要工具（默认不限，直到 MAX_TOOL_ROUNDS） */
+        private volatile int toolRequestRounds = Integer.MAX_VALUE;
+        /** 模型是否收到过"本轮工具调用过多"的可读工具结果 */
+        private final AtomicBoolean sawOverBudgetNotice = new AtomicBoolean();
 
         void setMode(Mode mode) {
             this.mode = mode;
+        }
+
+        /** 让模型每轮都索要 {@code callsPerRound} 个工具调用，且只在前 {@code rounds} 轮要。 */
+        void requestManyTools(int callsPerRound, int rounds) {
+            this.toolCallsPerRound = callsPerRound;
+            this.toolRequestRounds = rounds;
+        }
+
+        boolean sawOverBudgetNotice() {
+            return sawOverBudgetNotice.get();
         }
 
         /** 假模型是单例 Bean，跨用例共享：计数必须在每个用例开始时清零，否则断言会互相污染。 */
         void reset() {
             toolRounds.set(0);
             noToolRounds.set(0);
+            toolCallsPerRound = 1;
+            toolRequestRounds = Integer.MAX_VALUE;
+            sawOverBudgetNotice.set(false);
         }
 
         int toolRounds() {
@@ -125,15 +150,15 @@ class ToolRoundCapFallbackIT {
         @Override
         public Flux<ChatResponse> stream(Prompt prompt) {
             boolean hasTools = hasTools(prompt);
-            if (hasTools) {
-                toolRounds.incrementAndGet();
-            } else {
+            int round = hasTools ? toolRounds.incrementAndGet() : 0;
+            if (!hasTools) {
                 noToolRounds.incrementAndGet();
             }
+            inspectOverBudgetNotice(prompt);
             return switch (mode) {
                 case ALWAYS_EMPTY -> Flux.just(text(""));
                 case TOOL_CALL_ALWAYS -> Flux.just(toolCall());
-                case TOOL_UNTIL_NO_TOOLS -> hasTools
+                case TOOL_UNTIL_NO_TOOLS -> hasTools && round <= toolRequestRounds
                         ? Flux.just(toolCall())
                         : Flux.just(text(FINAL_ANSWER));
             };
@@ -146,11 +171,29 @@ class ToolRoundCapFallbackIT {
                     && !options.getToolCallbacks().isEmpty();
         }
 
+        /** 上一轮超上限的那几次调用，模型是否拿到了可读说明（而不是错误）。 */
+        private void inspectOverBudgetNotice(Prompt prompt) {
+            for (Message message : prompt.getInstructions()) {
+                if (message instanceof ToolResponseMessage toolResponses) {
+                    for (ToolResponseMessage.ToolResponse response : toolResponses.getResponses()) {
+                        if (response.responseData() != null
+                                && response.responseData().contains("本轮工具调用过多")) {
+                            sawOverBudgetNotice.set(true);
+                        }
+                    }
+                }
+            }
+        }
+
         private ChatResponse toolCall() {
+            List<AssistantMessage.ToolCall> calls = new java.util.ArrayList<>(toolCallsPerRound);
+            for (int i = 0; i < toolCallsPerRound; i++) {
+                calls.add(new AssistantMessage.ToolCall(
+                        "call_loop_" + toolRounds.get() + "_" + i, "function", TOOL_NAME, TOOL_ARGUMENTS));
+            }
             AssistantMessage message = AssistantMessage.builder()
                     .content("")
-                    .toolCalls(List.of(new AssistantMessage.ToolCall(
-                            "call_loop_" + toolRounds.get(), "function", TOOL_NAME, TOOL_ARGUMENTS)))
+                    .toolCalls(calls)
                     .build();
             return new ChatResponse(List.of(new Generation(message,
                     ChatGenerationMetadata.builder().finishReason("tool_calls").build())));
@@ -258,6 +301,40 @@ class ToolRoundCapFallbackIT {
                 .as("兜底原因要如实说是轮次用尽，而不是含糊的「没有返回内容」")
                 .contains("工具调用都用在了取数上")
                 .contains("把问题拆小");
+    }
+
+    @Test
+    @DisplayName("单轮索要 15 个工具：只执行前 12 个，被跳过的那几次回灌可读说明，用户仍拿到回答")
+    void overLimitToolCallsStillProduceAnAnswer() {
+        // 两轮各要 15 个（合起来 30 个，仍在 Spring AI「单工具 40 次」硬上限之内），之后收敛给结论
+        chatModel.requestManyTools(15, 2);
+
+        List<ServerSentEvent<String>> events = chat(QUESTION);
+
+        assertThat(chatModel.sawOverBudgetNotice())
+                .as("超出单轮上限的调用不能报错，必须回灌可读说明让模型下一轮补查")
+                .isTrue();
+        assertThat(answerOf(events))
+                .as("受约束执行同样必须给出可读回答，绝不能只剩空气泡/错误")
+                .contains(FINAL_ANSWER);
+        assertThat(events).as("不得把这条路径报成错误").noneMatch(e -> "error".equals(e.event()));
+        assertThat(events).as("流必须正常收尾").anyMatch(e -> "done".equals(e.event()));
+
+        /*
+          落库口径 = 实际执行次数：单轮上限 12 → 2 轮共 24 次。
+          若上限失效会是 30 次（15 × 2）；若是"整轮封顶 12"则只有 12 次。
+        */
+        Long conversationId = conversationIdOf(events);
+        Long executed = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM ai_tool_call WHERE conversation_id = ? AND tool_name = ?",
+                Long.class, conversationId, TOOL_NAME);
+        assertThat(executed)
+                .as("单轮工具调用必须被截断在 12 次（实测落库的执行次数）")
+                .isEqualTo(24L);
+
+        assertThat(lastAssistantContent(conversationId))
+                .as("收口后的正文必须落库，刷新历史不能又变成空气泡")
+                .contains(FINAL_ANSWER);
     }
 
     // ==================================================================
