@@ -168,3 +168,34 @@ pre.json-block {
   display: block !important;
 }
 
+/* ---------------------------------------------------------------------------
+ * 弹窗锁屏（.el-popup-parent--hidden）—— 必需覆盖，勿删
+ *
+ * 现象：点开订单详情等弹窗时，整页元素向左缩进约一个滚动条宽度（15px）。
+ *
+ * 根因（真实浏览器逐项量出来的，非推测）：element-plus 的 useLockscreen 在弹窗打开时
+ *       给 body 挂 .el-popup-parent--hidden（库 CSS 里是 overflow: hidden），并且
+ *       **只要它认为 body 有纵向溢出**（documentElement.clientHeight < body.scrollHeight）
+ *       就再把 body.style.width 写成 calc(100% - 滚动条宽度)，作为"滚动条消失的补偿"。
+ *       而本项目的滚动容器是 .app-content（el-main），body 从不滚动：
+ *         - 溢出只是 1px 级取整误差（100vh 与 clientHeight 之差、或覆盖式滚动条不占位）
+ *           → 补偿凭空收窄内容 15px，右侧元素整体左移（实测 body/卡片/分页宽度各 −15px）；
+ *         - 真出现页面级滚动条时，补偿又恰好抵消它的消失 → 于是时有时无，表现为"跳一下"。
+ *       一句话：body 既不是滚动容器，也不该被补偿。
+ *
+ * 处理：按"body 不参与滚动"处理这两件事。背景滚动本来就由 .el-overlay 覆盖层挡住
+ *       （它是 position:fixed + 铺满视口，滚轮事件不会落到 .app-content），
+ *       因此这里放掉 overflow 不会让弹窗背后的列表被滚动。
+ *       布局侧另有根因修正：AppLayout 的高度由 100vh 改为 100%（消除页面级溢出）。
+ *
+ * 实测（模拟"1px 页面溢出 + 滚动条不占位"：body 加 1px 元素 + html{overflow-y:hidden}）：
+ *       覆盖前 body / .table-card / .pagination-wrapper 的宽度各 −15px、右边缘左移 15px；
+ *       覆盖后三者位移全部为 0；"页面出现横向滚动条"场景同样由 +15px 变为 0。
+ *
+ * 升级 element-plus 后若 useLockscreen 改为按真实滚动容器补偿，本规则可删除。
+ * ------------------------------------------------------------------------- */
+body.el-popup-parent--hidden {
+  width: 100% !important;
+  overflow: visible !important;
+}
+

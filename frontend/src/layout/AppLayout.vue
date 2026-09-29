@@ -246,8 +246,16 @@ function handleUserCommand(command: string): void {
 </template>
 
 <style scoped>
+/*
+ * 高度一律用 100%（而不是 100vh）：html/body/#app 都已是 height:100%（styles/main.css），
+ * 所以 100% 恰好等于视口内容高度；而 100vh 在**页面出现横向滚动条**时比
+ * documentElement.clientHeight 高出一个滚动条厚度，于是 body 多出 1px 级纵向溢出。
+ * 这点溢出本身看不见，却会让 element-plus 的弹窗锁屏误判"body 有纵向溢出"，
+ * 把 body 宽度收窄一个滚动条宽度 —— 表现就是打开详情弹窗时整页向左缩进 ~15px
+ * （实测复现与覆盖规则见 styles/main.css 的「弹窗锁屏」一节）。
+ */
 .app-layout {
-  height: 100vh;
+  height: 100%;
 }
 
 .app-aside {
@@ -287,7 +295,7 @@ function handleUserCommand(command: string): void {
 }
 
 .app-main-container {
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
 }
 
