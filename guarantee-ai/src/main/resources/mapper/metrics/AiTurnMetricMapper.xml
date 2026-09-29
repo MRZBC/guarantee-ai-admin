@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  单轮指标 Mapper（REQ-MCP-09 / REQ-MCP-11）：
+    · insert                —— 一次问答一行（含失败与触顶），只追加；
+    · selectOverview        —— 概览卡（问答数/失败数/触顶数/平均轮次/平均耗时/token 合计）；
+    · selectDailyTrend      —— 按天趋势（只返回库中真实存在的日期，不补零）；
+    · selectTopTools        —— Top 工具（调用次数 + 平均/最大/p95 耗时）；
+    · selectProposalStatusCounts —— 提案状态计数（SYS-NF-08）。
+
+  口径约定（与 Service 的归一逻辑一致）：
+    · 时间区间 [from, to) 右开；
+    · outcome / capped 由写入方保证取值合法，这里只做聚合；
+    · ai_tool_call 与 ai_operation_proposal 带逻辑删除，聚合必须过滤 is_deleted = 0；
+    · ai_turn_metric 是只追加的流水表，不带逻辑删除列，因此不过滤。
+-->
+<mapper namespace="com.guarantee.ai.metrics.mapper.AiTurnMetricMapper">
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO ai_turn_metric
+            (conversation_id, message_id, user_id, model, prompt_version,
+             rounds, tool_calls, tool_cost_ms, total_cost_ms,
+             input_tokens, output_tokens, capped, cap_reason,
+             source, outcome, trace_id)
+        VALUES
+            (#{conversationId}, #{messageId}, #{userId}, #{model}, #{promptVersion},
+             #{rounds}, #{toolCalls}, #{toolCostMs}, #{totalCostMs},
+             #{inputTokens}, #{outputTokens}, #{capped}, #{capReason},
+             #{source}, #{outcome}, #{traceId})
+    </insert>
+
+    <select id="selectOverview" resultType="com.guarantee.ai.metrics.TurnMetricOverview">
+        SELECT COUNT(*)                                                        AS turns,
+               COALESCE(SUM(CASE WHEN outcome = 'ERROR' THEN 1 ELSE 0 END), 0)  AS error_turns,
+               COALESCE(SUM(CASE WHEN capped = 1 THEN 1 ELSE 0 END), 0)         AS capped_turns,
+               AVG(rounds)                                                     AS avg_rounds,
+               AVG(total_cost_ms)                                              AS avg_total_cost_ms,
+               COALESCE(SUM(input_tokens), 0)                                  AS input_tokens,
+               COALESCE(SUM(output_tokens), 0)                                 AS output_tokens
+          FROM ai_turn_metric
+         WHERE created_at &gt;= #{from}
+           AND created_at &lt;  #{to}
+    </select>
+
+    <select id="selectDailyTrend" resultType="com.guarantee.ai.metrics.TurnMetricTrendPoint">
+        SELECT DATE(created_at)                                                AS stat_date,
+               COUNT(*)                                                        AS turns,
+               COALESCE(SUM(CASE WHEN outcome = 'ERROR' THEN 1 ELSE 0 END), 0)  AS error_turns,
+               COALESCE(SUM(CASE WHEN capped = 1 THEN 1 ELSE 0 END), 0)         AS capped_turns,
+               AVG(rounds)                                                     AS avg_rounds,
+               AVG(total_cost_ms)                                              AS avg_total_cost_ms,
+               COALESCE(SUM(input_tokens), 0)                                  AS input_tokens,
+               COALESCE(SUM(output_tokens), 0)                                 AS output_tokens
+          FROM ai_turn_metric
+         WHERE created_at &gt;= #{from}
+           AND created_at &lt;  #{to}
+         GROUP BY DATE(created_at)
+         ORDER BY stat_date
+    </select>
+
+    <!--
+      p95 用最近秩法：升序第 CEIL(0.95 * n) 条（样本少时即最大值）。
+      MySQL 8 没有 PERCENTILE_CONT，窗口函数比"LIMIT OFFSET 表达式"更稳（后者在
+      MySQL 里只接受常量/绑定参数，表达式会直接报语法错）。
+    -->
+    <select id="selectTopTools" resultType="com.guarantee.ai.metrics.ToolCallStat">
+        SELECT t.tool_name                                                             AS tool_name,
+               COUNT(*)                                                                AS calls,
+               AVG(t.duration_ms)                                                      AS avg_duration_ms,
+               MAX(t.duration_ms)                                                      AS max_duration_ms,
+               MIN(CASE WHEN t.rn &gt;= CEIL(t.cnt * 0.95) THEN t.duration_ms END)     AS p95_duration_ms
+          FROM (
+                SELECT c.tool_name                                                   AS tool_name,
+                       c.duration_ms                                                 AS duration_ms,
+                       ROW_NUMBER() OVER (PARTITION BY c.tool_name ORDER BY c.duration_ms) AS rn,
+                       COUNT(*)     OVER (PARTITION BY c.tool_name)                  AS cnt
+                  FROM ai_tool_call c
+                 WHERE c.created_at &gt;= #{from}
+                   AND c.created_at &lt;  #{to}
+                   AND c.is_deleted = 0
+               ) t
+         GROUP BY t.tool_name
+         ORDER BY calls DESC, t.tool_name
+         LIMIT #{limit}
+    </select>
+
+    <select id="selectProposalStatusCounts" resultType="com.guarantee.ai.metrics.ProposalStatusStat">
+        SELECT p.status            AS status,
+               COUNT(*)            AS status_count
+          FROM ai_operation_proposal p
+         WHERE p.created_at &gt;= #{from}
+           AND p.created_at &lt;  #{to}
+           AND p.is_deleted = 0
+         GROUP BY p.status
+         ORDER BY status_count DESC, p.status
+    </select>
+
+</mapper>
