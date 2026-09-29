@@ -273,11 +273,12 @@
 
 ### 6.1 数据变更（本阶段 +2；按阶段顺序累计 20 → 24 张表）
 
-- `ai_config_item`：`config_key`(唯一) / `config_value` / `value_type` / `default_value` / `min_value` / `max_value` / `enum_options` / `category`(`MODEL`/`SWITCH`/`BUDGET`) / `dangerous` / `description` / `version` / `updated_by` / `updated_at` + 逻辑删除三列；
+- `ai_config_item`：`config_key`(唯一) / `config_value` / `value_type` / `default_value` / `min_value` / `max_value` / `enum_options` / `category`(`MODEL`/`SWITCH`/`BUDGET`/**`PROMPT`**) / `dangerous` / `description` / `version` / `updated_by` / `updated_at` + 逻辑删除三列；
 - `ai_prompt_version`：`version_no`(唯一) / `content`(LONGTEXT) / `content_hash` / `status`(`DRAFT`/`PUBLISHED`/`ARCHIVED`) / `note` / `created_by` / `created_at` / `published_by` / `published_at` + 逻辑删除三列；
 - （可选）`ai_config_version`：配置全集版本表，或直接用 `MAX(version)` 推导——**建议不建**，用 `ai_config_item.version` 的最大值作为快照版本。
 
-> 迁移脚本沿用仓库惯例：`db/migration/V7__ai_config.sql`（**无 Flyway，手工幂等执行**，与 `V1`~`V6` 同构）。
+> 迁移脚本沿用仓库惯例：`db/migration/V8__ai_config.sql`（**无 Flyway，手工幂等执行**，与 `V1`~`V6` 同构）。
+> **编号更正（v1.1）**：v1.0 写的是 `V7`，但 V7 已被第三阶段的 `V7__ai_knowledge.sql` 占用。
 
 ### 6.2 配置项总表（第一版，默认值必须与当前行为一致）
 
@@ -299,18 +300,20 @@
 | `budget.max-rounds` | INT | `4` | 1 ~ 8 | 否 | 现状 `MAX_TOOL_ROUNDS=4` |
 | `budget.max-calls-per-round` | INT | `12` | 1 ~ 40 | 否 | 现状 `MAX_TOOL_CALLS_PER_ROUND=12` |
 | `budget.soft-timeout-ms` | INT | `60000` | 10s ~ 5min | 否 | 现状 `SOFT_TIMEOUT_MS=60000` |
+| `budget.tool-timeout-ms` | INT | `10000` | 1s ~ 60s | 否 | **v1.1 补**：单次工具超时（实现期新增键，现状 `TOOL_TIMEOUT_MS=10000`） |
 | `budget.tool-result-bytes` | INT | `16384` | 4KB ~ 64KB | 否 | 现状 16 KB |
 | `knowledge.enabled` | BOOLEAN | `true` | — | 否 | 第三阶段开关 |
-| `prompt.active-version` | INT | 由真源首次导入 | — | 是 | 指向 `ai_prompt_version` |
+| `prompt.active-version` | INT | **NULL**（未设置） | — | 是 | 指向 `ai_prompt_version`；**v1.1 更正**：NULL 时回落 jar 内 classpath 提示词，保证冷启动可用（不是"由真源首次导入"） |
 
 ### 6.3 接口清单
 
 | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
 | GET | `/api/ai/config` | `ai:config:view` | 返回全部配置项（密钥类只返回"是否已配置"+引用名） |
-| POST | `/api/ai/config/change` | `ai:config:update` | 生成配置变更提案（走确认卡） |
+| POST | `/api/ai/config/change` | `ai:config:update` | **v1.1 更正**：按已拍板 Q-CFG-06/07，页面**直接落库**（表单 + 二次确认）并 100% 写 `source=WEB` 的 `CONFIG_UPDATE` 审计；**不建** `ConfigProposalExecutor`、不走确认卡 |
 | GET | `/api/ai/config/prompts` | `ai:config:view` | 版本历史列表 |
 | GET | `/api/ai/config/prompts/{version}` | `ai:config:view` | 单版本内容 + 哈希 |
+| GET | `/api/ai/config/prompts/gate` | `ai:config:view` | **v1.1 补**：最近一次发布门禁结果（`PASSED`/`FAILED`/`NOT_RUN`/`尚未检查`）；门禁由"刷新门禁"与"发布"触发，列表接口**不**同步执行 |
 | POST | `/api/ai/config/prompts/draft` | `ai:config:update` | 保存草稿 |
 | POST | `/api/ai/config/prompts/publish` | `ai:config:update` | 发布（带门禁结果校验） |
 | POST | `/api/ai/config/prompts/rollback` | `ai:config:update` | 回滚到指定版本 |

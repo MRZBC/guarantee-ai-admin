@@ -152,12 +152,16 @@ class AiTurnMetricMappingTest {
     }
 
     @Test
-    @DisplayName("V9 给 ai_tool_call 加 source 列与索引，且是幂等写法（information_schema + PREPARE）")
+    @DisplayName("V9 给 ai_tool_call 加 source / trace_id 与索引，且是幂等写法（information_schema + PREPARE）")
     void v9DdlMustAddToolCallSourceIdempotently() throws IOException {
         String ddl = Files.readString(migrationPath(), StandardCharsets.UTF_8);
 
         assertThat(ddl).contains("ADD COLUMN source VARCHAR(8) NOT NULL DEFAULT ''CHAT''");
         assertThat(ddl).contains("idx_ai_tool_call_source");
+        assertThat(ddl)
+                .as("trace_id 是 AC-MCP-05「可追溯到 traceId」的直接依据，不再靠联表推断")
+                .contains("ADD COLUMN trace_id VARCHAR(64) NULL")
+                .contains("ai_tool_call_trace_id_present");
         // MySQL 8 不支持 ADD COLUMN IF NOT EXISTS：必须走 information_schema 判断 + 动态执行
         assertThat(ddl).contains("information_schema.COLUMNS");
         assertThat(ddl).contains("information_schema.STATISTICS");

@@ -256,7 +256,8 @@
 | `ai.tokens` | Counter | `direction`(input/output), `model` | 真实 usage（不是字数估算） |
 | `ai.proposals` | Counter | `status`(CREATED/CONFIRMED/REJECTED/EXPIRED/FAILED), `source` | 兑现 `SYS-NF-08` 的承诺 |
 | `ai.prompt.publish` | Counter | `result`(ok/gate_failed) | 第四阶段发布门禁的观测面 |
-| `ai.knowledge.retrieval` | Counter/Timer | `domain`, `hit`(true/false) | 第三阶段知识检索（跨阶段复用） |
+| `ai.knowledge.retrieval` | Counter | `domain`, `hit`(true/false) | 第三阶段知识检索（跨阶段复用） |
+| `ai.knowledge.retrieval.duration` | Timer | `domain`, `hit`(true/false) | **v1.1 拆分**：v1.0 写 "Counter/Timer"，但 Micrometer **不允许同名 meter 两种类型**（实测 `CumulativeCounter vs Timer`），故拆成两个 meter 名 |
 
 - 端点：`management.endpoints.web.exposure.include` 增加 `prometheus`（可选 `metrics`）；需新增 `micrometer-registry-prometheus` 依赖（本机 `.m2` 无，需联网——**Q-MCP-04 的可行性前置**）；
 - **标签基数控制**：`tool`（固定枚举）、`status`、`source`、`model` 可用；**禁止**把 `conversationId`、`userId`、问题文本、参数值作为标签（高基数会拖垮监控）；
@@ -310,7 +311,7 @@
 ### 6.1 数据变更
 
 - 新增 `ai_turn_metric`（见 §5.3.2）；
-- 新增 `ai_mcp_token`（`token_hash` / `token_prefix` / `service_account_id` / `permissions` / `expires_at` / `last_used_at` / `revoked_at` / 逻辑删除三列）；
+- 新增 `ai_mcp_token`（`token_hash` / `token_prefix` / `service_account_id` / `permissions` / `expires_at` / `last_used_at` / `revoked_at` / **`created_by`** / **`revoked_by`**（v1.1 补：谁签发、谁撤销）/ 逻辑删除三列）；
 - `ai_tool_call` 新增 `source VARCHAR(8) DEFAULT 'CHAT'`（`CHAT`/`MCP`/`EVAL`）；
 - `ai_message` 的 `token_count` **保留但改注释**："字数估算，非模型用量；真实用量见 `ai_turn_metric`"（避免继续被误用）；
 - 表数：本阶段 **+2**（`ai_turn_metric`、`ai_mcp_token`）。按三份阶段文档的建议口径累计：20（现状）→ 22（第三阶段：知识条目 + 导入留痕）→ 24（第四阶段：配置项 + 提示词版本）→ **26**（本阶段）；任一派生取舍以对应文档为准；
@@ -323,9 +324,12 @@
 | 类型 | 内容 |
 |---|---|
 | 指标端点 | `/actuator/prometheus`（新增暴露）；`/actuator/health` 保持不变（免登录，含 `authRevocation`） |
-| 可视化 API | `GET /api/ai/metrics/overview?range=24h\|7d`、`GET /api/ai/metrics/trend?days=7`、`GET /api/ai/metrics/tools/top`（权限：`system:audit:view`） |
+| 可视化 API | `GET /api/ai/metrics/overview?range=24h\|7d\|30d`（响应含 `overview` + **`proposals` 提案状态计数**）、`GET /api/ai/metrics/trend?days=7`（1~90）、`GET /api/ai/metrics/tools/top?limit=10&range=24h`（limit 1~20）（权限：`system:audit:view`；**v1.1 补全参数与返回块**） |
 | MCP Token 管理 | `POST /api/system/mcp-tokens`（签发）、`DELETE /api/system/mcp-tokens/{id}`（撤销）、`GET /api/system/mcp-tokens`（列表，**不返回明文**） |
-| MCP 协议 | `initialize` / `tools/list` / `tools/call`（stdio 上的标准 JSON-RPC；不新增自定义扩展） |
+| MCP 网关（stdio） | `initialize` / `tools/list` / `tools/call`（标准 JSON-RPC；不新增自定义扩展）|
+| MCP 平台 HTTP 面（**v1.1 补**） | `GET /api/ai/mcp/tools`（清单+inputSchema）、`POST /api/ai/mcp/tools/{name}`（调用）；`Authorization: Bearer <MCP-Token>`；安全层放行 `/api/ai/mcp/**`，鉴权在 controller 内（`ai:mcp:read` 硬门禁）|
+| MCP Token 管理 | `POST`/`GET`/`DELETE /api/system/mcp-tokens[/{id}]`（权限 `ai:mcp:manage`；明文仅签发响应出现一次）|
+| MCP 协议面 HTTP 状态（**v1.1 补**） | **真实 HTTP 状态 + 同值业务码**（迁就冻结网关：它只在非 2xx 读 `message`）：`400` INVALID_ARGUMENT；`401` TOKEN_INVALID/REVOKED/EXPIRED；`403` TOOL_NOT_ALLOWED/TOOL_UNAVAILABLE/PERMISSION_REQUIRED/ACCOUNT_DISABLED；`429` RATE_LIMITED/DAILY_QUOTA_EXCEEDED；`503` LIMITER_UNAVAILABLE；`500` TOOL_FAILED。**页面面 API 仍是 HTTP 200 + 业务码**——两套口径并存是有意的 |
 
 ### 6.3 配置项
 
@@ -337,8 +341,8 @@
 | `guarantee.ai.mcp.daily-quota` | `10000` | 每 token 每日调用上限 |
 | `guarantee.ai.observability.metrics-enabled` | `true` | 指标采集开关（故障时可关） |
 | `guarantee.ai.observability.turn-metric-persist` | `true` | 单轮指标落库开关 |
-| `guarantee.ai.observability.token-pricing` | 空 | **可选**：分模型单价（Q-MCP-05 未拍板前不填，则只报 token/耗时） |
-| `guarantee.ai.eval.deterministic-in-verify` | `true` | 确定性评测是否挂进 `mvn verify` |
+| `guarantee.ai.observability.token-pricing` | — | **v1.1 删除（键未落地）**：实现里**没有**这个键；Q-MCP-05 已拍板"只报 token 与耗时，不报金额"，要报金额必须先有单价表（未排期） |
+| `guarantee.ai.eval.deterministic-in-verify` | `true` | 确定性评测是否挂进 `mvn verify`；**v1.1 更正**：实现载体是 **JVM 系统属性 `-D`**（`EvaluationDeterministicIT` 的 `@EnabledIf` 读 `System.getProperty`），不在 `application.yml` |
 
 ### 6.4 与既有产物的关系
 

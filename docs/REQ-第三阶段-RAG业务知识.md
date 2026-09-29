@@ -310,7 +310,7 @@ CREATE TABLE IF NOT EXISTS ai_knowledge_item (
   created_at      DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   updated_at      DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
   PRIMARY KEY (id),
-  UNIQUE KEY uk_ai_knowledge_no (knowledge_no, IFNULL(deleted_at,'1970-01-01 00:00:00.000000')),
+  UNIQUE KEY uk_ai_knowledge_no (knowledge_no, (IFNULL(deleted_at,'1970-01-01 00:00:00.000000'))),
   KEY idx_ai_knowledge_item_deleted (is_deleted),
   KEY idx_ai_knowledge_lookup (domain, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -321,6 +321,9 @@ CREATE TABLE IF NOT EXISTS ai_knowledge_item (
 > `deleted_by VARCHAR(64) NOT NULL DEFAULT 'DB'`，并且必须有名为 `idx_<table>_deleted` 的 `is_deleted` 索引。
 > 新增受管表还要在 `LogicalDeleteTables.MANAGED` 里登记（该清单已收口为唯一真源）。
 > `ai_knowledge_import_log` 是**只追加**的导入留痕，**不带**逻辑删除三列、也不进受管清单。
+> **v1.1 补全**（v1.0 只写了一句，实际 DDL 以 `schema.sql` 为准）：
+> `id` / `knowledge_no` / `old_version`(NULL=首次) / `new_version` / `content_hash`(SHA-256) / `action`(`CREATED`/`UPDATED`/`RESTORED`/`RETIRED`) / `source_file` / `imported_at`，
+> 索引 `KEY idx_ai_knowledge_log_no (knowledge_no, imported_at)`。
 
 ### 6.2 工具清单变化
 
