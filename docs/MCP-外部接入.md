@@ -55,7 +55,7 @@ MCP 客户端（IDE / 其它系统 / 评测工具）
         └─ RecordingToolCallback （写 ai_tool_call，source=MCP，带 traceId）
 ```
 
-网关本身**不做权限判断、不读数据库、不提供任意 HTTP 透传**：它只把白名单里的 12 个只读工具转发出去。
+网关本身**不做权限判断、不读数据库、不提供任意 HTTP 透传**：它只把白名单里的 13 个只读工具转发出去。
 所有访问控制都发生在平台侧 —— 这样"页面能看到的"和"外部 Agent 能看到的"不会有第二套口径。
 
 ---
@@ -76,8 +76,10 @@ body = 工具参数 JSON（如 { "orderType": "TENDER", "limit": 20 }）
 
 约定：
 
-- 清单**已经按权限裁剪**：没有 `ai:mcp:read`、或缺少某域 `:view` 权限时，对应工具**不会出现**在清单里
-  （fail-closed：权限快照为空则只剩 4 个公开只读工具）。网关不会"补回"缺失的工具 —— 补回等于绕过裁剪。
+- 清单**已经按权限裁剪**：没有 `ai:mcp:read` 的 token **拿不到任何工具**（MCP 入口是硬门禁，fail-closed）；
+  有 `ai:mcp:read` 但缺某域 `:view` 时，对应工具不会出现（第二层是既有 `AiToolRegistry` 注册裁剪）。
+  **注意与聊天链路的差别**：聊天里"权限快照为空只剩 4 个公开只读工具"是那一层的语义；MCP 是**外部面**，
+  入口再收一道 → 无 `ai:mcp:read` 一律空清单 + 调用 403。网关不会"补回"缺失的工具 —— 补回等于绕过裁剪。
 - 非 2xx 时建议返回 `{ "message": "可读原因" }`；网关会把它翻译成外部 Agent 能读懂的文案
   （见 §7 错误语义），而不是把 500 原文抛给模型。
 - `inputSchema` 用 JSON Schema；工具说明直接复用既有 `@Tool` 描述，避免第二份说明漂移。
@@ -180,7 +182,10 @@ npm run build          # 产出 dist/index.js
 
 ## 6. 能力与限制
 
-### 6.1 暴露的只读工具（12 个）
+### 6.1 暴露的只读工具（13 个）
+
+> **口径（v1.1 更正）**：数量以 `tools/business-mcp/src/catalog.ts` 与后端 `McpToolCatalog` 为准，
+> 两者由测试断言逐名一致；本表在第三阶段加入 `queryBusinessKnowledge` 后由 12 → **13**。
 
 | 工具名（后端名） | 说明 | 额外权限 |
 |---|---|---|
@@ -188,6 +193,7 @@ npm run build          # 产出 dist/index.js
 | `getCurrentDate` | 获取系统当前日期（相对时间换算的基准） | 登录即可 |
 | `queryOrderDistribution` | 订单维度分布（区域/机构/险种） | 登录即可 |
 | `queryOrderTrend` | 订单时间趋势（日/月/季/年序列） | 登录即可 |
+| `queryBusinessKnowledge` | **业务知识检索**（口径/概念/制度条目，返回条目号+标题+版本，供溯源） | 登录即可（条目级 `permission_code` 在服务端裁剪） |
 | `queryOrg` | 机构查询 | `org:view` |
 | `queryDepartment` | 部门查询 | `dept:view` |
 | `queryUser` | 用户查询 | `user:view` |
