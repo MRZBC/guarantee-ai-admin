@@ -305,17 +305,22 @@ CREATE TABLE IF NOT EXISTS ai_knowledge_item (
   permission_code VARCHAR(64)  NULL,
   source_ref      VARCHAR(255) NULL,
   is_deleted      TINYINT      NOT NULL DEFAULT 0,
-  deleted_at      DATETIME(6)  NULL,
-  deleted_by      VARCHAR(64)  NULL,
+  deleted_at      DATETIME(6)  NULL COMMENT '禁止任何 DEFAULT：默认值会让有效行非 NULL，绕过唯一键',
+  deleted_by      VARCHAR(64)  NOT NULL DEFAULT 'DB',
   created_at      DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   updated_at      DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
   PRIMARY KEY (id),
   UNIQUE KEY uk_ai_knowledge_no (knowledge_no, IFNULL(deleted_at,'1970-01-01 00:00:00.000000')),
+  KEY idx_ai_knowledge_item_deleted (is_deleted),
   KEY idx_ai_knowledge_lookup (domain, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
-- `ai_knowledge_import_log`：条目号 / 旧版本 / 新版本 / 内容哈希 / 导入时间 / 来源文件（只追加，不修改）。
+> **逻辑删除三列的"房规"（以 `LogicalDeleteSchemaIntegrationTest` 的逐列断言为准，v1.1 更正）**：
+> `is_deleted TINYINT NOT NULL DEFAULT 0`、`deleted_at DATETIME(6) NULL` 且**不得有 DEFAULT**、
+> `deleted_by VARCHAR(64) NOT NULL DEFAULT 'DB'`，并且必须有名为 `idx_<table>_deleted` 的 `is_deleted` 索引。
+> 新增受管表还要在 `LogicalDeleteTables.MANAGED` 里登记（该清单已收口为唯一真源）。
+> `ai_knowledge_import_log` 是**只追加**的导入留痕，**不带**逻辑删除三列、也不进受管清单。
 
 ### 6.2 工具清单变化
 

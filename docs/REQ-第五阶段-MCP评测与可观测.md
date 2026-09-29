@@ -313,7 +313,9 @@
 - `ai_tool_call` 新增 `source VARCHAR(8) DEFAULT 'CHAT'`（`CHAT`/`MCP`/`EVAL`）；
 - `ai_message` 的 `token_count` **保留但改注释**："字数估算，非模型用量；真实用量见 `ai_turn_metric`"（避免继续被误用）；
 - 表数：本阶段 **+2**（`ai_turn_metric`、`ai_mcp_token`）。按三份阶段文档的建议口径累计：20（现状）→ 22（第三阶段：知识条目 + 导入留痕）→ 24（第四阶段：配置项 + 提示词版本）→ **26**（本阶段）；任一派生取舍以对应文档为准；
-- 迁移脚本 `db/migration/V8__ai_observability.sql`（沿用无 Flyway 的手工幂等惯例）。
+- 迁移脚本：观测用 `db/migration/V9__ai_observability.sql`、MCP 用 `db/migration/V10__ai_mcp.sql`
+  （**编号更正，v1.1**：v1.0 这里误写为 `V8__ai_observability.sql`，而 V8 已由第四阶段的 `V8__ai_config.sql` 占用；
+  沿用无 Flyway 的手工幂等惯例）。
 
 ### 6.2 接口与端点
 
