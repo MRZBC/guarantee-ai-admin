@@ -5,6 +5,7 @@ import com.guarantee.ai.entity.AiConversation;
 import com.guarantee.ai.service.AiChatService;
 import com.guarantee.ai.service.AiConversationService;
 import com.guarantee.ai.service.ProposalClaimGuard;
+import com.guarantee.ai.service.ProposalNumberGuard;
 import com.guarantee.ai.service.ProposalPreview;
 import com.guarantee.ai.service.ProposalRequest;
 import com.guarantee.ai.service.ProposalService;
@@ -52,7 +53,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>两条用例对应两个必须同时成立的结论：</p>
  * <ol>
  *   <li>编造（会话内无 PENDING 提案）→ 用户收到纠正，且落库内容也含纠正；</li>
- *   <li>确有 PENDING 提案 → **一个字都不改**（误伤会让用户以为卡片是假的）。</li>
+ *   <li>确有 PENDING 提案 → **不得被判为"并未生成"**（误伤会让用户以为卡片是假的）；
+ *       但正文里那个未经工具返回的编号仍会被编号白名单移除——两件事互相独立。</li>
  * </ol>
  *
  * <p>用确定性的假模型复现"模型没调用任何工具、直接编造提案编号"的形态，
@@ -68,8 +70,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ProposalClaimGuardIT {
 
     /** 真机复现的正文形态：编号是改过尾数的假编号，且本轮没有任何工具调用。 */
+    private static final String FABRICATED_NO = "OP202609231200258712";
+
     private static final String FABRICATED_ANSWER =
-            "待确认提案：提案编号 OP202609231200258712，目标为险种「投标保函（标准）」。"
+            "待确认提案：提案编号 " + FABRICATED_NO + "，目标为险种「投标保函（标准）」。"
                     + "请在确认卡上点击「确认执行」后生效。";
 
     /**
@@ -193,13 +197,16 @@ class ProposalClaimGuardIT {
         String deltaText = deltaContent(events);
         assertThat(deltaText).as("用户必须在同一条回复里看到纠正")
                 .contains("系统提示").contains("并未生成");
+        assertThat(deltaText).as("编造的编号必须从用户看到的正文里消失（编号白名单）")
+                .doesNotContain(FABRICATED_NO);
 
         // 落库内容同样含纠正：下次进入会话仍然看得到，而不是只有当时在场的人看到
         String stored = lastAssistantMessage(conversation.getId());
         assertThat(stored)
                 .as("纠正必须写进助手消息本身（不是另起一条消息）")
-                .startsWith(FABRICATED_ANSWER)
-                .contains(ProposalClaimGuard.CORRECTION);
+                .contains("目标为险种「投标保函（标准）」")
+                .contains(ProposalClaimGuard.CORRECTION)
+                .doesNotContain(FABRICATED_NO);
 
         // 反过来确认"只有一条助手消息"：没有把纠正另起一条造成消息重复
         Integer assistantMessages = jdbcTemplate.queryForObject(
@@ -213,7 +220,7 @@ class ProposalClaimGuardIT {
     // ==================================================================
 
     @Test
-    @DisplayName("写工具确实生成了待确认提案：同样的正文不得被追加任何纠正")
+    @DisplayName("写工具确实生成了待确认提案：不得被误判为『并未生成』；编号仍按白名单校验")
     void realPendingProposalShouldNotBeTouched() {
         long adminId = userId("admin");
         long typeId = jdbcTemplate.queryForObject(
@@ -238,11 +245,20 @@ class ProposalClaimGuardIT {
                 "把投标保函（标准）停用");
 
         String deltaText = deltaContent(events);
-        assertThat(deltaText).as("确有 PENDING 提案时不得追加任何纠正（误伤比不纠更糟）")
-                .doesNotContain("系统提示");
+        assertThat(deltaText).as("确有 PENDING 提案时不得被判为『并未生成』：误伤会让用户以为卡片是假的")
+                .doesNotContain(ProposalClaimGuard.CORRECTION);
+        assertThat(deltaText)
+                .as("但正文里那个编号不是本轮工具返回的真实编号 → 仍会被移除"
+                        + "（白名单是事实校验，与『有没有待确认提案』是两件事）")
+                .doesNotContain(FABRICATED_NO)
+                .contains(ProposalNumberGuard.CORRECTION);
 
         String stored = lastAssistantMessage(conversation.getId());
-        assertThat(stored).as("落库正文也不得被改动").isEqualTo(FABRICATED_ANSWER);
+        assertThat(stored)
+                .as("落库正文与用户所见一致：业务描述保留、未经验证的编号被移除")
+                .contains("目标为险种「投标保函（标准）」")
+                .doesNotContain(ProposalClaimGuard.CORRECTION)
+                .doesNotContain(FABRICATED_NO);
         // 收尾统一交给 @AfterEach 的 proposalFixture：原先这里手工把提案置为 REJECTED，
         // 但仍会留下"提案编号存在、业务上没人做过这个变更"的痕迹（而且那张卡一度
         // 在真实使用者的面板里出现过）。现在直接删除，对共享开发库零残留。
@@ -292,7 +308,7 @@ class ProposalClaimGuardIT {
         // 真机里那个编造的编号绝不可能出现在工具返回值里
         assertThat(result.items())
                 .extracting(MyProposalsToolResult.MyProposalItem::proposalNo)
-                .doesNotContain("OP202609231200258712");
+                .doesNotContain(FABRICATED_NO);
 
         // 收尾
         jdbcTemplate.update("UPDATE ai_operation_proposal SET status = 'REJECTED' WHERE id = ?",
@@ -356,6 +372,10 @@ class ProposalClaimGuardIT {
     /**
      * 把 SSE 的 delta 事件正文拼起来。
      *
+     * <p><b>必须处理 reset</b>：服务端在"正文被改写（编号被移除 / 口径行被剥离）"时会先发
+     * {@code reset} 再整体重发最终正文，前端 {@code onReset} 会清空气泡。这里用同一个语义
+     * ——否则同一个回答会被拼成两遍，断言会看到重复文本。</p>
+     *
      * <p>刻意用 ObjectMapper 反序列化而不是在原始 JSON 上做字符串包含判断：
      * 后者依赖"Jackson 不转义非 ASCII"这一未写进契约的默认行为，
      * 一旦哪天开启 {@code ESCAPE_NON_ASCII}，断言会以"纠正没出现"的假象失败。</p>
@@ -363,7 +383,9 @@ class ProposalClaimGuardIT {
     private String deltaContent(List<ServerSentEvent<String>> events) {
         StringBuilder text = new StringBuilder();
         for (ServerSentEvent<String> event : events) {
-            if ("delta".equals(event.event())) {
+            if ("reset".equals(event.event())) {
+                text.setLength(0);
+            } else if ("delta".equals(event.event())) {
                 text.append(objectMapper.readValue(event.data(), ChatStreamEvents.Delta.class).content());
             }
         }

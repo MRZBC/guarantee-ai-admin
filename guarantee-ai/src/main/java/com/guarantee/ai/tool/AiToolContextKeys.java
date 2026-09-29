@@ -54,6 +54,14 @@ public final class AiToolContextKeys {
      */
     public static final String PROPOSAL_SINK = "aiProposalSink";
 
+    /**
+     * 本轮的 {@link TurnFacts} 收集器（服务端口径与提案编号的唯一真值来源）。
+     *
+     * <p>收尾时服务端要用它生成口径页脚、校验正文里的提案编号，因此必须与工具执行
+     * 共享同一个实例——工具线程拿不到 Web 层参数，只能靠 ToolContext 传下去。</p>
+     */
+    public static final String TURN_FACTS = "aiTurnFacts";
+
     private AiToolContextKeys() {
     }
 }

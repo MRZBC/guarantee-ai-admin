@@ -62,6 +62,10 @@ public class AiToolCallRecorder {
         Long userId = longValue(toolContext, AiToolContextKeys.USER_ID);
         ToolCallEventSink sink = sink(toolContext);
 
+        // 采集本轮工具事实（口径 + 真实提案编号）：这是收尾时服务端生成口径、校验编号的唯一来源。
+        // 必须用**脱敏前**的原始返回值，避免掩码把 dataSource 里的内容改掉。
+        collectTurnFacts(toolContext, toolName, result);
+
         // 脱敏后的入参/结果：落库与 SSE 使用同一份，避免"界面看到明文、审计只有掩码"
         String safeArguments = mask(arguments);
         String safeResult = mask(result);
@@ -134,6 +138,24 @@ public class AiToolCallRecorder {
     private static ToolCallEventSink sink(ToolContext context) {
         Object v = raw(context, AiToolContextKeys.EVENT_SINK);
         return v instanceof ToolCallEventSink s ? s : null;
+    }
+
+    /**
+     * 把一次工具返回值里的事实并入本轮收集器。
+     *
+     * <p>任何异常都必须被吞掉：事实采集是**收尾用的增强**，绝不能因为它失败而让
+     * 一次正常的数据查询报错（与 {@link #record} 的既有约定一致）。</p>
+     */
+    private void collectTurnFacts(ToolContext context, String toolName, String result) {
+        Object value = raw(context, AiToolContextKeys.TURN_FACTS);
+        if (!(value instanceof TurnFacts facts) || result == null || result.isBlank()) {
+            return;
+        }
+        try {
+            facts.merge(TurnFacts.extract(result, objectMapper));
+        } catch (Exception ex) {
+            log.warn("采集工具事实失败 tool={}", toolName, ex);
+        }
     }
 
     private static Object raw(ToolContext context, String key) {

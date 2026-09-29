@@ -9,6 +9,7 @@ import com.guarantee.ai.tool.AiToolContextKeys;
 import com.guarantee.ai.tool.AiToolRegistry;
 import com.guarantee.ai.tool.ToolCallEvent;
 import com.guarantee.ai.tool.ToolCallEventSink;
+import com.guarantee.ai.tool.TurnFacts;
 import com.guarantee.ai.vo.ChatStreamEvents;
 import com.guarantee.common.security.CurrentUser;
 import com.guarantee.common.security.Permissions;
@@ -217,8 +218,15 @@ public class AiChatService {
         // 注册通道：提案确认发生在**另一个 HTTP 请求**上，只有靠注册表才能把结果推回本会话
         proposalEventPublisher.register(conversationId, proposalSink, resultSink);
 
+        /*
+          本轮工具事实（真实口径 + 真实提案编号）。收尾时服务端用它生成口径页脚、
+          并按白名单校验正文里的提案编号——这两样原本靠"要求模型逐字照抄"，
+          已多次被真机证明会编造，因此真值必须由服务端掌握。
+        */
+        TurnFacts turnFacts = new TurnFacts();
+
         Map<String, Object> toolContext = buildToolContext(conversationId, userId, userText,
-                principalContext(), new ToolCallEventSink(sink), proposalSink);
+                principalContext(), new ToolCallEventSink(sink), proposalSink, turnFacts);
 
         ToolCallingChatOptions options = buildToolCallingOptions(toolContext);
 
@@ -266,7 +274,7 @@ public class AiChatService {
                   收尾跑完才关闭三个通道，merge 随之完成。
                 */
                 .concatWith(Flux.defer(() -> tailEvents(answer, lastPrompt, options, toolsExecuted,
-                        roundsExhausted, conversationId, userId, persisted)))
+                        roundsExhausted, conversationId, userId, persisted, userText, turnFacts)))
                 .doOnComplete(() -> {
                     sink.tryEmitComplete();
                     proposalSink.tryEmitComplete();
@@ -329,15 +337,17 @@ public class AiChatService {
                                                      AtomicBoolean toolsExecuted,
                                                      AtomicBoolean roundsExhausted,
                                                      Long conversationId, Long userId,
-                                                     AtomicBoolean persisted) {
+                                                     AtomicBoolean persisted,
+                                                     String userText, TurnFacts turnFacts) {
         Prompt finalPrompt = promptRef.get();
         String produced = answer.toString();
         if (finalPrompt != null
                 && proposalClaimGuard.correctionFor(userId, conversationId, produced).isPresent()) {
             return repairFabricatedProposal(answer, finalPrompt, options, toolsExecuted,
-                    conversationId, userId, persisted, promptRef);
+                    conversationId, userId, persisted, promptRef, userText, turnFacts);
         }
-        return finishTurn(answer, toolsExecuted, roundsExhausted, conversationId, userId, persisted);
+        return finishTurn(answer, toolsExecuted, roundsExhausted, conversationId, userId, persisted,
+                userText, turnFacts);
     }
 
     /**
@@ -357,7 +367,8 @@ public class AiChatService {
                                                                    AtomicBoolean toolsExecuted,
                                                                    Long conversationId, Long userId,
                                                                    AtomicBoolean persisted,
-                                                                   AtomicReference<Prompt> promptRef) {
+                                                                   AtomicReference<Prompt> promptRef,
+                                                                   String userText, TurnFacts turnFacts) {
         log.warn("回复声称已生成提案但会话内无 PENDING 提案，自动重试一轮让模型调用写工具 conversationId={}",
                 conversationId);
         conversationService.audit(conversationId, userId, "CHAT", "检测到回复编造提案，自动重试一次");
@@ -378,27 +389,41 @@ public class AiChatService {
                         answer.append(repaired);
                     }
                     return finishTurn(answer, toolsExecuted, repairedRoundsExhausted, conversationId,
-                            userId, persisted);
+                            userId, persisted, userText, turnFacts);
                 }));
     }
 
     /**
-     * 收尾：兜底校验 → 追加纠正（如有）→ 落库 → 结束事件。
+     * 收尾：服务端接管事实 → 兜底校验 → 落库 → 结束事件。
+     *
+     * <p><b>这一步是"编造"类问题的结构性出口</b>，顺序固定为：</p>
+     * <ol>
+     *   <li><b>剥离模型自写的口径行</b>（{@link DataSourceClaimGuard#stripDataSourceLines}）——
+     *       照抄与编造在文本上无法区分，因此模型写的口径行一律不生效；</li>
+     *   <li><b>提案编号白名单</b>（{@link ProposalNumberGuard}）——正文里的编号必须来自本轮
+     *       工具真实返回，或用户自己打出来的串；其余一律移除并留下系统提示；</li>
+     *   <li><b>追加服务端口径页脚</b>（{@link DataSourceClaimGuard#footer}）——口径的唯一出口；</li>
+     *   <li>追加兜底纠正（编造提案 / 零工具却有口径行 / 空回答）。</li>
+     * </ol>
+     *
+     * <p><b>为什么"改写过"就要 reset 重发</b>：正文是流式下发的，前端此时已经显示了被移除的
+     * 内容。只追加纠正会造成"界面留着假编号、库里没有"，刷新后两副面孔——正是既有设计里
+     * 最忌讳的"落库 ≠ 用户所见"。因此只要发生了移除，就先发 {@code reset} 清空气泡、
+     * 再把服务端最终正文整体重发一次；没有改写的常见路径完全不变（仍走增量 delta）。</p>
      *
      * <p>纠正文案**追加进本条助手消息**并同步推给前端，刻意不调用
      * {@code conversationService.appendMessage}（即 {@code ProposalService.appendResultMessage}
      * 的机制）：那会额外落一条 ASSISTANT 消息，用户会看到"编造的原话"与"纠正"分成两个气泡，
      * 纠正反而像是无关的一句。这里只有一条消息、一次落库，不存在消息重复。</p>
-     *
-     * <p>三类兜底：① 编造提案 ② 零工具却写口径行 ③ 空回答（见
-     * {@link #emptyAnswerNotice(boolean)}）。</p>
      */
     private Flux<ServerSentEvent<String>> finishTurn(StringBuilder answer, AtomicBoolean toolsExecuted,
                                                      AtomicBoolean roundsExhausted,
                                                      Long conversationId, Long userId,
-                                                     AtomicBoolean persisted) {
+                                                     AtomicBoolean persisted,
+                                                     String userText, TurnFacts turnFacts) {
         String produced = answer.toString();
-        List<String> corrections = new ArrayList<>(2);
+        List<String> corrections = new ArrayList<>(3);
+        boolean proposalClaimFlagged = false;
         if (produced.isBlank()) {
             /*
               ③ 空回答兜底：无论什么原因，都不能让用户对着空气泡。
@@ -408,22 +433,64 @@ public class AiChatService {
             corrections.add(emptyAnswerNotice(roundsExhausted.get()));
         } else {
             // ① 声称有提案但会话内没有 PENDING 提案（自动重试后仍未解决时才会走到这里）
-            proposalClaimGuard.correctionFor(userId, conversationId, produced)
-                    .ifPresent(corrections::add);
-            // ② 本轮零工具调用却出现「口径：」行
+            proposalClaimFlagged = proposalClaimGuard.correctionFor(userId, conversationId, produced)
+                    .map(text -> {
+                        corrections.add(text);
+                        return true;
+                    })
+                    .orElse(false);
+            // ② 本轮零工具调用却出现「口径：」行。必须在剥离之前判定，否则证据已经被自己删掉
             dataSourceClaimGuard.correctionFor(produced, toolsExecuted.get())
                     .ifPresent(corrections::add);
         }
 
-        Flux<ServerSentEvent<String>> correction = Flux.empty();
-        if (!corrections.isEmpty()) {
-            answer.append(String.join("", corrections));
-            correction = Flux.fromIterable(corrections)
-                    .map(text -> event("delta", new ChatStreamEvents.Delta(text)));
+        // 服务端接管事实：先剥离模型自写的口径行，再按白名单校验提案编号
+        String sanitized = DataSourceClaimGuard.stripDataSourceLines(produced);
+        boolean rewritten = !sanitized.equals(produced);
+        ProposalNumberGuard.Result numberCheck = ProposalNumberGuard.sanitize(sanitized,
+                ProposalNumberGuard.trusted(userText, turnFacts.proposalNumbers()));
+        if (numberCheck.changed()) {
+            log.warn("正文出现 {} 个非本轮工具返回的提案编号，已移除 conversationId={}",
+                    numberCheck.removed().size(), conversationId);
+            sanitized = numberCheck.text();
+            rewritten = true;
+            // 已经判过"这份提案根本没生成"时不再补第二条纠正：两句话说的是同一件事，
+            // 连贴两段「系统提示」只会让用户以为出了两个问题
+            if (!proposalClaimFlagged) {
+                corrections.add(ProposalNumberGuard.CORRECTION);
+            }
         }
+
+        // 正文已被改写：先清空前端气泡，再整体重发服务端最终正文，保证"界面 = 落库"
+        Flux<ServerSentEvent<String>> events = Flux.empty();
+        if (rewritten) {
+            answer.setLength(0);
+            answer.append(sanitized);
+            events = Flux.just(
+                    event("reset", new ChatStreamEvents.Reset()),
+                    event("delta", new ChatStreamEvents.Delta(sanitized)));
+        }
+
+        /*
+          服务端口径页脚：只在本轮有真实工具返回值时追加。
+          正文为空（空回答兜底）时不追加——那段文案刻意不带口径行，带上反而像"有数据"。
+          做法与 {@link #emptyAnswerNotice} 的注释一致：没有对应的工具返回值，就不给口径。
+        */
+        StringBuilder tail = new StringBuilder();
+        if (!sanitized.isBlank()) {
+            tail.append(DataSourceClaimGuard.footer(turnFacts.dataSources()));
+        }
+        tail.append(String.join("", corrections));
+
+        if (tail.length() > 0) {
+            String tailText = tail.toString();
+            answer.append(tailText);
+            events = events.concatWith(Flux.just(event("delta", new ChatStreamEvents.Delta(tailText))));
+        }
+
         Long messageId = persistAssistant(persisted, conversationId, userId, answer.toString());
         conversationService.audit(conversationId, userId, "CHAT", "助手回答已完成");
-        return correction.concatWith(Flux.just(
+        return events.concatWith(Flux.just(
                 event("done", new ChatStreamEvents.Done(conversationId, messageId))));
     }
 
@@ -722,7 +789,8 @@ public class AiChatService {
     private static Map<String, Object> buildToolContext(Long conversationId, Long userId, String userText,
                                                         CurrentUser.Principal principal,
                                                         ToolCallEventSink eventSink,
-                                                        Sinks.Many<ChatStreamEvents.Proposal> proposalSink) {
+                                                        Sinks.Many<ChatStreamEvents.Proposal> proposalSink,
+                                                        TurnFacts turnFacts) {
         Map<String, Object> context = new HashMap<>();
         putIfNotNull(context, AiToolContextKeys.CONVERSATION_ID, conversationId);
         putIfNotNull(context, AiToolContextKeys.USER_ID, userId);
@@ -730,6 +798,8 @@ public class AiChatService {
         putIfNotNull(context, AiToolContextKeys.USER_TEXT, userText);
         context.put(AiToolContextKeys.EVENT_SINK, eventSink);
         context.put(AiToolContextKeys.PROPOSAL_SINK, proposalSink);
+        // 本轮工具事实收集器：与收尾的服务端口径/编号校验共享同一实例
+        context.put(AiToolContextKeys.TURN_FACTS, turnFacts);
         if (principal != null) {
             putIfNotNull(context, AiToolContextKeys.USERNAME, principal.username());
             putIfNotNull(context, AiToolContextKeys.REAL_NAME, principal.realName());

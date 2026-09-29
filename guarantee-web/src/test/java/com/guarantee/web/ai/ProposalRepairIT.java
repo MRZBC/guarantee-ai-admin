@@ -254,11 +254,12 @@ class ProposalRepairIT {
         assertThat(events).as("修复轮生成的提案必须推给前端，否则用户仍然看不到卡片")
                 .anyMatch(event -> "proposal".equals(event.event()));
 
-        // ④ 落库正文 = 修复后的正文：不带编造编号，也没有"并未生成"的矛盾提示
+        // ④ 落库正文 = 修复后的正文 + 服务端生成的口径行（口径不再由模型产出，见 DataSourceClaimGuard）
         String stored = lastAssistantMessage(conversationId);
         assertThat(stored)
-                .as("落库的必须是修复后的回答")
-                .isEqualTo(REPAIRED)
+                .as("落库的必须是修复后的回答，后面接服务端口径")
+                .startsWith(REPAIRED)
+                .contains("口径：变更提案 · 停用险种：履约保函（标准）")
                 .doesNotContain("OP202609242359135602")
                 .doesNotContain("系统提示");
 

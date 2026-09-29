@@ -3,6 +3,8 @@ package com.guarantee.ai.service;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -61,5 +63,64 @@ class DataSourceClaimGuardTest {
     void ignoresBlankAnswer() {
         assertThat(guard.correctionFor(null, false)).isEmpty();
         assertThat(guard.correctionFor("   \n  ", false)).isEmpty();
+    }
+
+    // ------------------------------------------------------------------
+    // 口径的唯一出口：剥离模型自写行 + 服务端生成页脚
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("剥离模型自写的口径行：整行移除，不留尾部空行")
+    void stripsModelWrittenDataSourceLine() {
+        String answer = "本季度共 12 笔订单。\n\n口径：订单统计 · 险种：投标保函";
+
+        assertThat(DataSourceClaimGuard.stripDataSourceLines(answer))
+                .isEqualTo("本季度共 12 笔订单。");
+    }
+
+    @Test
+    @DisplayName("半角冒号、缩进、行中位置：前两者剥离，行中的「口径」不动")
+    void stripsIndentedAndHalfWidthLinesOnly() {
+        String multiple = "结论：\n  口径：订单统计\n口径: 机构配置\n\n补充说明。";
+        assertThat(DataSourceClaimGuard.stripDataSourceLines(multiple))
+                .isEqualTo("结论：\n\n补充说明。");
+
+        String prose = "以上数据我们按同一口径统计，不含已删除记录。";
+        assertThat(DataSourceClaimGuard.stripDataSourceLines(prose)).isSameAs(prose);
+    }
+
+    @Test
+    @DisplayName("没有口径行时返回同一个实例（调用方据此判定无需重发正文）")
+    void returnsSameInstanceWhenNothingStripped() {
+        String answer = "本季度共 12 笔订单，金额 1.50 元。";
+
+        assertThat(DataSourceClaimGuard.stripDataSourceLines(answer)).isSameAs(answer);
+        assertThat(DataSourceClaimGuard.stripDataSourceLines(null)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("服务端页脚：每个真实工具一行、保持执行顺序、跳过空白")
+    void buildsServerSideFooter() {
+        assertThat(DataSourceClaimGuard.footer(null)).isEmpty();
+        assertThat(DataSourceClaimGuard.footer(List.of())).isEmpty();
+        assertThat(DataSourceClaimGuard.footer(List.of("  "))).isEmpty();
+        assertThat(DataSourceClaimGuard.footer(List.of("订单统计 · 全量")))
+                .isEqualTo("\n\n口径：订单统计 · 全量");
+        assertThat(DataSourceClaimGuard.footer(
+                List.of("订单统计 · 全量", "  ", "机构配置 · 关键词：浙江")))
+                .as("顺序即工具执行顺序，空口径不产生空行")
+                .isEqualTo("\n\n口径：订单统计 · 全量\n口径：机构配置 · 关键词：浙江");
+    }
+
+    @Test
+    @DisplayName("端到端形态：模型写的口径行被丢弃，用户看到的是服务端口径")
+    void stripThenFooterYieldsServerTruth() {
+        String produced = "本季度共 12 笔订单。\n\n口径：订单统计 · 编造的条件";
+
+        String finalText = DataSourceClaimGuard.stripDataSourceLines(produced)
+                + DataSourceClaimGuard.footer(List.of("订单统计 · 时间区间：2026-07-01 ~ 2026-09-30"));
+
+        assertThat(finalText)
+                .isEqualTo("本季度共 12 笔订单。\n\n口径：订单统计 · 时间区间：2026-07-01 ~ 2026-09-30");
     }
 }

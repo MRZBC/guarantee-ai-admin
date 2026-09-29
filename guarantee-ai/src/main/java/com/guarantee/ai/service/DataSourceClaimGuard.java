@@ -4,7 +4,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 /**
  * 「本轮没调任何工具，却写出了口径行」的兜底校验（提示词第 32 / 39 条的代码级兜底）。
@@ -26,6 +29,11 @@ import java.util.Optional;
  * <p><b>已知边界（不隐瞒）</b>：只匹配**行首**的口径声明（允许前置空白）。若模型把口径行
  * 混在句子中间（如"以上按口径：xxx 统计"）则不会命中——宁可漏报，也不要误伤
  * "我们按同一口径统计"这类正当表述。</p>
+ *
+ * <p><b>口径的产出已上收到服务端</b>：提示词不再要求模型写口径行，改由
+ * {@link #footer(List)} 用本轮真实执行的工具返回值生成、{@link #stripDataSourceLines(String)}
+ * 把模型自写的口径行剥离。{@code correctionFor} 保留原职责（零工具却有口径行 = 编造），
+ * 它现在是"模型没遵守新指令"的兜底。三者是同一件事的三个面：**口径只能由服务端产出**。</p>
  */
 @Component
 public class DataSourceClaimGuard {
@@ -38,13 +46,22 @@ public class DataSourceClaimGuard {
      * <p>必须点明"不是系统回显"：用户之所以会信那行字，正是因为它长得像系统输出。</p>
      */
     public static final String CORRECTION =
-            "（系统提示：本轮没有调用任何数据工具，上面的「口径：」不是系统回显，"
-                    + "请勿据此认为数据有来源。如需真实数据，请重新提问。）";
+            "（系统提示：本轮没有调用任何数据工具，因此没有任何口径；正文里那行「口径：」"
+                    + "不是系统回显，已由系统移除。请勿据此认为数据有来源。如需真实数据，请重新提问。）";
 
     /** 口径行的前缀。后端的两个生成点用的都是全角冒号，这里两种都收。 */
     private static final String PREFIX_FULL_WIDTH = "口径：";
 
     private static final String PREFIX_HALF_WIDTH = "口径:";
+
+    /**
+     * 口径行的整行匹配（行首 + 前后空白 + 行尾换行）。
+     *
+     * <p>用 {@code MULTILINE} 而不是按 {@code \R} 切分再拼回：切分/拼回会顺手改写换行符，
+     * 让"没改动"的正文也被判定为改动，进而触发一次无谓的 reset 重发。</p>
+     */
+    private static final Pattern DATA_SOURCE_LINE =
+            Pattern.compile("^[ \\t]*口径[：:][^\\r\\n]*(?:\\R|$)", Pattern.MULTILINE);
 
     /**
      * 判断是否需要追加纠正提示。
@@ -84,5 +101,50 @@ public class DataSourceClaimGuard {
             }
         }
         return false;
+    }
+
+    /**
+     * 剥离模型自写的口径行（服务端是口径的唯一出口）。
+     *
+     * <p>模型仍可能按旧习惯写出 {@code 口径：…}，或为了"像模像样"自己拼一条。
+     * 无论哪种，正文里的口径行都不再被采信——服务端会在收尾时用本轮真实工具返回值
+     * 重新生成（见 {@link #footer(List)}）。剥离而不是"检测后纠正"，是因为
+     * 编造与照抄在文本上无法区分：唯一可靠的做法是让模型写的口径行一律不生效。</p>
+     *
+     * <p>行中出现的"口径"字样不受影响（那是正常表述）；正文未被改动时**原样返回**，
+     * 以便调用方据此判断要不要重发。</p>
+     */
+    public static String stripDataSourceLines(String answer) {
+        if (answer == null || answer.isBlank()) {
+            return answer == null ? "" : answer;
+        }
+        String stripped = DATA_SOURCE_LINE.matcher(answer).replaceAll("");
+        if (stripped.equals(answer)) {
+            return answer;
+        }
+        // 移除整行后可能留下尾部空行：去掉，避免与服务端追加的页脚之间出现双重空行
+        return stripped.replaceAll("[ \\t\\r\\n]+$", "");
+    }
+
+    /**
+     * 服务端口径页脚：本轮**实际执行**的每个工具一行。
+     *
+     * <p>格式与提示词要求过的完全一致（{@code 口径：…}），因此用户看到的形态没有变化，
+     * 变化的只是"这行字由谁产出"——从"模型照抄"变成"服务端生成"，模型再也无从编造。</p>
+     *
+     * @param dataSources 本轮工具返回的 dataSource（顺序即工具执行顺序，调用方负责去重）
+     * @return 需要追加的页脚（含前置空行）；没有可用口径时返回空串
+     */
+    public static String footer(List<String> dataSources) {
+        if (dataSources == null || dataSources.isEmpty()) {
+            return "";
+        }
+        List<String> lines = new ArrayList<>(dataSources.size());
+        for (String dataSource : dataSources) {
+            if (dataSource != null && !dataSource.isBlank()) {
+                lines.add(PREFIX_FULL_WIDTH + dataSource);
+            }
+        }
+        return lines.isEmpty() ? "" : "\n\n" + String.join("\n", lines);
     }
 }

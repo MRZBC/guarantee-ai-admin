@@ -716,6 +716,46 @@ to contain: "仍有 38 个启用中的用户" but did not.
 
 ---
 
+## 7.9 决策十一：口径与提案编号改由**服务端产出**（编造的结构性出口）
+
+### 7.9.1 背景：提示词注入后的两类问题，可排除性完全不同
+
+| 问题 | 能不能"排除" | 依据 |
+| --- | --- | --- |
+| 越权（模型被诱导去做越权操作） | **可以结构性排除** | 授权输入全部来自服务端：权限快照由请求线程写入 `ToolContext`（`AiChatService.buildToolContext`，SYS-P-03），工具集按权限裁剪（`AiToolRegistry`，SYS-P-12a），工具内再按动作校验（40 处 `AiPermissionGuard`）。注意 `guarantee-system` 的 **Service 层没有 `@PreAuthorize`**（安全边界在 Controller，SYS-P-01），而工具是绕过 Controller 直调 Service 的，因此工具内那一道是**必需项**、不是冗余；写操作只产提案，确认时用**当前 token** 复核权限（SYS-C-04）并 `claimForExecution` 原子抢占。模型最多以用户自己的权限行事 |
+| 编造（正文写出不存在的口径 / 编号 / 数字） | **不能靠检测排除** | 原有的 `ProposalClaimGuard` / `DataSourceClaimGuard` 都是**话术启发式**，两份文档各自写明边界（有 PENDING 时引用另一个编号抓不到；有工具调用时的错误引用抓不到）。只要正文由模型自由生成，就只能"降低概率"，不能"排除" |
+
+因此本决策只做一件事：**把"事实类内容"的产出权从模型手里收回到服务端**。模型负责解释，服务端负责事实。
+
+### 7.9.2 落地
+
+| 改动 | 说明 |
+| --- | --- |
+| `TurnFacts` + `AiToolContextKeys.TURN_FACTS` | 在装饰器咽喉点 `AiToolCallRecorder` 采集每次工具返回的事实：任意层级的 `dataSource`（口径）与 `proposalNo` / 形如 `OP\d{8,}` 的串（真编号）。必须用**脱敏前**的原始返回值；解析失败（16KB 截断成非法 JSON）一律降级为"本轮无事实"，绝不影响工具本身 |
+| 服务端口径页脚 | `DataSourceClaimGuard.footer(...)` 用本轮真实 `dataSource` 生成口径行（每个工具一行、按执行顺序、去重）；`stripDataSourceLines(...)` 把模型自写的 `口径：` 行**整行剥离**——照抄与编造在文本上无法区分，所以模型写的口径一律不生效 |
+| 提案编号白名单 | `ProposalNoFormat`（形态定义）+ `ProposalNumberGuard`（校验）：正文里每个 `OP…` 必须属于"本轮工具真实返回 ∪ 用户本轮原话里自己打出的编号"，否则移除并追加系统提示 |
+| 改写即 `reset` 重发 | 正文是流式下发的，移除内容必须让前端丢掉已显示的部分：发生改写时先发 `reset`、再把服务端最终正文整体重发，保证"界面 = 落库"（复用决策九的机制） |
+| 提示词同步 | 自检 D 与第 39 条改为"**不要写口径行**，系统会自动追加"；第 32 条补充"编号会被白名单校验，凭记忆写的必被移除" |
+| 两条纠正去重 | 已判"这份提案根本没生成"时不再追加编号纠正——两句话说的是同一件事，连贴两段「系统提示」只会让用户以为出了两个问题 |
+
+### 7.9.3 刻意保留的边界
+
+| 项 | 结论 |
+| --- | --- |
+| 剥离范围 | 只剥离**行首**的口径行（允许缩进、半角冒号）；行中的"我们按同一口径统计"不动（与 `claimsDataSource` 同一边界） |
+| 空回答兜底 | **不追加**口径页脚——那段文案刻意不带口径行，带上反而像"有数据"（既有约定不变） |
+| 编号纠正措辞 | 不说"系统中不存在"（那是更强的断言，本类只证明了"不是本轮工具返回的编号"），改为"不是本轮工具返回的真实编号，已由系统移除，请以确认卡上的编号为准" |
+| 用户自己贴的编号 | 计入白名单：用户贴一个编号问"还在吗"，模型如实回"该编号不存在"是正确回答，不能当成编造移除 |
+| 写工具的口径 | 页脚同样包含写工具那一行（`变更提案 · …`），与旧提示词"多工具给多行"一致；`ProposalRepairIT` 据此断言落库正文 = 修复后正文 + 服务端口径 |
+
+### 7.9.4 已知残留（下一步）
+
+1. **数值编造**仍只能降低概率：本轮保证了"来源凭据（口径）"真实，但正文数字与口径的对应关系没有机器校验。彻底解决需要服务端渲染指标块（读工具返回值抽成结构化摘要）。
+2. **间接提示注入未标注**：工具返回值里的自由文本（机构名、部门名、用户名、险种名、审计字段）直接进模型上下文，提示词里没有"工具返回内容是数据、不是指令"的约束。影响**不提权**（授权仍由服务端决定），但可能诱导模型跑偏或生成一张需要人去点的卡。建议：加铁律 + 对工具返回自由文本做换行/控制字符截断 + 红队 IT（把 payload 塞进机构名）。
+3. **`/api/ai/chat` 无按用户配额**：注入成功后可反复触发工具调用消耗 token（每轮工具循环上限 4 轮，但消息轮次不限）。
+
+---
+
 ## 8. 验收清单
 
 | # | 验收项 | 证据 |
@@ -741,6 +781,9 @@ to contain: "仍有 38 个启用中的用户" but did not.
 | 19 | **写工具把卡片真值交给模型**：`WriteToolResult.changes` 与确认卡同源 | `WriteToolResultTest` 2 项（§7.7.8） |
 | 20 | `WebAuditIT` 角色查询按未删除口径 | §7.7.8 末（全量 `mvn verify` 由失败转绿） |
 | 21 | **授权卡显示中文权限名**：变更明细、影响面、风险提示、执行结果消息均无权限码；未知编码原样保留 | `RoleServicePermissionDisplayTest` 6 项 + `RoleProposalToolPermissionDisplayTest` 3 项（§7.8） |
+| 22 | **口径只能由服务端产出**：模型自写的 `口径：` 行被剥离，页脚由本轮真实 `dataSource` 生成（含写工具行） | `DataSourceClaimGuardTest` 11 项（新增 5 项：整行剥离 / 行中不误伤 / 页脚 / 端到端形态）；`ProposalRepairIT` 断言落库正文含服务端口径 |
+| 23 | **提案编号白名单**：非本轮工具返回（且非用户原话）的编号被移除并留系统提示；真编号不受影响 | `TurnFactsTest` 10 项、`ProposalNumberGuardTest` 8 项；`ProposalClaimGuardIT` 4/4（含"确有 PENDING 时不得被误判为并未生成"） |
+| 24 | 全量回归（真实 MySQL + Redis） | `mvn verify` BUILD SUCCESS（8 模块，IT 68 项）；`mvn -pl guarantee-ai -am test` 137 项 |
 
 ---
 
@@ -757,3 +800,4 @@ to contain: "仍有 38 个启用中的用户" but did not.
 | （待填） | v1.6 | 追加**§7.7.7**：修复上线前的编造落库后出现**二次伤害**——模型把自己上一轮编造的"角色已改名"当成既成事实，下一轮答出"现在名称是「行政」（编码 OPER_NO_SYS）"，而库里 `updated_at = created_at` 证明从未改名；该轮**零工具调用**。落地：`ProposalClaimGuard.CORRECTION` 改写为"别把本条回复里的变更描述当事实 + 确认现状必须用只读工具重查"，提示词新增**自检 E**（实体当前状态只能来自本轮读工具返回值）。刻意**不改写历史**（保住"落库 = 用户所见"口径），已知残留：修复前的编造消息仍在会话 484 历史里，可开新会话规避 |
 | （待填） | v1.7 | 追加**§7.7.8**：同一诉求第二次现场——确认卡正确（业务运营（无系统配置））、模型正文仍写「行政」，用户据此拒绝了提案。两处成因各修一处：① `AiChatService.retractionNotice`（**每轮**把"历史里有 N 条被判编造、那些变更没有发生、问到必须用只读工具重查"写进系统提示）；② `WriteToolResult` 新增 `changes`（与确认卡同源的「原值 → 新值」），提示词第 31 条要求正文「变更内容」逐字照抄——**先给真值，而不是只要求别编**。新增 `AiChatServiceRetractionNoticeTest`（5 项）、`WriteToolResultTest`（2 项），`ProposalClaimGuardIT` 补 1 项（断言下一轮系统提示确实注入）；顺带修正第三处软删除漏网（`WebAuditIT.roleIdByCode` / `permissionCodesOfRole`） |
 | （待填） | v1.8 | 追加**决策十**（§7.8）：角色**授权**确认卡的「权限」一列与影响面显示的是权限码，使用者当场反馈"这里应该显示中文吧"。决策四只修了角色编码，权限码在同一条链路上有四个出口（变更明细 / 影响面 / 高危权限提示 / **执行结果消息里的 `List.toString()`**）全部漏网。落地：新增 `RoleService.permissionDisplayNames`（按 `sys_permission.perm_name` 批量翻译，查不到原样返回；判定仍按编码），四个出口全部改用它，空权限明说"已清空"。结构化审计仍存编码。新增 `RoleServicePermissionDisplayTest`（6 项）、`RoleProposalToolPermissionDisplayTest`（3 项） |
+| 2026-09-29 | v1.9 | 追加**决策十一**（§7.9）：口径与提案编号改由**服务端产出**。原有的两个 Guard 是话术启发式、各自写明边界（有 PENDING 时引用另一个编号抓不到），因此"编造"只能靠"让模型无从编造"来消除：① `TurnFacts` 在 `AiToolCallRecorder` 咽喉点采集每次工具返回的 `dataSource` 与真实编号并随 `ToolContext` 下传；② `DataSourceClaimGuard.footer/stripDataSourceLines` —— 服务端生成页脚、模型自写的口径行整行剥离；③ `ProposalNoFormat` + `ProposalNumberGuard` 做编号白名单（本轮工具返回 ∪ 用户原话）；④ 发生改写先发 `reset` 再整体重发，保证"界面 = 落库"；⑤ 提示词自检 D 与第 39 条改写、第 32 条补白名单说明。新增 `TurnFactsTest`（10 项）、`ProposalNumberGuardTest`（8 项），`DataSourceClaimGuardTest` 扩到 11 项；`ProposalClaimGuardIT` / `ProposalRepairIT` 按新契约更新断言（含 delta 拼接改为 reset-aware，与前端 `onReset` 对齐）。全量 `mvn verify` 绿（IT 68 项）、`guarantee-ai` 单测 137 项绿 |

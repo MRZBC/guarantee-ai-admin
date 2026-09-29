@@ -18,9 +18,9 @@ tags: [frontend, api-coverage, ux]
 ```text
 权限层   system:org:create / :update  → ADMIN_PERMISSIONS = 全部权限，超管有 ✅
 后端     POST /api/system/orgs、PUT /api/system/orgs/{id} 已实现并带校验 ✅
-前端 API createOrg / updateOrg 已定义且签名正确                    ✅
+前端     API createOrg / updateOrg 已定义且签名正确                    ✅
 页面     Orgs.vue 渲染了占位的 <el-button disabled>修改</el-button>
-         既没有 click 处理函数，也没有新增/编辑对话框              ❌ ← 真正的断点
+        既没有 click 处理函数，也没有新增/编辑对话框              ❌ ← 真正的断点
 ```
 
 `createOrg` / `updateOrg` 在整个 `frontend/src` 里**只有定义、零调用**。
