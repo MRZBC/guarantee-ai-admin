@@ -159,6 +159,77 @@ public class UserService {
         return sysUserMapper.selectByUsername(username);
     }
 
+    /**
+     * 账号类型（V10 的 {@code sys_user.account_type}）：{@code HUMAN} / {@code SERVICE}。
+     *
+     * <p>NULL / 空 / 未知取值一律按 {@code HUMAN} 处理（见 {@link SysUser#normalizeAccountType}）。
+     * <b>用户不存在也返回 HUMAN</b> —— 本方法只回答"这一行写了什么类型"，不回答"这行在不在"；
+     * 机器身份链路需要判存在性时请用 {@link #getAccountIdentity(Long)}（不存在返回 {@code null}），
+     * 否则会把"账号已删除"误判成"普通人账号可用"。</p>
+     */
+    @Transactional(readOnly = true)
+    public String getAccountType(Long userId) {
+        if (userId == null) {
+            return SysUser.ACCOUNT_TYPE_HUMAN;
+        }
+        return SysUser.normalizeAccountType(sysUserMapper.selectAccountTypeById(userId));
+    }
+
+    /**
+     * 是否服务账号（{@code account_type='SERVICE'}）。
+     *
+     * <p>用于机器凭据链路（MCP 签发/校验）：只有明确 SERVICE 才返回 true，
+     * 未知/缺失/不存在都返回 false（fail-closed）。</p>
+     */
+    @Transactional(readOnly = true)
+    public boolean isServiceAccount(Long userId) {
+        return SysUser.ACCOUNT_TYPE_SERVICE.equals(getAccountType(userId));
+    }
+
+    /**
+     * 机器身份最小读（T5-06）：{@code id / username / status / accountType}，**不含 password**。
+     *
+     * <p>MCP 签发要判的三件事就在返回值里：{@code identity != null}（存在且未删除）、
+     * {@link AccountIdentity#enabled()}（启用）、{@link AccountIdentity#serviceAccount()}
+     * （{@code account_type='SERVICE'}）。不做数据范围过滤——机器凭据链路没有"当前登录用户"，
+     * 调用方（服务端签发接口）本身已受管理权限保护。</p>
+     */
+    @Transactional(readOnly = true)
+    public AccountIdentity getAccountIdentity(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        SysUser row = sysUserMapper.selectIdentityById(userId);
+        if (row == null) {
+            return null;
+        }
+        return new AccountIdentity(row.getId(), row.getUsername(), row.getStatus(), row.effectiveAccountType());
+    }
+
+    /**
+     * 机器身份最小投影：只带"MCP 签发需要判的三件事"，不带密码散列、不带部门/联系方式。
+     *
+     * <p>用 record 而不是复用 {@link SysUser}：实体里有 password，
+     * 让机器凭据链路只拿到它真正需要的字段，是这一层最省事也最有效的收窄。</p>
+     */
+    public record AccountIdentity(Long id, String username, Integer status, String accountType) {
+
+        /** 是否启用（{@code status = 1}）。 */
+        public boolean enabled() {
+            return status != null && status == 1;
+        }
+
+        /** 是否服务账号（只有明确 SERVICE 为 true）。 */
+        public boolean serviceAccount() {
+            return SysUser.ACCOUNT_TYPE_SERVICE.equals(accountType);
+        }
+
+        /** 是否可用于签发机器凭据：存在（调用方已判 null）+ 启用 + 服务账号。 */
+        public boolean machineIdentity() {
+            return enabled() && serviceAccount();
+        }
+    }
+
     /** 当前用户的启用角色编码，供认证与鉴权使用。 */
     @Transactional(readOnly = true)
     public List<String> listRoleCodesByUserId(Long userId) {

@@ -126,15 +126,35 @@
 
     <select id="selectEntityById" resultType="com.guarantee.system.entity.SysUser">
         SELECT id, username, password, real_name, dept_id, phone, email,
-               status, must_change_password AS mustChangePassword,
+               status, account_type AS accountType, must_change_password AS mustChangePassword,
                last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_user
         WHERE id = #{id}
     </select>
 
+    <!--
+      机器身份链路（T5-06 / MCP 签发与校验）：
+        · selectAccountTypeById —— 只要 account_type；
+        · selectIdentityById     —— 存在 + 启用 + 类型，一次拿齐，**且不含 password**。
+      两者都显式过滤 is_deleted = 0：机器凭据不该指向一个已被逻辑删除的账号。
+    -->
+    <select id="selectAccountTypeById" resultType="java.lang.String">
+        SELECT account_type
+        FROM sys_user
+        WHERE id = #{id}
+          AND is_deleted = 0
+    </select>
+
+    <select id="selectIdentityById" resultType="com.guarantee.system.entity.SysUser">
+        SELECT id, username, status, account_type AS accountType
+        FROM sys_user
+        WHERE id = #{id}
+          AND is_deleted = 0
+    </select>
+
     <select id="selectEntitiesByIds" resultType="com.guarantee.system.entity.SysUser">
         SELECT id, username, password, real_name, dept_id, phone, email,
-               status, must_change_password AS mustChangePassword,
+               status, account_type AS accountType, must_change_password AS mustChangePassword,
                last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_user
         WHERE id IN
@@ -188,7 +208,7 @@
     <!-- 仅登录校验使用：返回包含 password 散列的实体，禁止用于任何响应。 -->
     <select id="selectByUsername" resultType="com.guarantee.system.entity.SysUser">
         SELECT id, username, password, real_name, dept_id, phone, email,
-               status, must_change_password AS mustChangePassword,
+               status, account_type AS accountType, must_change_password AS mustChangePassword,
                last_login_at, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_user
         WHERE username = #{username}
@@ -362,7 +382,7 @@
     -->
     <select id="selectEntityByIdIncludingDeleted" resultType="com.guarantee.system.entity.SysUser">
         SELECT id, username, password, real_name, dept_id, phone, email,
-               status, last_login_at, created_at, updated_at,
+               status, account_type AS accountType, last_login_at, created_at, updated_at,
                is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_user WHERE id = #{id}
     </select>

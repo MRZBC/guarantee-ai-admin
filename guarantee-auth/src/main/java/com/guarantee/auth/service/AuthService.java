@@ -87,6 +87,16 @@ public class AuthService {
             log.warn("登录失败（账号已逻辑删除） username={}", username);
             throw new BizException(ResultCode.LOGIN_FAILED);
         }
+        // 服务账号（V10 account_type=SERVICE）**不参与登录**（T5-06）：它只作为机器身份被签发
+        // MCP 等凭据。允许它用密码登录等于把机器凭据面暴露到人类登录面（若该账号还持有
+        // ai:mcp:read 之类权限，人就能用一把"服务账号密码"拿到机器权限）。
+        // 提示与"密码错误"完全一致并计入失败次数：既避免账号枚举，也不让攻击者靠提示/锁定行为
+        // 区分出"这是一个服务账号"。
+        if (user.isServiceAccount()) {
+            loginAttemptGuard.recordFailure(username, clientIp);
+            log.warn("登录失败（服务账号不允许登录） username={}", username);
+            throw new BizException(ResultCode.LOGIN_FAILED);
+        }
         // 停用账号**不计入失败次数**：密码是正确的，不存在需要爆破的对象；
         // 且 ACCOUNT_DISABLED 本就已明确暴露账号存在（既有行为），无需在此维持不可区分性。
         if (user.getStatus() == null || user.getStatus() != 1) {

@@ -38,6 +38,22 @@ public interface SysUserMapper {
     /** 写操作/危险保护使用：按主键读取实体（含 status）。 */
     SysUser selectEntityById(@Param("id") Long id);
 
+    /**
+     * 机器身份链路专用（T5-06）：按 id 只读 {@code account_type}（HUMAN/SERVICE）。
+     *
+     * <p>不读取 password —— 服务账号校验（MCP 签发）与登录是两个面，
+     * 机器链路没有任何理由拿到人类凭据散列。已逻辑删除的行返回 null。</p>
+     */
+    String selectAccountTypeById(@Param("id") Long id);
+
+    /**
+     * 机器身份校验的最小投影：{@code id / username / status / account_type}（**不含 password**）。
+     *
+     * <p>MCP 签发要同时判"存在 + 启用 + account_type='SERVICE'"三件事，
+     * 一次查询拿齐，避免调用方自己拼两个读接口还漏掉其中一项。不存在/已删除返回 null。</p>
+     */
+    SysUser selectIdentityById(@Param("id") Long id);
+
     // ---------------- 逻辑删除（LD-02 / LD-04） ----------------
 
     /**
