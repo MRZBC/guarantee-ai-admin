@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.ai.config.mapper.AiConfigItemMapper">
+
+    <!--
+      value_type / default_value / min_value / max_value / enum_options / category / dangerous /
+      description 是 AiConfigCatalog 的**投影**：写库时由 Service 填充，读回时不参与判定。
+      把它们放在表里是为了运维直连读表时能看懂一行配置；唯一真源仍是 Java 目录。
+    -->
+    <sql id="cols">
+        id, config_key, config_value, value_type, default_value, min_value, max_value,
+        enum_options, category, dangerous, description, version, updated_by, updated_at,
+        is_deleted, deleted_at, deleted_by
+    </sql>
+
+    <select id="selectAll" resultType="com.guarantee.ai.config.AiConfigItem">
+        SELECT <include refid="cols"/>
+        FROM ai_config_item
+        WHERE is_deleted = 0
+        ORDER BY config_key
+    </select>
+
+    <select id="selectByKey" resultType="com.guarantee.ai.config.AiConfigItem">
+        SELECT <include refid="cols"/>
+        FROM ai_config_item
+        WHERE config_key = #{configKey} AND is_deleted = 0
+        LIMIT 1
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO ai_config_item
+            (config_key, config_value, value_type, default_value, min_value, max_value,
+             enum_options, category, dangerous, description, version, updated_by)
+        VALUES
+            (#{configKey}, #{configValue}, #{valueType}, #{defaultValue}, #{minValue}, #{maxValue},
+             #{enumOptions}, #{category}, #{dangerous}, #{description}, #{version}, #{updatedBy})
+    </insert>
+
+    <update id="updateValue">
+        UPDATE ai_config_item
+        SET config_value  = #{configValue},
+            value_type    = #{valueType},
+            default_value = #{defaultValue},
+            min_value     = #{minValue},
+            max_value     = #{maxValue},
+            enum_options  = #{enumOptions},
+            category      = #{category},
+            dangerous     = #{dangerous},
+            description   = #{description},
+            version       = #{version},
+            updated_by    = #{updatedBy}
+        WHERE config_key = #{configKey} AND is_deleted = 0
+    </update>
+
+    <select id="maxVersion" resultType="java.lang.Long">
+        SELECT MAX(version) FROM ai_config_item WHERE is_deleted = 0
+    </select>
+
+</mapper>

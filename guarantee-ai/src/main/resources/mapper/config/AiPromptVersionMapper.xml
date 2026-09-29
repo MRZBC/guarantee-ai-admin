@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.guarantee.ai.config.mapper.AiPromptVersionMapper">
+
+    <sql id="cols">
+        id, version_no, content, content_hash, status, note, created_by, created_at,
+        published_by, published_at, is_deleted, deleted_at, deleted_by
+    </sql>
+
+    <select id="selectAll" resultType="com.guarantee.ai.config.AiPromptVersion">
+        SELECT <include refid="cols"/>
+        FROM ai_prompt_version
+        WHERE is_deleted = 0
+        ORDER BY version_no DESC
+    </select>
+
+    <select id="selectByVersionNo" resultType="com.guarantee.ai.config.AiPromptVersion">
+        SELECT <include refid="cols"/>
+        FROM ai_prompt_version
+        WHERE version_no = #{versionNo} AND is_deleted = 0
+        LIMIT 1
+    </select>
+
+    <select id="selectPublished" resultType="com.guarantee.ai.config.AiPromptVersion">
+        SELECT <include refid="cols"/>
+        FROM ai_prompt_version
+        WHERE status = 'PUBLISHED' AND is_deleted = 0
+        ORDER BY version_no DESC
+        LIMIT 1
+    </select>
+
+    <select id="selectLatestDraft" resultType="com.guarantee.ai.config.AiPromptVersion">
+        SELECT <include refid="cols"/>
+        FROM ai_prompt_version
+        WHERE status = 'DRAFT' AND is_deleted = 0
+        ORDER BY version_no DESC
+        LIMIT 1
+    </select>
+
+    <select id="maxVersionNo" resultType="java.lang.Integer">
+        SELECT MAX(version_no) FROM ai_prompt_version WHERE is_deleted = 0
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO ai_prompt_version
+            (version_no, content, content_hash, status, note, created_by, published_by, published_at)
+        VALUES
+            (#{versionNo}, #{content}, #{contentHash}, #{status}, #{note}, #{createdBy},
+             #{publishedBy}, #{publishedAt})
+    </insert>
+
+    <!-- 已发布/已归档版本只读：内容更新只可能命中 DRAFT -->
+    <update id="updateDraft">
+        UPDATE ai_prompt_version
+        SET content      = #{content},
+            content_hash = #{contentHash},
+            note         = #{note}
+        WHERE version_no = #{versionNo} AND status = 'DRAFT' AND is_deleted = 0
+    </update>
+
+    <update id="archivePublishedExcept">
+        UPDATE ai_prompt_version
+        SET status = 'ARCHIVED'
+        WHERE status = 'PUBLISHED' AND version_no &lt;&gt; #{keepVersionNo} AND is_deleted = 0
+    </update>
+
+    <!-- 发布：DRAFT 首次发布 或 回滚（重新发布历史 ARCHIVED 版本）；内容不变，只改状态与发布人 -->
+    <update id="publish">
+        UPDATE ai_prompt_version
+        SET status       = 'PUBLISHED',
+            published_by = #{publishedBy},
+            published_at = NOW()
+        WHERE version_no = #{versionNo} AND status IN ('DRAFT', 'ARCHIVED') AND is_deleted = 0
+    </update>
+
+</mapper>
