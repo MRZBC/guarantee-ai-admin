@@ -53,6 +53,22 @@ public class OrderDistributionTool {
 
     private static final Logger log = LoggerFactory.getLogger(OrderDistributionTool.class);
 
+    /**
+     * 行政区划编码 -> 名称，仅用于让口径行更好读（{@code 区域：330000（浙江省）}）。
+     *
+     * <p>与 {@link OrderSummaryTool} / {@link OrderTrendTool} 里的同名表**刻意保持同源**：
+     * 这里不再抽公共类，是为了让 M2.x 并行改动时各工具互不牵连；新增省份时几处一起补。</p>
+     */
+    private static final Map<String, String> REGION_NAMES = Map.ofEntries(
+            Map.entry("110000", "北京市"),
+            Map.entry("310000", "上海市"),
+            Map.entry("320000", "江苏省"),
+            Map.entry("330000", "浙江省"),
+            Map.entry("370000", "山东省"),
+            Map.entry("420000", "湖北省"),
+            Map.entry("440000", "广东省"),
+            Map.entry("510000", "四川省"));
+
     /** 默认条数：够看出"主要变化"，又不至于挤掉推理用的上下文。 */
     static final int DEFAULT_LIMIT = 10;
 
@@ -105,8 +121,12 @@ public class OrderDistributionTool {
             description = """
                     按**单个维度**统计订单分布：区域（REGION）/ 机构（ORG）/ 险种（INSURANCE），
                     返回该维度下按订单量倒序的明细（订单量、保函金额合计、保费合计、去重企业数）。
-                    当用户问“哪些区域/机构/险种贡献最大”“某维度有什么变化/排名”时使用本工具。
+                    可先用 regionCode / orgId 过滤、再按维度分组：例如「浙江省的险种结构」
+                    = dimension=INSURANCE + regionCode=330000 **一次调用**即可，不要拆成多次。
+                    区域编码是**层级前缀匹配**：选省（330000）含其全部市/区县，选市（330100）含其区县。
+                    当用户问“哪些区域/机构/险种贡献最大”“某区域的险种结构/某机构下各险种”时使用本工具。
                     比较两个时间区间（例如两个季度）时，对同一维度**各调用一次**再对比即可。
+                    趋势/拐点/逐月变化用 queryOrderTrend，不要用本工具的两个区间相减假装趋势。
                     需要总计（不分组）时用 queryOrderSummary；不要为了找变化逐个区域去调 queryOrderSummary。
                     日期必须使用 yyyy-MM-dd 的明确格式，禁止传入“本季度”“上个月”这类相对表述。""")
     public OrderDistributionToolResult queryOrderDistribution(
@@ -118,6 +138,10 @@ public class OrderDistributionTool {
             String startDate,
             @ToolParam(description = "申请结束日期，格式 yyyy-MM-dd（含当天）。不传表示不限", required = false)
             String endDate,
+            @ToolParam(description = "行政区划编码，例如 330000 表示浙江省；按层级前缀匹配（选省含其全部市/区县）。不传表示不限", required = false)
+            String regionCode,
+            @ToolParam(description = "承保机构 ID。不传表示不限", required = false)
+            Long orgId,
             @ToolParam(description = "返回条数，默认 10，上限 50。只影响明细条数，不影响口径", required = false)
             Integer limit) {
 
@@ -129,10 +153,14 @@ public class OrderDistributionTool {
         }
         int size = normalizeLimit(limit);
 
+        // 过滤条件与页面「数据概览」共用同一个 AnalysisCriteria + criteriaFilter 片段，
+        // 因此不新增 SQL：区域是层级前缀匹配（选省 = 含其全部市/区县），机构按 org_id 精确匹配。
         AnalysisCriteria criteria = new AnalysisCriteria();
         criteria.setOrderType(orderType);
         criteria.setStartDate(start);
         criteria.setEndDate(end);
+        criteria.setRegionCode(regionCode);
+        criteria.setOrgId(orgId);
 
         List<OrderDistributionToolResult.DistributionItem> items = new ArrayList<>();
         boolean capped;
@@ -156,9 +184,9 @@ public class OrderDistributionTool {
         }
 
         String type = criteria.normalizedOrderType();
-        String dataSource = buildDataSource(dim, type, start, end, size);
-        log.info("Tool queryOrderDistribution 执行完成 dimension={} orderType={} start={} end={} limit={} 返回={} 条",
-                dim, type, start, end, size, items.size());
+        String dataSource = buildDataSource(dim, type, start, end, regionCode, orgId, size);
+        log.info("Tool queryOrderDistribution 执行完成 dimension={} orderType={} start={} end={} region={} orgId={} limit={} 返回={} 条",
+                dim, type, start, end, regionCode, orgId, size, items.size());
 
         ToolResultMeta meta = capped
                 ? ToolResultMeta.truncated(dataSource,
@@ -208,12 +236,27 @@ public class OrderDistributionTool {
             "ALL", "全部险种");
 
     private static String buildDataSource(Dimension dim, String orderType, LocalDate start,
-                                          LocalDate end, int size) {
+                                          LocalDate end, String regionCode, Long orgId, int size) {
         return DataSourceText.of("订单分布", DataSourceText.parts(
                 "维度", dim.label(),
                 "orderType", ORDER_TYPE_NAMES.getOrDefault(orderType, orderType),
                 "时间区间", (start == null ? "不限" : start) + " ~ " + (end == null ? "不限" : end),
+                "region", regionLabel(regionCode),
+                "orgId", orgId,
                 "条数", "前 " + size + " 条"));
+    }
+
+    /**
+     * 区域口径：{@code 330000（浙江省）}；编码不在名称表里时只回显编码（宁可少一个括号，
+     * 也不要猜一个错省份）。
+     */
+    static String regionLabel(String regionCode) {
+        if (regionCode == null || regionCode.isBlank()) {
+            return null;
+        }
+        String code = regionCode.trim();
+        String name = REGION_NAMES.get(code);
+        return name == null ? code : code + "（" + name + "）";
     }
 
     static int normalizeLimit(Integer limit) {

@@ -35,6 +35,9 @@ import static org.mockito.Mockito.when;
  *   <li>维度写法容错（大小写、中文别名），非法值必须报可读错误而不是静默查成别的维度；</li>
  *   <li>条数与截断如实告知（{@code truncated} 不为空时模型才知道"只看过前 N 名"）。</li>
  * </ol>
+ *
+ * <p>阶段二收尾（REQ-BA-01）追加第四件事：交叉过滤必须**先过滤再分组**——
+ * 「浙江省的险种结构」是一次调用，而不是让模型逐个对象去试。</p>
  */
 class OrderDistributionToolTest {
 
@@ -55,7 +58,7 @@ class OrderDistributionToolTest {
                         region("320000", "江苏省", 3647, "21321126282.02", "165734038.23", 758)));
 
         OrderDistributionToolResult result = tool.queryOrderDistribution(
-                "REGION", "TENDER", "2026-04-01", "2026-06-30", null);
+                "REGION", "TENDER", "2026-04-01", "2026-06-30", null, null, null);
 
         assertThat(result.dimension()).isEqualTo("REGION");
         assertThat(result.orderType()).isEqualTo("TENDER");
@@ -79,7 +82,7 @@ class OrderDistributionToolTest {
                 .thenReturn(List.of(institution("ORG3301", "浙江省第1保函运营机构", 922, 621)));
 
         OrderDistributionToolResult result = tool.queryOrderDistribution(
-                "机构", "TENDER", "2026-04-01", "2026-06-30", 5);
+                "机构", "TENDER", "2026-04-01", "2026-06-30", null, null, 5);
 
         assertThat(result.dimension()).isEqualTo("ORG");
         assertThat(result.items()).singleElement().satisfies(item -> {
@@ -106,7 +109,7 @@ class OrderDistributionToolTest {
         when(orderAnalysisService.insuranceDistribution(any())).thenReturn(rows);
 
         OrderDistributionToolResult result = tool.queryOrderDistribution(
-                "INSURANCE", "ALL", null, null, 3);
+                "INSURANCE", "ALL", null, null, null, null, 3);
 
         assertThat(result.items()).hasSize(3);
         assertThat(result.items()).extracting(OrderDistributionToolResult.DistributionItem::rank)
@@ -119,23 +122,51 @@ class OrderDistributionToolTest {
     }
 
     @Test
+    @DisplayName("交叉过滤：regionCode/orgId 透传到 criteria（先过滤再分组），口径行带区域名与机构 ID")
+    void crossFilterGoesToCriteriaAndDataSource() {
+        when(orderAnalysisService.insuranceDistribution(any())).thenReturn(List.of());
+
+        OrderDistributionToolResult result = tool.queryOrderDistribution(
+                "INSURANCE", "TENDER", "2026-04-01", "2026-06-30", "330000", 2L, 10);
+
+        // 一次调用就把"浙江省 + 某机构 + 投标险种结构"查齐——这才是 REQ-BA-01 要的形态，
+        // 而不是让模型先查区域、再逐个险种去试。
+        ArgumentCaptor<AnalysisCriteria> captor = ArgumentCaptor.forClass(AnalysisCriteria.class);
+        verify(orderAnalysisService).insuranceDistribution(captor.capture());
+        AnalysisCriteria criteria = captor.getValue();
+        assertThat(criteria.getRegionCode())
+                .as("区域过滤必须进 criteria，否则查出来的是全国口径")
+                .isEqualTo("330000");
+        assertThat(criteria.getOrgId()).isEqualTo(2L);
+        assertThat(criteria.getStartDate()).isEqualTo(LocalDate.of(2026, 4, 1));
+        assertThat(criteria.getEndDate()).isEqualTo(LocalDate.of(2026, 6, 30));
+
+        assertThat(result.meta().dataSource())
+                .as("口径行要能让用户看出'这是浙江省、这家机构的数字'")
+                .contains("区域：330000（浙江省）")
+                .contains("机构：2")
+                .doesNotContain("regionCode")
+                .doesNotContain("orgId");
+    }
+
+    @Test
     @DisplayName("维度写法容错：大小写与中文别名都认，非法值给可读错误")
     void dimensionAcceptsAliasesAndRejectsUnknown() {
         when(orderAnalysisService.regionDistribution(any(), anyInt())).thenReturn(List.of());
         when(orderAnalysisService.institutionDistribution(any(), anyInt())).thenReturn(List.of());
 
-        assertThat(tool.queryOrderDistribution("region", null, null, null, null).dimension())
+        assertThat(tool.queryOrderDistribution("region", null, null, null, null, null, null).dimension())
                 .isEqualTo("REGION");
-        assertThat(tool.queryOrderDistribution(" 区域 ", null, null, null, null).dimension())
+        assertThat(tool.queryOrderDistribution(" 区域 ", null, null, null, null, null, null).dimension())
                 .isEqualTo("REGION");
-        assertThat(tool.queryOrderDistribution("Institution", null, null, null, null).dimension())
+        assertThat(tool.queryOrderDistribution("Institution", null, null, null, null, null, null).dimension())
                 .isEqualTo("ORG");
 
-        assertThatThrownBy(() -> tool.queryOrderDistribution("季度", null, null, null, null))
+        assertThatThrownBy(() -> tool.queryOrderDistribution("季度", null, null, null, null, null, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("REGION")
                 .hasMessageContaining("险种");
-        assertThatThrownBy(() -> tool.queryOrderDistribution(null, null, null, null, null))
+        assertThatThrownBy(() -> tool.queryOrderDistribution(null, null, null, null, null, null, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -155,7 +186,7 @@ class OrderDistributionToolTest {
         when(orderAnalysisService.regionDistribution(any(), anyInt())).thenReturn(List.of());
 
         OrderDistributionToolResult result = tool.queryOrderDistribution(
-                "REGION", "TENDER", "2026-04-01", "2026-06-30", 10);
+                "REGION", "TENDER", "2026-04-01", "2026-06-30", null, null, 10);
 
         ArgumentCaptor<AnalysisCriteria> captor = ArgumentCaptor.forClass(AnalysisCriteria.class);
         verify(orderAnalysisService).regionDistribution(captor.capture(), anyInt());
@@ -176,7 +207,7 @@ class OrderDistributionToolTest {
     @DisplayName("起始日期晚于结束日期：直接拒绝，不发出无意义的查询")
     void invertedDateRangeIsRejected() {
         assertThatThrownBy(() -> tool.queryOrderDistribution(
-                "REGION", "TENDER", "2026-06-30", "2026-04-01", null))
+                "REGION", "TENDER", "2026-06-30", "2026-04-01", null, null, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("不能晚于");
     }
@@ -190,13 +221,16 @@ class OrderDistributionToolTest {
         assertThat(callbacks).singleElement().satisfies(callback -> {
             assertThat(callback.getToolDefinition().name()).isEqualTo("queryOrderDistribution");
             assertThat(callback.getToolDefinition().inputSchema())
-                    .as("模型只能按 schema 传参：维度/订单类型/日期/条数都要出现")
+                    .as("模型只能按 schema 传参：维度/订单类型/日期/区域/机构/条数都要出现")
                     .contains("dimension").contains("orderType")
-                    .contains("startDate").contains("endDate").contains("limit");
+                    .contains("startDate").contains("endDate")
+                    .contains("regionCode").contains("orgId").contains("limit");
             assertThat(callback.getToolDefinition().description())
-                    .as("描述里必须点名三个维度与「对比就各调一次」，否则模型会退回去逐个查汇总")
+                    .as("描述里必须点名三个维度、「对比就各调一次」以及区域前缀匹配，"
+                            + "否则模型会退回去逐个查汇总或把「某区域的险种结构」拆成多次")
                     .contains("REGION").contains("ORG").contains("INSURANCE")
-                    .contains("queryOrderSummary");
+                    .contains("queryOrderSummary")
+                    .contains("层级前缀");
         });
     }
 

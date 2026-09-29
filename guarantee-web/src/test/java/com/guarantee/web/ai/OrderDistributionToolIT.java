@@ -59,7 +59,7 @@ class OrderDistributionToolIT {
     @DisplayName("区域维度：与数据概览的分布口径逐字段一致，且合计等于同区间的投标订单总量")
     void regionDistributionMatchesAnalysisModule() {
         OrderDistributionToolResult result =
-                tool.queryOrderDistribution("REGION", "TENDER", "2026-04-01", "2026-06-30", null);
+                tool.queryOrderDistribution("REGION", "TENDER", "2026-04-01", "2026-06-30", null, null, null);
 
         List<OrderRegionVO> expected = orderAnalysisService.regionDistribution(regionCriteria(), 10);
 
@@ -101,7 +101,7 @@ class OrderDistributionToolIT {
     @DisplayName("机构维度：与机构分布口径一致，且机构名来自机构表而不是编码")
     void orgDistributionMatchesAnalysisModule() {
         OrderDistributionToolResult result =
-                tool.queryOrderDistribution("ORG", "TENDER", "2026-04-01", "2026-06-30", 5);
+                tool.queryOrderDistribution("ORG", "TENDER", "2026-04-01", "2026-06-30", null, null, 5);
 
         List<OrderInstitutionVO> expected = orderAnalysisService.institutionDistribution(regionCriteria(), 5);
 
@@ -120,7 +120,7 @@ class OrderDistributionToolIT {
     @DisplayName("险种维度：与险种分布口径一致，且按订单量倒序")
     void insuranceDistributionMatchesAnalysisModule() {
         OrderDistributionToolResult result =
-                tool.queryOrderDistribution("INSURANCE", "TENDER", null, null, null);
+                tool.queryOrderDistribution("INSURANCE", "TENDER", null, null, null, null, null);
 
         // 必须用**同一个订单类型**取期望值：ALL 会把履约险种也带进来，
         // 拿它去比 TENDER 的结果会得到"排名对不上"的假失败（本用例第一版就踩了这个）
@@ -143,12 +143,58 @@ class OrderDistributionToolIT {
     }
 
     @Test
+    @DisplayName("交叉过滤：带 regionCode 的险种分布 = 同条件 Service 逐字段一致，且与区域维度合计一致")
+    void insuranceDistributionWithRegionFilterMatchesAnalysisModule() {
+        // REQ-BA-01 的样例：「浙江省 Q2 各险种结构」= 一次调用（dimension=INSURANCE + regionCode）
+        OrderDistributionToolResult result = tool.queryOrderDistribution(
+                "INSURANCE", "TENDER", "2026-04-01", "2026-06-30", "330000", null, 50);
+
+        AnalysisCriteria criteria = new AnalysisCriteria();
+        criteria.setOrderType("TENDER");
+        criteria.setStartDate(Q2_START);
+        criteria.setEndDate(Q2_END);
+        criteria.setRegionCode("330000");
+        List<OrderInsuranceVO> expected = orderAnalysisService.insuranceDistribution(criteria);
+
+        assertThat(expected).as("浙江省是演示数据权重最高的地区，为空说明演示数据没初始化")
+                .isNotEmpty();
+        assertThat(result.items()).hasSameSizeAs(expected);
+        for (int i = 0; i < expected.size(); i++) {
+            OrderDistributionToolResult.DistributionItem actual = result.items().get(i);
+            OrderInsuranceVO vo = expected.get(i);
+            assertThat(actual.rank()).isEqualTo(i + 1);
+            assertThat(actual.code()).isEqualTo(vo.getTypeCode());
+            assertThat(actual.name()).isEqualTo(vo.getTypeName()).isNotBlank();
+            assertThat(actual.orderCount()).isEqualTo(vo.getOrderCount());
+            assertThat(actual.guaranteeAmount()).isEqualByComparingTo(vo.getGuaranteeAmount());
+            assertThat(actual.premiumAmount()).isEqualByComparingTo(vo.getPremiumAmount());
+            assertThat(actual.enterpriseCount()).as("险种维度没有去重企业数的语义").isNull();
+        }
+
+        // 跨维度口径：把同一批浙江省订单按险种切开的合计，必须等于按区域切开的那个省的总量。
+        // 对不上就说明"区域前缀过滤"只作用在部分查询上（那正是助手与页面对不上的根源）。
+        List<OrderRegionVO> zhejiang = orderAnalysisService.regionDistribution(criteria, 10);
+        assertThat(zhejiang).as("区域维度带上 regionCode=330000 后应只剩这一行").hasSize(1);
+        long byInsurance = result.items().stream()
+                .mapToLong(OrderDistributionToolResult.DistributionItem::orderCount).sum();
+        assertThat(byInsurance)
+                .as("浙江省各险种订单合计必须等于浙江省总量")
+                .isEqualTo(zhejiang.get(0).getOrderCount());
+
+        assertThat(result.meta().dataSource())
+                .contains("订单分布").contains("维度：险种").contains("区域：330000（浙江省）")
+                .contains("2026-04-01 ~ 2026-06-30")
+                .doesNotContain("queryOrderDistribution").doesNotContain("regionCode")
+                .doesNotContain("orderType");
+    }
+
+    @Test
     @DisplayName("只持 ai:chat 的只读用户也能拿到该工具（与 queryOrderSummary 同权限口径，不新增权限码）")
     void registryExposesToolToPlainChatUsers() {
         assertThat(registry.availableToolNames(List.of("ai:chat")))
                 .as("现场提问的用户（运营/只读身份）本来就看不到订单分布的替代品，"
                         + "这里必须同样可见，否则又是一次「为什么他不能」")
-                .contains("queryOrderDistribution", "queryOrderSummary");
+                .contains("queryOrderDistribution", "queryOrderSummary", "queryOrderTrend");
     }
 
     private static AnalysisCriteria regionCriteria() {

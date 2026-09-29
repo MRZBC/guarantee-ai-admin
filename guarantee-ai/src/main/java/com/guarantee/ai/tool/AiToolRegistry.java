@@ -49,6 +49,7 @@ public class AiToolRegistry {
 
     public AiToolRegistry(OrderSummaryTool orderSummaryTool,
                           OrderDistributionTool orderDistributionTool,
+                          OrderTrendTool orderTrendTool,
                           OrgQueryTool orgQueryTool,
                           DepartmentQueryTool departmentQueryTool,
                           UserQueryTool userQueryTool,
@@ -75,6 +76,10 @@ public class AiToolRegistry {
         // 页面侧对应的数据概览接口同样只要求登录（无 @PreAuthorize），因此不新增权限码、
         // 不改权限矩阵——"要不要在系统域加权限"是既有未决项，不在这里单方面收紧。
         readTools.add(new ToolDescriptor(orderDistributionTool));
+        // 时间趋势（逐日/逐月/逐年序列）。与 queryOrderSummary / queryOrderDistribution
+        // 同属订单只读域：页面侧的数据概览趋势接口同样只要求登录，因此同权限口径、
+        // 不新增权限码（§5.1.6）。
+        readTools.add(new ToolDescriptor(orderTrendTool));
         readTools.add(new ToolDescriptor(orgQueryTool, Permissions.ORG_VIEW));
         readTools.add(new ToolDescriptor(departmentQueryTool, Permissions.DEPT_VIEW));
         readTools.add(new ToolDescriptor(userQueryTool, Permissions.USER_VIEW));
