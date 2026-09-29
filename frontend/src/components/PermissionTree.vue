@@ -85,7 +85,8 @@ const DANGER_REASONS: Record<string, string> = {
   'system:user:assign-role': '可给任意用户分配任意角色，等价于间接提权',
   'system:audit:view': '可查看全站操作审计，含他人操作的字段级前后值',
   'system:session:kick': '可强制其他用户下线',
-  'ai:system:write': '打开 AI 助手的全部写能力（提案通道），是 propose* 工具的总开关'
+  'ai:system:write': '打开 AI 助手的全部写能力（提案通道），是 propose* 工具的总开关',
+  'ai:config:update': '可改全站 AI 助手的模型/温度/提示词与能力开关（含一键关闭写能力），影响所有用户的回答'
 }
 
 /** 分组节点 key 前缀：与真实权限码区分，便于提交前过滤。 */

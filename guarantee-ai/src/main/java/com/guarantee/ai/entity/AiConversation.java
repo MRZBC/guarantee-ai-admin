@@ -13,6 +13,19 @@ public class AiConversation {
     private Long userId;
     private String title;
     private String model;
+    /**
+     * 本会话最近一轮回答所用的提示词版本号（{@code ai_prompt_version.version_no}）。
+     *
+     * <p>回答级回溯（REQ-CFG-05 / AC-CFG-09）：只有"这一轮到底基于哪一版提示词"可查，
+     * 才能在提示词改坏后定位到受影响的回答。未使用 DB 版本（回落 classpath 真源）时为 null。</p>
+     */
+    private Integer promptVersion;
+    /**
+     * 本会话最近一轮回答所用的 AI 配置快照版本号（{@code ai_config_item.version} 最大值）。
+     *
+     * <p>与 {@link #promptVersion} 同属回答级回溯；写入方是 T4-01（AiChatService 收尾时）。</p>
+     */
+    private Long configVersion;
     /** ACTIVE / ARCHIVED */
     private String status;
     private Integer messageCount;

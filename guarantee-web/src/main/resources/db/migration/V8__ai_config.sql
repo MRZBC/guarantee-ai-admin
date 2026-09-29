@@ -1,7 +1,12 @@
 -- =====================================================================
 --  第四阶段：AI 配置底座（T4-00 / REQ-CFG-01、REQ-CFG-02）
 --
---  依据：docs/REQ-第四阶段-AI配置与确认审计.md §6.1（表结构）、§6.2（配置项总表）
+--  依据：docs/REQ-第四阶段-AI配置与确认审计.md §6.1（表结构）、§6.2（配置项总表）、§6.4（回答级回溯）
+--
+--  本脚本含**两部分**：
+--    第 1 部分（T4-00）：新建 ai_config_item / ai_prompt_version 两张表；
+--    第 2 部分（T4-02）：ai_conversation 追加回答级回溯列 prompt_version / config_version。
+--    V8 从未在真库执行过，故回溯列直接并入本文件而不另开 V9（V9 留给第五阶段观测、V10 留给 MCP）。
 --
 --  新增两张表（本阶段表数 20 → 22，与第三阶段 V7 的顺序无关）：
 --    1) ai_config_item     配置项的"当前值"；元数据以 AiConfigCatalog 为唯一真源，
@@ -18,6 +23,8 @@
 --    mysql -h 127.0.0.1 -P 3307 -u guarantee -p guarantee_ai_admin < <本文件>
 --
 --  回滚（一般不需要；保留供演练）：
+--    ALTER TABLE ai_conversation DROP COLUMN prompt_version;
+--    ALTER TABLE ai_conversation DROP COLUMN config_version;
 --    DROP TABLE IF EXISTS ai_prompt_version;
 --    DROP TABLE IF EXISTS ai_config_item;
 -- =====================================================================
@@ -79,7 +86,31 @@ CREATE TABLE IF NOT EXISTS ai_prompt_version (
     UNIQUE KEY uk_ai_prompt_version_no (version_no, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000')))
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'AI 提示词版本';
 
--- 复核（两个计数都应为 1）
+-- ---------------------------------------------------------------------
+-- 3) 回答级回溯列（REQ-CFG-05 / §6.4）
+--
+--    每轮对话可查到"用的是哪一版提示词 + 哪一版配置"：
+--      prompt_version  当前发布版提示词版本号（ai_prompt_version.version_no，未用真源时为 NULL）
+--      config_version  本轮生效的配置快照版本（ai_config_item.version 最大值，未配置时为 0）
+--    写入方：config_version 由 T4-01（AiChatService 收尾时写）、prompt_version 由 T4-03 写。
+--
+--    MySQL 8.0 不支持 ADD COLUMN IF NOT EXISTS，沿用 V6 的 information_schema + PREPARE 幂等写法。
+-- ---------------------------------------------------------------------
+SET @n_ai_conv_prompt_version := (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_conversation'
+      AND COLUMN_NAME = 'prompt_version');
+SET @ddl := IF(@n_ai_conv_prompt_version = 1, 'DO 0',
+    'ALTER TABLE ai_conversation ADD COLUMN prompt_version INT NULL COMMENT ''回答所用的提示词版本号（ai_prompt_version.version_no）''');
+PREPARE ai_conv_pv_stmt FROM @ddl; EXECUTE ai_conv_pv_stmt; DEALLOCATE PREPARE ai_conv_pv_stmt;
+
+SET @n_ai_conv_config_version := (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_conversation'
+      AND COLUMN_NAME = 'config_version');
+SET @ddl := IF(@n_ai_conv_config_version = 1, 'DO 0',
+    'ALTER TABLE ai_conversation ADD COLUMN config_version BIGINT NULL COMMENT ''回答所用的 AI 配置快照版本号''');
+PREPARE ai_conv_cv_stmt FROM @ddl; EXECUTE ai_conv_cv_stmt; DEALLOCATE PREPARE ai_conv_cv_stmt;
+
+-- 复核（前两项应为 1，第三项应为 2）
 SELECT COUNT(*) AS ai_config_item_present
 FROM information_schema.TABLES
 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_config_item';
@@ -87,3 +118,8 @@ WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_config_item';
 SELECT COUNT(*) AS ai_prompt_version_present
 FROM information_schema.TABLES
 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_prompt_version';
+
+SELECT COUNT(*) AS ai_conversation_version_trace_columns
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_conversation'
+  AND COLUMN_NAME IN ('prompt_version', 'config_version');

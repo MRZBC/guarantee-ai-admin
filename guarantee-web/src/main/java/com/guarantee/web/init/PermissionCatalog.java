@@ -76,6 +76,11 @@ public final class PermissionCatalog {
             // 由服务端据此决定是否把 tool_call 事件推给浏览器，因此是真正的可见性边界。
             // 默认只给 ADMIN —— "谁是开发者"就在这一行调整。
             {"ai:debug:view", "AI 调试信息", null},
+            // AI 配置（第四阶段 REQ-CFG-10）：ADMIN 默认拥有，其余角色默认无。
+            // ai:config:update 是危险权限（能改变全站助手行为面），
+            // 其危险说明同步在 PermissionTree.vue 与 docs/REQ-角色管理与权限分配页面.md §4.3。
+            {"ai:config:view", "AI 配置", "/system/ai-config"},
+            {"ai:config:update", "AI 配置修改", null},
     };
 
     /** 角色编码 / 角色名称 / 描述，数组下标 + 1 即角色 id（与初始化顺序一致）。 */

@@ -4,12 +4,15 @@
 <mapper namespace="com.guarantee.ai.mapper.AiConversationMapper">
 
     <sql id="cols">
-        id, conversation_no, user_id, title, model, status, message_count, created_at, updated_at
+        id, conversation_no, user_id, title, model, prompt_version, config_version,
+        status, message_count, created_at, updated_at
     </sql>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO ai_conversation (conversation_no, user_id, title, model, status, message_count)
-        VALUES (#{conversationNo}, #{userId}, #{title}, #{model}, #{status}, #{messageCount})
+        INSERT INTO ai_conversation (conversation_no, user_id, title, model, prompt_version,
+                                     config_version, status, message_count)
+        VALUES (#{conversationNo}, #{userId}, #{title}, #{model}, #{promptVersion},
+                #{configVersion}, #{status}, #{messageCount})
     </insert>
 
     <select id="selectById" resultType="com.guarantee.ai.entity.AiConversation">
@@ -31,6 +34,18 @@
     <update id="incrementMessageCount">
         UPDATE ai_conversation
         SET message_count = message_count + #{delta}, updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{id}
+    </update>
+
+    <!--
+      回答级回溯（REQ-CFG-05 / AC-CFG-09）：记录"这一轮回答基于哪一版提示词与哪一版配置"。
+      只更新这两列，不触碰 message_count / updated_at —— 它是给回溯用的元数据，
+      不该把会话的活跃时间戳带偏（顺序上它在 incrementMessageCount 之后调用）。
+    -->
+    <update id="updateVersionTrace">
+        UPDATE ai_conversation
+        SET prompt_version = #{promptVersion},
+            config_version = #{configVersion}
         WHERE id = #{id}
     </update>
 

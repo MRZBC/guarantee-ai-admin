@@ -44,12 +44,25 @@ public class OperationAuditService {
     /** 时间跨度上限（SYS-A-17）。 */
     public static final int MAX_RANGE_DAYS = 90;
 
+    /** 配置变更动作（REQ-CFG-05）：改模型参数 / 提示词 / 能力开关都记这个动作。 */
+    public static final String ACTION_CONFIG_UPDATE = "CONFIG_UPDATE";
+
+    /** 配置类目标类型（REQ-CFG-05）。 */
+    public static final String TARGET_TYPE_AI_CONFIG = "AI_CONFIG";
+
     /** 查询默认/最大条数。 */
     public static final int DEFAULT_LIMIT = 50;
     public static final int MAX_LIMIT = 200;
 
-    /** 仅 ADMIN 可见的目标类型（权限主数据，SYS-A-10）。 */
-    private static final List<String> ADMIN_ONLY_TARGET_TYPES = List.of("ROLE", "PERMISSION");
+    /**
+     * 仅 ADMIN 可见的目标类型。
+     *
+     * <p>{@code ROLE}/{@code PERMISSION} 是权限主数据（SYS-A-10）；{@code AI_CONFIG}
+     * 是第四阶段新增的配置类目标（REQ-CFG-05 / §5.1.5 的非 ADMIN 白名单口径）——
+     * 它的 before/after 里含全站助手行为面的参数，与"谁能改配置"同档，
+     * 因此非 ADMIN 显式查询时**明确 403**，而不是返回一个空列表（后者会让人以为"没有变更"）。</p>
+     */
+    private static final List<String> ADMIN_ONLY_TARGET_TYPES = List.of("ROLE", "PERMISSION", "AI_CONFIG");
 
     /**
      * 非 ADMIN 可见的目标类型。

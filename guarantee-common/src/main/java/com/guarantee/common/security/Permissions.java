@@ -37,6 +37,23 @@ public final class Permissions {
      */
     public static final String AI_DEBUG_VIEW = "ai:debug:view";
 
+    /**
+     * 查看 AI 配置（模型参数 / 提示词 / 能力开关 / 预算参数）与配置变更历史（REQ-CFG-10）。
+     *
+     * <p>ADMIN 默认拥有，其余角色默认无。</p>
+     */
+    public static final String AI_CONFIG_VIEW = "ai:config:view";
+
+    /**
+     * 修改 AI 配置（REQ-CFG-10）。
+     *
+     * <p><b>危险权限</b>（与 {@link #AI_SYSTEM_WRITE} 同档）：它能改变**全站**助手的行为面——
+     * 换模型/调温度会改变所有人的回答，改 `tools.proposal.enabled` 会一次性关掉所有账号
+     * （含 ADMIN）的写能力，改 `model.api-key-ref` 会让助手整体不可用。因此默认只授予 ADMIN，
+     * 且写接口一律 `@PreAuthorize`，不能只靠前端隐藏。</p>
+     */
+    public static final String AI_CONFIG_UPDATE = "ai:config:update";
+
     // ---------------- 险种 ----------------
 
     public static final String INSURANCE_VIEW = "system:insurance:view";

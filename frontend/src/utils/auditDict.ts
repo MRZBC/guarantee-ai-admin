@@ -54,7 +54,10 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   ASSIGN_PERMISSIONS: '权限授权',
   PROPOSAL_CREATED: '提案创建',
   CHANGE_PASSWORD: '修改密码',
-  RESET_PASSWORD: '重置密码'
+  RESET_PASSWORD: '重置密码',
+  // 第四阶段：配置变更（REQ-CFG-05）。改模型/提示词/能力开关都是这一条动作，
+  // 目标类型是 AI_CONFIG，具体改了哪一项看 target_name 与 before → after。
+  CONFIG_UPDATE: '配置变更'
 }
 
 /** 目标类型码 → 中文。 */
@@ -64,7 +67,8 @@ export const AUDIT_TARGET_TYPE_LABELS: Record<string, string> = {
   DEPT: '部门',
   ROLE: '角色',
   PERMISSION: '权限',
-  INSURANCE_TYPE: '险种'
+  INSURANCE_TYPE: '险种',
+  AI_CONFIG: 'AI 配置'
 }
 
 /** 结果码 → 中文。 */
@@ -89,7 +93,10 @@ export const AUDIT_TARGET_TYPES_ADMIN = [
   'DEPT',
   'ROLE',
   'PERMISSION',
-  'INSURANCE_TYPE'
+  'INSURANCE_TYPE',
+  // 第四阶段：AI_CONFIG 属后端 ADMIN-only 目标类型（与 ROLE/PERMISSION 同档），
+  // 非 ADMIN 显式查询会拿到 403，因此只出现在 ADMIN 的筛选选项里。
+  'AI_CONFIG'
 ] as const
 
 export const AUDIT_TARGET_TYPES_NON_ADMIN = ['USER', 'ORG', 'DEPT'] as const
