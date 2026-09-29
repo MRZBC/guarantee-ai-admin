@@ -593,4 +593,62 @@ CREATE TABLE IF NOT EXISTS ai_knowledge_import_log (
     KEY idx_ai_knowledge_log_no (knowledge_no, imported_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '知识真源导入留痕（只追加，不修改）';
 
+-- ---------------------------------------------------------------------
+-- 四期：AI 配置底座（T4-00 / REQ-CFG-01、REQ-CFG-02）
+--
+-- 与 db/migration/V8__ai_config.sql **逐字同源**（V8 供存量库手工执行，这里供新库自举）。
+-- 两处内容必须一致：改一处就要改另一处，否则新库/存量库会长出两套结构。
+--
+--   ai_config_item     配置项的"当前值"。元数据（类型/默认值/范围/危险标记）以
+--                      AiConfigCatalog 为唯一真源，行上的 *_value/type/category 列是
+--                      写库时生成的**投影**，只为运维直接读表时看得懂，应用读回时不依赖。
+--                      version = 配置版本号，快照版本取未删除行的最大值（"版本变化→重载"的判据）。
+--   ai_prompt_version  提示词版本（DRAFT → PUBLISHED → ARCHIVED）；"同一时刻只有一个 PUBLISHED"
+--                      由服务层保证（MySQL 无部分唯一索引）。已发布版本只读。
+-- ---------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS ai_config_item (
+    id            BIGINT        NOT NULL AUTO_INCREMENT,
+    config_key    VARCHAR(64)   NOT NULL COMMENT '配置键（唯一，点号分层，如 budget.max-rounds）',
+    config_value  TEXT          NULL     COMMENT '当前值；NULL 表示无显式值（回落 AiConfigCatalog 默认值）',
+    value_type    VARCHAR(16)   NOT NULL DEFAULT 'STRING' COMMENT '值类型投影 STRING/INT/DECIMAL/BOOLEAN/ENUM',
+    default_value TEXT          NULL     COMMENT '默认值投影（NULL 表示未设置、沿用框架默认）',
+    min_value     DECIMAL(20,6) NULL     COMMENT '允许范围下界投影（含）',
+    max_value     DECIMAL(20,6) NULL     COMMENT '允许范围上界投影（含）',
+    enum_options  VARCHAR(512)  NULL     COMMENT 'ENUM 可选值投影（逗号分隔）',
+    category      VARCHAR(16)   NOT NULL DEFAULT 'MODEL' COMMENT '分类投影 MODEL/SWITCH/BUDGET/PROMPT',
+    dangerous     TINYINT       NOT NULL DEFAULT 0 COMMENT '是否危险配置 1是 0否（页面二次确认）',
+    description   VARCHAR(255)  NULL     COMMENT '影响面说明投影',
+    version       BIGINT        NOT NULL DEFAULT 0 COMMENT '配置版本号；快照版本取最大值',
+    updated_by    VARCHAR(64)   NULL     COMMENT '最后修改人：应用写 sys_user.id',
+    updated_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
+    PRIMARY KEY (id),
+    KEY idx_ai_config_item_deleted (is_deleted),
+    KEY idx_ai_config_category (category),
+    UNIQUE KEY uk_ai_config_item_key (config_key, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000')))
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'AI 配置项当前值';
+
+CREATE TABLE IF NOT EXISTS ai_prompt_version (
+    id           BIGINT       NOT NULL AUTO_INCREMENT,
+    version_no   INT          NOT NULL COMMENT '版本号（递增、唯一）',
+    content      LONGTEXT     NOT NULL COMMENT '提示词正文（可能超 8KB，审计侧按既有截断规则处理）',
+    content_hash VARCHAR(64)  NOT NULL COMMENT '正文 SHA-256 十六进制，用于审计与 diff 判定',
+    status       VARCHAR(16)  NOT NULL COMMENT 'DRAFT/PUBLISHED/ARCHIVED',
+    note         VARCHAR(512) NULL     COMMENT '版本说明（谁、为什么改）',
+    created_by   VARCHAR(64)  NULL     COMMENT '创建人',
+    created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    published_by VARCHAR(64)  NULL     COMMENT '发布人',
+    published_at DATETIME     NULL     COMMENT '发布时间',
+    is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
+    deleted_by  VARCHAR(64) NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
+    PRIMARY KEY (id),
+    KEY idx_ai_prompt_version_deleted (is_deleted),
+    KEY idx_ai_prompt_version_status (status),
+    UNIQUE KEY uk_ai_prompt_version_no (version_no, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000')))
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'AI 提示词版本';
+
 

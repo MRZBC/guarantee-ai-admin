@@ -104,3 +104,27 @@ SELECT INDEX_NAME, COUNT(*) AS expr_parts
    AND INDEX_NAME = 'uk_ai_knowledge_no'
    AND COLUMN_NAME IS NULL AND EXPRESSION IS NOT NULL
  GROUP BY INDEX_NAME;
+
+-- ---------------------------------------------------------------------
+--  存量库修正（**本文件不自动执行**，只留手工路径）
+--
+--  背景：实现期间 ai_knowledge_item 曾以旧索引名 idx_ai_knowledge_deleted 建过表
+--  （schema.sql 的初版），随后统一改名为 idx_ai_knowledge_item_deleted。
+--  CREATE TABLE IF NOT EXISTS 不会修改已存在的表，因此：
+--    · 新库：由 schema.sql 直接建成 idx_ai_knowledge_item_deleted（正确名）；
+--    · 存量库（含当前开发库）：索引名仍是 idx_ai_knowledge_deleted。
+--  两处列相同、功能等价，且逻辑删除房规测试按 `idx\_%\_deleted` 模式匹配，所以不会报错；
+--  但为了让"表结构自述"与 DDL 一致，存量库可手工执行下面这一句：
+--
+--    ALTER TABLE ai_knowledge_item
+--      RENAME INDEX idx_ai_knowledge_deleted TO idx_ai_knowledge_item_deleted;
+--
+--  ⚠️ 幂等性：MySQL 没有 "RENAME INDEX IF EXISTS"，重复执行会报 1091（索引不存在）。
+--     执行前先确认旧名存在，返回 1 行才执行；返回 0 行说明已是新名（或修正过），跳过：
+--       SELECT INDEX_NAME FROM information_schema.STATISTICS
+--        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_knowledge_item'
+--          AND INDEX_NAME = 'idx_ai_knowledge_deleted';
+--
+--  说明：这里刻意保持"注释"而不是可执行语句——自动重命名会在"已经是新名"的库上报错，
+--  而本脚本是幂等手工脚本，不允许出现"跑第二遍就失败"的语句。
+-- ---------------------------------------------------------------------

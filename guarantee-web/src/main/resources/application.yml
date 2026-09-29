@@ -142,12 +142,24 @@ guarantee:
   #   真源：guarantee-ai/src/main/resources/knowledge/<domain>/*.md（随 jar 发布）
   #   运行期：启动时幂等导入 ai_knowledge_item；检索走 queryBusinessKnowledge 工具
   #
-  #   enabled            false 时不注册检索工具（模型看不到它）：用于降级演练与故障应急。
-  #                      数字类问答完全不受影响；知识层缺失时由模型如实说明，绝不编造。
+  #   enabled            **运维级应急开关**：false 时不注册检索工具（模型看不到它），
+  #                      用于降级演练与故障应急。数字类问答完全不受影响；
+  #                      与 DB 配置项 knowledge.enabled 取「与」——DB 是配置级开关
+  #                      （页面可改、立即生效），yml 是进程级开关（DB 挂了也有效），
+  #                      任一为 false 即关闭。分工见 AiToolRegistry 的注释。
   #   import-on-startup  false 时启动不导入真源（运维手工控制；不影响已有条目检索）。
   #   max-items          单次检索条数硬上限；与需求里的上限 5 取更小者。
   #   max-bytes          单次检索结果字节上限（默认 6KB，独立于工具结果 16KB 上限）。
   #   embedding.enabled  M3.5 向量检索预留，默认关闭（Q-RAG-01 拍板先走关键词/标签）。
+  #
+  #   ★ 第四阶段起，AI 的"运行期参数"以 DB 的 ai_config_item 为准（T4-01 接线）：
+  #       预算（budget.*）、模型温度/名称（model.temperature/name）、工具组开关（tools.*）
+  #       都在「系统管理 → AI 配置」页可改、**改完下一轮请求即生效**（无需重启）。
+  #       AiConfigCatalog 是这些键的元数据唯一真源；上面 spring.ai.openai.*（api-key /
+  #       base-url / chat.model / chat.temperature）是 Spring AI starter 的兜底与冷启动来源，
+  #       数据库不可用时助手仍按这些值运行（AC-CFG-07）。
+  #       本期未接线：model.max-tokens / model.timeout / model.max-retries
+  #       （前者接了会把"改造前不发送 max_tokens"变成"发送 2048"，属行为变化）
   # ---------------------------------------------------------------------
   ai:
     knowledge:

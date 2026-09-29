@@ -1,8 +1,12 @@
 package com.guarantee.ai.service;
 
+import com.guarantee.ai.config.AiConfigCatalog;
+import com.guarantee.ai.config.AiConfigService;
+import com.guarantee.ai.config.AiConfigSnapshot;
 import com.guarantee.ai.dto.AiChatRequest;
 import com.guarantee.ai.entity.AiConversation;
 import com.guarantee.ai.entity.AiMessage;
+import com.guarantee.ai.mapper.AiConversationMapper;
 import com.guarantee.ai.time.TimeRange;
 import com.guarantee.ai.time.TimeSemanticParser;
 import com.guarantee.ai.tool.AiToolContextKeys;
@@ -86,55 +90,29 @@ public class AiChatService {
 
     private static final Logger log = LoggerFactory.getLogger(AiChatService.class);
 
-    private static final int HISTORY_LIMIT = 20;
-
-    /** 防止模型陷入工具调用死循环（REQ-BA-06：轮次 4 不变，用尽后进收口轮）。 */
-    static final int MAX_TOOL_ROUNDS = 4;
+    /*
+      本类原先的四个硬编码常量（HISTORY_LIMIT=20 / MAX_TOOL_ROUNDS=4 /
+      MAX_TOOL_CALLS_PER_ROUND=12 / SOFT_TIMEOUT_MS=60000）已迁到 AI 配置（T4-01 接线，REQ-CFG-06）：
+      键名见 {@link AiConfigCatalog}，默认值与改造前逐项一致（AC-CFG-08）。
+      运行期的唯一来源是**每轮请求开始时取的配置快照**（见 stream()），
+      因此"改配置不重启、下一轮生效"与"一轮对话用同一份配置"同时成立。
+      这里刻意不再保留同名常量：同值常量与配置默认值两处定义必然漂移（本项目已有先例）。
+    */
 
     /**
      * 收尾轮（工具轮次用尽后那一轮）的指令。
      *
      * <p>措辞与 {@link #REPAIR_MARKER} 同一风格：说清事实与要求，不指责、不要求道歉——
      * 模型多写一段检讨，用户就多读一段废话。</p>
-     */
-    static final String FINAL_ROUND_INSTRUCTION =
-            "【系统提示：本轮只读工具调用已达到上限（" + MAX_TOOL_ROUNDS + " 轮），"
-                    + "并且已取消你的工具调用能力。请立即依据上面**已经获得的数据**给出最终结论，"
-                    + "不要再尝试调用任何工具；若某个维度确实没有查到数据，就如实说明该维度缺失。】";
-
-    /**
-     * 单轮工具调用数上限（REQ-BA-06，目标 ≤12）。
      *
-     * <p><b>依据</b>：真机 8 次调用 11s、36 次调用 22s，而工具执行合计 &lt;1s（需求文档 §5.2.1）
-     * ——时长几乎等于「轮次 × 单轮模型耗时」，单轮 30 次调用说明模型在**逐个小步试错**，
-     * 会把一轮的模型输出与工具执行同时拉长。12 次足够「三维度 + 交叉过滤」一次查齐
-     * （正常问答通常 &lt;5 次），因此上限取 12：既不放任 30 次/轮，也不误伤正常分析。</p>
-     *
-     * <p><b>触顶行为</b>：超出部分**不执行**，只回灌一条可读说明
-     * （见 {@link #overBudgetToolResult(String)}），让模型下一轮补查，而不是报错。</p>
+     * <p>轮次上限来自配置，因此指令必须**按轮次生成**而不是写成静态常量
+     * （静态常量会把"缺省值"写死进文案，改配置后用户看到的数字就对不上）。</p>
      */
-    static final int MAX_TOOL_CALLS_PER_ROUND = 12;
-
-    /**
-     * 整轮取数的软超时（毫秒，REQ-BA-06，目标 60s）。
-     *
-     * <p><b>依据</b>：正常问答 8~36 次调用耗时 11~22s，且工具执行合计 &lt;1s，
-     * 60s 预算对正常问答无感；只在异常放大（模型反复试错 / 单次查询异常慢）时兜底。
-     * 触顶后**停止取数**，转入已实现的「收口轮」（摘掉工具、用已有数据作答）。
-     * Web 请求侧还有 Servlet 的 5 分钟超时，60s 只是内层软护栏。</p>
-     */
-    static final long SOFT_TIMEOUT_MS = 60_000L;
-
-    /**
-     * 软超时触顶时的收口轮指令。
-     *
-     * <p>与 {@link #FINAL_ROUND_INSTRUCTION}（轮次用尽）分开写：两者的**原因**不同，
-     * 模型只有知道"是因为超时"才不会继续试图取数。措辞风格保持一致。</p>
-     */
-    static final String TIME_BUDGET_INSTRUCTION =
-            "【系统提示：本轮取数已超过 " + (SOFT_TIMEOUT_MS / 1000) + " 秒的软超时预算，"
-                    + "并且已取消你的工具调用能力。请立即依据上面**已经获得的数据**给出最终结论，"
-                    + "不要再尝试调用任何工具；若某个维度确实没有查到数据，就如实说明该维度缺失。】";
+    static String finalRoundInstruction(int maxRounds) {
+        return "【系统提示：本轮只读工具调用已达到上限（" + maxRounds + " 轮），"
+                + "并且已取消你的工具调用能力。请立即依据上面**已经获得的数据**给出最终结论，"
+                + "不要再尝试调用任何工具；若某个维度确实没有查到数据，就如实说明该维度缺失。】";
+    }
 
     /**
      * 框架自带硬上限触顶时的收口轮指令。
@@ -154,11 +132,30 @@ public class AiChatService {
      * <p>为什么不直接失败：上限的本意是防"逐个小步试错"，不是让用户拿不到答案。
      * 因此超出部分不执行，但该次调用的 {@code tool_call_id} 必须有一条可读回复，
      * 模型才知道"这一项没查、下一轮补上"。</p>
+     *
+     * <p>改造前的上限是 12（键 {@code budget.max-calls-per-round}）；文案里的数字取自
+     * **本轮生效的配置**，否则改配置后模型告诉用户的数字就是错的。</p>
      */
-    static String overBudgetToolResult(String toolName) {
-        return "本轮工具调用过多，仅执行了前 " + MAX_TOOL_CALLS_PER_ROUND + " 个；"
+    static String overBudgetToolResult(String toolName, int maxCallsPerRound) {
+        return "本轮工具调用过多，仅执行了前 " + maxCallsPerRound + " 个；"
                 + "本次「" + toolName + "」调用**未执行**，该项数据本轮没有取到。"
                 + "请在下一轮只查这一项（或减少单轮要查的项目数）。";
+    }
+
+    /**
+     * 软超时触顶时的收口轮指令。
+     *
+     * <p>与 {@link #finalRoundInstruction(int)}（轮次用尽）分开写：两者的**原因**不同，
+     * 模型只有知道"是因为超时"才不会继续试图取数。措辞风格保持一致。</p>
+     *
+     * <p>改造前的软超时是 60s（键 {@code budget.soft-timeout-ms}）：
+     * 正常问答 8~36 次调用耗时 11~22s、工具执行合计 &lt;1s，60s 对正常问答无感，
+     * 只在异常放大时兜底。触顶后**停止取数**，转入收口轮（摘掉工具、用已有数据作答）。</p>
+     */
+    static String timeBudgetInstruction(long softTimeoutMs) {
+        return "【系统提示：本轮取数已超过 " + (softTimeoutMs / 1000) + " 秒的软超时预算，"
+                + "并且已取消你的工具调用能力。请立即依据上面**已经获得的数据**给出最终结论，"
+                + "不要再尝试调用任何工具；若某个维度确实没有查到数据，就如实说明该维度缺失。】";
     }
 
     /** 成本日志的固定标记，便于按 tag 检索（REQ-BA-11）。 */
@@ -242,9 +239,22 @@ public class AiChatService {
 
     /**
      * 时间源（纳秒）。生产恒为 {@link System#nanoTime}；单测注入假时钟以验证
-     * {@link #SOFT_TIMEOUT_MS} 软超时，避免真的等 60 秒。
+     * {@link AiConfigCatalog#BUDGET_SOFT_TIMEOUT_MS} 软超时，避免真的等 60 秒。
      */
     private final LongSupplier nanoClock;
+
+    /** AI 配置服务（T4-01 接线）：预算/温度/模型名的运行期唯一来源。 */
+    private final AiConfigService configService;
+
+    /**
+     * 会话 Mapper：只用于写"本轮回答所用的配置版本号"（REQ-CFG-05 回答级回溯）。
+     *
+     * <p>为什么直接注入 Mapper 而不是经 {@code AiConversationService}：该服务当前没有
+     * 这个写法的包装方法，而它属于 T4-02 的在途文件；T4-01 的约定是"不改别人的在途文件"。
+     * 分层上 Service → Mapper 是允许的（Tool 才禁止碰 Mapper）。若后续 phase4 补了包装方法，
+     * 这行依赖可以就地替换（调用点只有 {@link #recordConfigVersion}）。</p>
+     */
+    private final AiConversationMapper conversationMapper;
 
     @Autowired
     public AiChatService(ChatModel chatModel,
@@ -258,13 +268,15 @@ public class AiChatService {
                          DataSourceClaimGuard dataSourceClaimGuard,
                          NumberClaimGuard numberClaimGuard,
                          ObjectMapper objectMapper,
+                         AiConfigService configService,
+                         AiConversationMapper conversationMapper,
                          @Value("${spring.ai.openai.chat.model:unknown}") String modelName) {
         this(chatModel, toolCallingManager, conversationService, promptProvider, timeSemanticParser,
                 toolRegistry, proposalEventPublisher, proposalClaimGuard, dataSourceClaimGuard,
-                numberClaimGuard, objectMapper, modelName, System::nanoTime);
+                numberClaimGuard, objectMapper, configService, conversationMapper, modelName, System::nanoTime);
     }
 
-    /** 仅供单测注入时间源（软超时判定），生产链路走上面的 12 参构造。 */
+    /** 仅供单测注入时间源（软超时判定），生产链路走上面的 14 参构造。 */
     AiChatService(ChatModel chatModel,
                   ToolCallingManager toolCallingManager,
                   AiConversationService conversationService,
@@ -276,6 +288,8 @@ public class AiChatService {
                   DataSourceClaimGuard dataSourceClaimGuard,
                   NumberClaimGuard numberClaimGuard,
                   ObjectMapper objectMapper,
+                  AiConfigService configService,
+                  AiConversationMapper conversationMapper,
                   String modelName,
                   LongSupplier nanoClock) {
         this.chatModel = chatModel;
@@ -289,6 +303,8 @@ public class AiChatService {
         this.dataSourceClaimGuard = dataSourceClaimGuard;
         this.numberClaimGuard = numberClaimGuard;
         this.objectMapper = objectMapper;
+        this.configService = configService;
+        this.conversationMapper = conversationMapper;
         this.modelName = modelName;
         this.nanoClock = nanoClock;
     }
@@ -296,17 +312,24 @@ public class AiChatService {
     /**
      * 执行一次流式对话。
      *
+     * <p><b>配置快照的取用时机</b>（REQ-CFG-06）：请求开始前 {@link AiConfigService#refreshIfStale()}
+     * 做一次版本比对（不一致即重载），拿到快照后**整轮都用它**——包括工具注册裁剪、预算、
+     * 温度与模型名。这样"改配置不重启、下一轮生效"与"一轮对话不出现半新半旧"同时成立。</p>
+     *
      * @return SSE 事件流（meta / delta / tool_call / reset / proposal / proposal_result / done / error）
      */
     public Flux<ServerSentEvent<String>> stream(Long userId, AiChatRequest request) {
         String userText = request.getMessage();
 
+        // 本轮配置快照：DB 不可用时返回上一份/默认值，绝不因此让助手不可用（AC-CFG-07）
+        AiConfigSnapshot config = configService.refreshIfStale();
+
         AiConversation conversation = conversationService.resolveOrCreate(
-                userId, request.getConversationId(), userText, modelName);
+                userId, request.getConversationId(), userText, resolveModelName(config));
         Long conversationId = conversation.getId();
 
         // 先取历史，再写入本轮用户消息，避免历史里重复出现本轮问题
-        List<Message> history = loadHistory(conversationId);
+        List<Message> history = loadHistory(conversationId, config);
         conversationService.appendMessage(conversationId, "USER", userText);
         conversationService.audit(conversationId, userId, "CHAT", "用户提问已受理");
 
@@ -340,13 +363,13 @@ public class AiChatService {
           - cost：轮次 / 工具调用数 / 工具耗时 / token / 总耗时 / 是否触顶，收尾时汇总成一条日志。
           两者都挂在**本次请求**上（不是单例字段），避免并发会话互相污染。
         */
-        ToolCallBudget budget = new ToolCallBudget(MAX_TOOL_CALLS_PER_ROUND);
+        ToolCallBudget budget = new ToolCallBudget(config.getInt(AiConfigCatalog.BUDGET_MAX_CALLS_PER_ROUND));
         TurnCost cost = new TurnCost(nanoClock);
 
         Map<String, Object> toolContext = buildToolContext(conversationId, userId, userText,
                 principalContext(), new ToolCallEventSink(sink), proposalSink, turnFacts, knowledgeTurn);
 
-        ToolCallingChatOptions options = buildToolCallingOptions(toolContext, budget);
+        ToolCallingChatOptions options = buildToolCallingOptions(toolContext, budget, config);
 
         List<Message> messages = new ArrayList<>(history.size() + 2);
         messages.add(new SystemMessage(systemPrompt));
@@ -372,7 +395,7 @@ public class AiChatService {
 
         Flux<ServerSentEvent<String>> contentEvents =
                 runToolLoop(new Prompt(messages, options), answer, 0, toolsExecuted, lastPrompt,
-                        budget, cost)
+                        budget, cost, config)
                 /*
                   收尾必须挂在**内容流之内**，不能在 merge 之后另起一段 concatWith：
 
@@ -386,7 +409,7 @@ public class AiChatService {
                 */
                 .concatWith(Flux.defer(() -> tailEvents(answer, lastPrompt, options, toolsExecuted,
                         budget, cost, conversationId, userId, persisted, userText, turnFacts,
-                        knowledgeTurn)))
+                        knowledgeTurn, config)))
                 .doOnComplete(() -> {
                     sink.tryEmitComplete();
                     proposalSink.tryEmitComplete();
@@ -453,16 +476,17 @@ public class AiChatService {
                                                      Long conversationId, Long userId,
                                                      AtomicBoolean persisted,
                                                      String userText, TurnFacts turnFacts,
-                                                     KnowledgeClaimGuard.TurnKnowledge knowledgeTurn) {
+                                                     KnowledgeClaimGuard.TurnKnowledge knowledgeTurn,
+                                                     AiConfigSnapshot config) {
         Prompt finalPrompt = promptRef.get();
         String produced = answer.toString();
         if (finalPrompt != null
                 && proposalClaimGuard.correctionFor(userId, conversationId, produced).isPresent()) {
             return repairFabricatedProposal(answer, finalPrompt, options, toolsExecuted, budget, cost,
-                    conversationId, userId, persisted, promptRef, userText, turnFacts, knowledgeTurn);
+                    conversationId, userId, persisted, promptRef, userText, turnFacts, knowledgeTurn, config);
         }
         return finishTurn(answer, toolsExecuted, budget, cost, conversationId, userId, persisted,
-                userText, turnFacts, knowledgeTurn);
+                userText, turnFacts, knowledgeTurn, config);
     }
 
     /**
@@ -485,7 +509,8 @@ public class AiChatService {
                                                                    AtomicBoolean persisted,
                                                                    AtomicReference<Prompt> promptRef,
                                                                    String userText, TurnFacts turnFacts,
-                                                                   KnowledgeClaimGuard.TurnKnowledge knowledgeTurn) {
+                                                                   KnowledgeClaimGuard.TurnKnowledge knowledgeTurn,
+                                                                   AiConfigSnapshot config) {
         log.warn("回复声称已生成提案但会话内无 PENDING 提案，自动重试一轮让模型调用写工具 conversationId={}",
                 conversationId);
         conversationService.audit(conversationId, userId, "CHAT", "检测到回复编造提案，自动重试一次");
@@ -502,14 +527,14 @@ public class AiChatService {
         return Flux.concat(
                 Flux.just(event("reset", new ChatStreamEvents.Reset())),
                 runToolLoop(new Prompt(instructions, options), repaired, 0, toolsExecuted, promptRef,
-                        budget, cost),
+                        budget, cost, config),
                 Flux.defer(() -> {
                     if (StringUtils.hasText(repaired)) {
                         answer.setLength(0);
                         answer.append(repaired);
                     }
                     return finishTurn(answer, toolsExecuted, budget, cost, conversationId,
-                            userId, persisted, userText, turnFacts, knowledgeTurn);
+                            userId, persisted, userText, turnFacts, knowledgeTurn, config);
                 }));
     }
 
@@ -547,7 +572,8 @@ public class AiChatService {
                                                      Long conversationId, Long userId,
                                                      AtomicBoolean persisted,
                                                      String userText, TurnFacts turnFacts,
-                                                     KnowledgeClaimGuard.TurnKnowledge knowledgeTurn) {
+                                                     KnowledgeClaimGuard.TurnKnowledge knowledgeTurn,
+                                                     AiConfigSnapshot config) {
         String produced = answer.toString();
         List<String> corrections = new ArrayList<>(3);
         boolean proposalClaimFlagged = false;
@@ -558,7 +584,9 @@ public class AiChatService {
               现场反馈原话：「就算有bug或者做不了，也应该兜底一下吧」——
               前端在"零正文 + 零工具调用"时会把气泡整个删掉，用户看到的是"什么都没发生"。
             */
-            corrections.add(emptyAnswerNotice(cost.capReason()));
+            corrections.add(emptyAnswerNotice(cost.capReason(),
+                    config.getInt(AiConfigCatalog.BUDGET_MAX_ROUNDS),
+                    config.getLong(AiConfigCatalog.BUDGET_SOFT_TIMEOUT_MS)));
         } else {
             // ① 声称有提案但会话内没有 PENDING 提案（自动重试后仍未解决时才会走到这里）
             proposalClaimFlagged = proposalClaimGuard.correctionFor(userId, conversationId, produced)
@@ -650,8 +678,39 @@ public class AiChatService {
           放在落库之后：即便这里抛异常（不会），也已经有一条助手消息可查。
         */
         cost.log(conversationId, budget.executedTotal());
+        /*
+          回答级回溯（REQ-CFG-05 / V8 §3）：记下"这一轮回答用的是哪一版配置"。
+          prompt_version 由 T4-03 接（本处传 null，mapper 允许两列各自为空），
+          T4-01 只负责 config_version。
+        */
+        recordConfigVersion(conversationId, config.version());
         return events.concatWith(Flux.just(
                 event("done", new ChatStreamEvents.Done(conversationId, messageId))));
+    }
+
+    /**
+     * 写入本轮回答所用的配置快照版本号（REQ-CFG-05 回答级回溯）。
+     *
+     * <p><b>为什么先读一次 existing.promptVersion</b>：{@code updateVersionTrace} 会同时写
+     * {@code prompt_version} 与 {@code config_version} 两列（V8 §3）。T4-01 只负责
+     * {@code config_version}，{@code prompt_version} 由 T4-03 接——若这里硬写 null，
+     * 等 T4-03 落地后每轮都会把它清掉。因此读了再写：prompt_version 保持 T4-03 写下的值。</p>
+     *
+     * <p><b>写失败只告警，绝不影响回答</b>：这是一条审计线索，不是答案的一部分；
+     * 让它把一次成功的问答变成 error 是本末倒置（与成本日志同一取舍）。</p>
+     */
+    private void recordConfigVersion(Long conversationId, long configVersion) {
+        if (conversationId == null) {
+            return;
+        }
+        try {
+            AiConversation existing = conversationMapper.selectById(conversationId);
+            Integer promptVersion = existing == null ? null : existing.getPromptVersion();
+            conversationMapper.updateVersionTrace(conversationId, promptVersion, configVersion);
+        } catch (RuntimeException ex) {
+            log.warn("记录回答级配置版本失败（不影响回答）conversationId={} configVersion={}",
+                    conversationId, configVersion, ex);
+        }
     }
 
     /**
@@ -668,16 +727,18 @@ public class AiChatService {
      *                  {@link TurnCost#CAP_TOOL_LIMIT} / {@link TurnCost#CAP_NONE}）。
      *                  说清原因是兜底文案的价值所在：轮次用尽说明"数据其实查过了"，
      *                  超时说明"取数预算用完了"，两者给用户的下一步建议并不一样。
+     * @param maxRounds       本轮生效的轮次上限（写进文案，改配置后不会说错数字）
+     * @param softTimeoutMs   本轮生效的软超时（毫秒，同上）
      */
-    static String emptyAnswerNotice(String capReason) {
+    static String emptyAnswerNotice(String capReason, int maxRounds, long softTimeoutMs) {
         String cause;
         if (TurnCost.CAP_DURATION.equals(capReason)) {
-            cause = "这一轮取数超过了 " + (SOFT_TIMEOUT_MS / 1000)
+            cause = "这一轮取数超过了 " + (softTimeoutMs / 1000)
                     + " 秒的软超时预算，停止取数后收尾那一轮也没能给出结论";
         } else if (TurnCost.CAP_TOOL_LIMIT.equals(capReason)) {
             cause = "这一轮的工具调用已经达到系统的单次分析上限，停止取数后收尾那一轮也没能给出结论";
         } else if (TurnCost.CAP_ROUNDS.equals(capReason)) {
-            cause = "这一轮我把 " + MAX_TOOL_ROUNDS + " 轮工具调用都用在了取数上，收尾那一轮也没能给出结论";
+            cause = "这一轮我把 " + maxRounds + " 轮工具调用都用在了取数上，收尾那一轮也没能给出结论";
         } else {
             cause = "模型这一轮没有返回任何内容";
         }
@@ -702,12 +763,17 @@ public class AiChatService {
      * <p>工具集在这里按权限裁剪（SYS-P-12a）：无权限的工具不出现在模型面前。</p>
      *
      * <p><b>再套一层单轮预算</b>（REQ-BA-06）：登记进模型的每个工具都被
-     * {@link BudgetedToolCallback} 包住，单轮超出 {@link #MAX_TOOL_CALLS_PER_ROUND} 的调用
+     * {@link BudgetedToolCallback} 包住，单轮超出配置项
+     * {@link AiConfigCatalog#BUDGET_MAX_CALLS_PER_ROUND} 的调用
      * 不执行、只回灌可读说明。装饰链最外层是预算包装（而不是替换掉 Recording），
      * 因此"执行了哪几次"仍照常落库/推 SSE，"没执行的那几次"根本不会产生假记录。</p>
+     *
+     * <p><b>配置温度</b>：只有 {@code model.temperature} 被**显式配置**时才覆盖
+     * （未配置时沿用模型 starter 的 yml 值，缺省行为与改造前一致，AC-CFG-08）。</p>
      */
     private ToolCallingChatOptions buildToolCallingOptions(Map<String, Object> toolContext,
-                                                           ToolCallBudget budget) {
+                                                           ToolCallBudget budget,
+                                                           AiConfigSnapshot config) {
         // 注意用 getOptions() 而不是 getDefaultOptions()：
         // OpenAiChatModel.getOptions() 返回 OpenAiChatOptions（其内部会强转 options），
         // 而 getDefaultOptions() 在部分实现里返回的是通用 ChatOptions。
@@ -720,14 +786,37 @@ public class AiChatService {
         @SuppressWarnings("unchecked")
         List<String> permissions = toolContext.get(AiToolContextKeys.PERMISSIONS) instanceof List<?> list
                 ? (List<String>) list : List.of();
-        ToolCallback[] registered = toolRegistry.callbacks(permissions);
+        // 工具裁剪与本轮预算参数用**同一份快照**（REQ-CFG-06：一轮对话不出现半新半旧）
+        ToolCallback[] registered = toolRegistry.callbacks(permissions, config);
         List<ToolCallback> budgeted = new ArrayList<>(registered.length);
         for (ToolCallback callback : registered) {
             budgeted.add(new BudgetedToolCallback(callback, budget));
         }
         builder.toolCallbacks(budgeted);
         builder.toolContext(toolContext);
+        if (config.isOverridden(AiConfigCatalog.MODEL_TEMPERATURE)) {
+            builder.temperature(config.getDouble(AiConfigCatalog.MODEL_TEMPERATURE));
+        }
+        if (config.isOverridden(AiConfigCatalog.MODEL_NAME)) {
+            // 显式配置的模型名必须**随请求发给模型**：只改 ai_conversation.model 的落库值
+            // 等于"看起来改了、其实没生效"（TEST-CFG-06 的可观测点正是模型调用参数）。
+            // 未配置时不设置，沿用 starter/yml（AC-CFG-08）。
+            builder.model(config.get(AiConfigCatalog.MODEL_NAME));
+        }
         return builder.build();
+    }
+
+    /**
+     * 本轮使用的模型名：**显式配置优先，未配置沿用 starter/yml**（AC-CFG-08）。
+     *
+     * <p>为什么不直接用配置默认值：改造前这里取的是
+     * {@code spring.ai.openai.chat.model}（${DEEPSEEK_MODEL:deepseek-chat}）。
+     * 若一律以配置默认值覆盖，运维用环境变量切模型时会与落库的会话模型名不一致。</p>
+     */
+    private String resolveModelName(AiConfigSnapshot config) {
+        return config.isOverridden(AiConfigCatalog.MODEL_NAME)
+                ? config.get(AiConfigCatalog.MODEL_NAME)
+                : modelName;
     }
 
     /**
@@ -744,23 +833,26 @@ public class AiChatService {
      * {@code reset} 事件，让前端把这一轮已经显示的前言清掉。</p>
      *
      * <p><b>两道预算在每轮开始与"取数之前"各判一次</b>（REQ-BA-06）：软超时
-     * （{@link #SOFT_TIMEOUT_MS}）优先于轮次——超时的原因是"预算用完了"，不是"轮次用尽"，
-     * 模型与兜底文案都要说对。任一条触顶都**不再取数**，直接进
+     * （{@link AiConfigCatalog#BUDGET_SOFT_TIMEOUT_MS}）优先于轮次——超时的原因是"预算用完了"，
+     * 不是"轮次用尽"，模型与兜底文案都要说对。任一条触顶都**不再取数**，直接进
      * {@link #finalAnswerRound} 用已有数据作答。</p>
      */
     private Flux<ServerSentEvent<String>> runToolLoop(Prompt prompt, StringBuilder answer, int depth,
                                                       AtomicBoolean toolsExecuted,
                                                       AtomicReference<Prompt> lastPromptRef,
-                                                      ToolCallBudget budget, TurnCost cost) {
-        if (cost.softTimeoutExceeded()) {
-            log.warn("本轮取数已超过软超时 {}ms，转入收口轮（摘掉工具，用已有数据作答）", SOFT_TIMEOUT_MS);
+                                                      ToolCallBudget budget, TurnCost cost,
+                                                      AiConfigSnapshot config) {
+        int maxRounds = config.getInt(AiConfigCatalog.BUDGET_MAX_ROUNDS);
+        long softTimeoutMs = config.getLong(AiConfigCatalog.BUDGET_SOFT_TIMEOUT_MS);
+        if (cost.softTimeoutExceeded(softTimeoutMs)) {
+            log.warn("本轮取数已超过软超时 {}ms，转入收口轮（摘掉工具，用已有数据作答）", softTimeoutMs);
             cost.markDurationCap();
-            return finalAnswerRound(prompt, answer, TIME_BUDGET_INSTRUCTION, cost);
+            return finalAnswerRound(prompt, answer, timeBudgetInstruction(softTimeoutMs), cost);
         }
-        if (depth >= MAX_TOOL_ROUNDS) {
-            log.warn("工具调用达到最大轮次 {}，转入收尾轮（摘掉工具，只要求最终回答）", MAX_TOOL_ROUNDS);
+        if (depth >= maxRounds) {
+            log.warn("工具调用达到最大轮次 {}，转入收尾轮（摘掉工具，只要求最终回答）", maxRounds);
             cost.markRoundsCap();
-            return finalAnswerRound(prompt, answer, FINAL_ROUND_INSTRUCTION, cost);
+            return finalAnswerRound(prompt, answer, finalRoundInstruction(maxRounds), cost);
         }
         return Flux.defer(() -> {
             // 记下本轮 Prompt：收尾的自动重试要接着它继续（含本轮已执行工具的结果）
@@ -809,12 +901,12 @@ public class AiChatService {
                   注意此分支**不置位 toolsExecuted**：一次工具都没执行时，正文里的口径行
                   仍按"编造"处理（与既有兜底语义一致）。
                 */
-                if (cost.softTimeoutExceeded()) {
+                if (cost.softTimeoutExceeded(softTimeoutMs)) {
                     log.warn("模型第 {} 轮请求 {} 个工具时已超过软超时 {}ms，放弃取数转入收口轮",
-                            depth + 1, toolCalls.size(), SOFT_TIMEOUT_MS);
+                            depth + 1, toolCalls.size(), softTimeoutMs);
                     cost.markDurationCap();
                     return Flux.concat(discardPreamble,
-                            finalAnswerRound(prompt, answer, TIME_BUDGET_INSTRUCTION, cost));
+                            finalAnswerRound(prompt, answer, timeBudgetInstruction(softTimeoutMs), cost));
                 }
 
                 // 置位"本轮执行过工具"：收尾的「口径行」兜底据此判定是否存在编造
@@ -846,7 +938,7 @@ public class AiChatService {
                     cost.addToolCostMs(cost.elapsedMsSince(toolStartNanos));
                     Prompt next = new Prompt(result.conversationHistory(), prompt.getOptions());
                     return runToolLoop(next, answer, depth + 1, toolsExecuted, lastPromptRef,
-                            budget, cost);
+                            budget, cost, config);
                 }));
             }));
         });
@@ -892,7 +984,7 @@ public class AiChatService {
      * <p><b>为什么不能像原先那样直接收场</b>（2026-09-29 22:25 现场复现，SSE 原文实测）：
      * 用户问「请分析 2026 年第二季度投标订单，和第一季度比较，并从区域、机构、险种三个维度
      * 找出主要变化」，模型把 4 轮**全部**用在查数据上（36 次只读工具调用，含逐区域、逐机构展开），
-     * 第 5 轮被 {@link #MAX_TOOL_ROUNDS} 挡掉后 {@code Flux.empty()} 收场 →
+     * 第 5 轮被 {@link AiConfigCatalog#BUDGET_MAX_ROUNDS} 挡掉后 {@code Flux.empty()} 收场 →
      * {@code answer} 为空 → 前端只剩一个空气泡。用户看到的是"助手坏了"，
      * 而不是"这次的数据面不够、结论如下"。上限的本意是防死循环，不是"不回答"。</p>
      *
@@ -905,7 +997,7 @@ public class AiChatService {
      * <p>本轮正文按"最终回答轮"处理：直接写入 {@code answer} 并流式下发，
      * 之后照常走 {@link #tailEvents} 的兜底校验与落库。</p>
      *
-     * @param instruction 收口原因（{@link #FINAL_ROUND_INSTRUCTION} / {@link #TIME_BUDGET_INSTRUCTION}
+     * @param instruction 收口原因（{@link #finalRoundInstruction(int)} / {@link #timeBudgetInstruction(long)}
      *                    / {@link #TOOL_LIMIT_INSTRUCTION}）
      */
     private Flux<ServerSentEvent<String>> finalAnswerRound(Prompt prompt, StringBuilder answer,
@@ -1023,8 +1115,15 @@ public class AiChatService {
         }
     }
 
-    private List<Message> loadHistory(Long conversationId) {
-        List<AiMessage> recent = conversationService.recentMessages(conversationId, HISTORY_LIMIT);
+    /**
+     * 载入最近的历史消息。
+     *
+     * <p>条数取自配置项 {@link AiConfigCatalog#BUDGET_HISTORY_LIMIT}（改造前 20）：
+     * 调大增加 token 成本，调小可能让模型丢失上文。整轮使用同一份快照。</p>
+     */
+    private List<Message> loadHistory(Long conversationId, AiConfigSnapshot config) {
+        List<AiMessage> recent = conversationService.recentMessages(
+                conversationId, config.getInt(AiConfigCatalog.BUDGET_HISTORY_LIMIT));
         List<Message> messages = new ArrayList<>(recent.size());
         for (AiMessage m : recent) {
             Message converted = toSpringMessage(m);
@@ -1198,6 +1297,11 @@ public class AiChatService {
             requestedThisRound.set(0);
         }
 
+        /** 本轮允许执行的工具调用数上限（来自配置快照）。 */
+        int limit() {
+            return limit;
+        }
+
         /** @return true 表示本次工具调用获准执行；false 表示超限、应回灌可读说明 */
         boolean tryAcquire() {
             if (requestedThisRound.incrementAndGet() <= limit) {
@@ -1247,7 +1351,7 @@ public class AiChatService {
         @Override
         public String call(String toolInput, ToolContext toolContext) {
             if (!budget.tryAcquire()) {
-                return overBudgetToolResult(delegate.getToolDefinition().name());
+                return overBudgetToolResult(delegate.getToolDefinition().name(), budget.limit());
             }
             return delegate.call(toolInput, toolContext);
         }
@@ -1264,10 +1368,10 @@ public class AiChatService {
 
         static final String CAP_NONE = "none";
 
-        /** 轮次用尽（{@link #MAX_TOOL_ROUNDS}）。 */
+        /** 轮次用尽（{@link AiConfigCatalog#BUDGET_MAX_ROUNDS}）。 */
         static final String CAP_ROUNDS = "rounds";
 
-        /** 软超时（{@link #SOFT_TIMEOUT_MS}）。 */
+        /** 软超时（{@link AiConfigCatalog#BUDGET_SOFT_TIMEOUT_MS}）。 */
         static final String CAP_DURATION = "duration";
 
         /** 框架自带硬上限（单工具 40 次 / 整轮 150 次，触顶即抛）。 */
@@ -1307,9 +1411,9 @@ public class AiChatService {
             return (nanoClock.getAsLong() - fromNanos) / 1_000_000L;
         }
 
-        /** 软超时是否已触顶（含"刚好等于"）。 */
-        boolean softTimeoutExceeded() {
-            return elapsedMs() >= SOFT_TIMEOUT_MS;
+        /** 软超时是否已触顶（含"刚好等于"）；上限来自本轮配置快照。 */
+        boolean softTimeoutExceeded(long softTimeoutMs) {
+            return elapsedMs() >= softTimeoutMs;
         }
 
         /** 记录触顶原因；先到先记（轮次与时长同时触顶时，记先发生的那个）。 */

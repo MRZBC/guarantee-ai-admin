@@ -3,7 +3,11 @@ knowledge_no: KB-ORDER-0005
 domain: ORDER
 title: 相对时间的时间口径
 keywords: 相对时间,本季度,上个月,今年,最近三个月,日期区间,时间口径,季度
-version: 2
+# version 的语义（实现见 KnowledgeImporter）：新增时按本值入库；**内容变化时以"库内 +1"为准**，
+# 本字段不参与更新计算。内容哈希也不含 version，因此只改这一行不会触发版本推进。
+# 现状：开发库当前 version=4。本次实现期间因 target/classes 与本地仓已安装 jar 的内容不一致，
+# 导入器把"内容变化"如实判定并逐次推进 1→2→3→4（不是异常，是判据在工作）；此处与库对齐。
+version: 4
 status: PUBLISHED
 source_ref: ai/time/TimeSemanticParser；口径背景见 prompts/business-assistant.st L45-L53（行为要求仍保留在该节，本条只解释时间语义）
 ---

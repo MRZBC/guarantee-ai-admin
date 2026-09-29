@@ -3,6 +3,9 @@ package com.guarantee.ai.service;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.guarantee.ai.config.AiConfigCatalog;
+import com.guarantee.ai.config.AiConfigService;
+import com.guarantee.ai.config.mapper.AiConfigItemMapper;
 import com.guarantee.ai.dto.AiChatRequest;
 import com.guarantee.ai.entity.AiConversation;
 import com.guarantee.ai.entity.AiMessage;
@@ -77,6 +80,21 @@ class AiChatServiceBudgetGuardTest {
     private static final long CONVERSATION_ID = 7L;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
+    /*
+      T4-01 起预算来自 AI 配置，不再是 AiChatService 的常量。这里写死"改造前的值"
+      （与 AiConfigCatalog 默认值一致，AC-CFG-08 由 AiConfigCatalogTest 与本类共同钉住），
+      用来验证**缺省配置下行为与改造前逐项一致**。
+    */
+    private static final int MAX_CALLS_PER_ROUND = 12;
+    private static final int MAX_ROUNDS = 4;
+
+    /** 无任何显式配置的配置服务：快照 = 目录默认值（等价于改造前的硬编码常量）。 */
+    private static AiConfigService defaultConfigService() {
+        AiConfigItemMapper mapper = mock(AiConfigItemMapper.class);
+        when(mapper.selectAll()).thenReturn(List.of());
+        return new AiConfigService(mapper, new AiConfigCatalog());
+    }
+
     /** 假时钟：测试自己推进，避免真的等 60 秒。 */
     private final AtomicLong fakeNanos = new AtomicLong();
 
@@ -113,7 +131,8 @@ class AiChatServiceBudgetGuardTest {
         when(timeSemanticParser.parse(anyString())).thenReturn(Optional.empty());
 
         tool = new RecordingTestTool();
-        when(toolRegistry.callbacks(any())).thenReturn(new ToolCallback[]{tool});
+        // T4-01 起 AiChatService 用"显式传快照"的重载（工具裁剪与预算共用同一份配置）
+        when(toolRegistry.callbacks(any(), any())).thenReturn(new ToolCallback[]{tool});
 
         model = new ScriptedChatModel(fakeNanos);
         DefaultToolCallingManager manager = new DefaultToolCallingManager(
@@ -126,7 +145,8 @@ class AiChatServiceBudgetGuardTest {
                 mock(ProposalClaimGuard.class),
                 mock(DataSourceClaimGuard.class),
                 mock(NumberClaimGuard.class),
-                new ObjectMapper(), "test-model", fakeNanos::get);
+                new ObjectMapper(), defaultConfigService(),
+                mock(com.guarantee.ai.mapper.AiConversationMapper.class), "test-model", fakeNanos::get);
     }
 
     @AfterEach
@@ -145,9 +165,9 @@ class AiChatServiceBudgetGuardTest {
             List<ServerSentEvent<String>> events = chat();
 
             assertThat(tool.executions())
-                    .as("每一轮只执行前 " + AiChatService.MAX_TOOL_CALLS_PER_ROUND + " 个：2 轮 × 12 = 24"
+                    .as("每一轮只执行前 " + MAX_CALLS_PER_ROUND + " 个：2 轮 × 12 = 24"
                             + "（若是整轮封顶则只有 12，无上限则是 30）")
-                    .isEqualTo(2 * AiChatService.MAX_TOOL_CALLS_PER_ROUND);
+                    .isEqualTo(2 * MAX_CALLS_PER_ROUND);
             assertThat(model.modelCalls()).as("2 轮取数 + 1 轮最终回答").isEqualTo(3);
             assertThat(model.sawOverBudgetNotice())
                     .as("被跳过的调用必须回灌可读说明，模型才知道下一轮补查")
@@ -179,14 +199,14 @@ class AiChatServiceBudgetGuardTest {
     void frameworkToolCallLimitDegradesToFinalAnswerRound() {
         // 每轮都要 15 个工具且永不收口：第 3 轮取数时必然越过框架的"单工具 40 次"硬上限
         model.setToolCallsPerRound(15);
-        model.setToolRequestRounds(AiChatService.MAX_TOOL_ROUNDS);
+        model.setToolRequestRounds(MAX_ROUNDS);
         ListAppender<ILoggingEvent> logs = attachCostAppender();
         try {
             List<ServerSentEvent<String>> events = chat();
 
             assertThat(tool.executions())
                     .as("框架硬上限封顶在 40 次以内，且至少完成了两轮满额取数")
-                    .isGreaterThanOrEqualTo(2 * AiChatService.MAX_TOOL_CALLS_PER_ROUND)
+                    .isGreaterThanOrEqualTo(2 * MAX_CALLS_PER_ROUND)
                     .isLessThanOrEqualTo(40);
             assertThat(model.answerRounds())
                     .as("触顶后必须进入收口轮（摘掉工具），而不是直接结束")
@@ -261,7 +281,7 @@ class AiChatServiceBudgetGuardTest {
         private final AtomicBoolean sawToolLimitInstruction = new AtomicBoolean();
 
         private volatile int toolCallsPerRound = 1;
-        private volatile int maxToolRequestRounds = AiChatService.MAX_TOOL_ROUNDS;
+        private volatile int maxToolRequestRounds = MAX_ROUNDS;
         private volatile long advanceNanosPerCall;
 
         private ScriptedChatModel(AtomicLong clock) {

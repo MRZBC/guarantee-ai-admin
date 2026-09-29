@@ -1,5 +1,10 @@
 package com.guarantee.ai.tool;
 
+import com.guarantee.ai.config.AiConfigCatalog;
+import com.guarantee.ai.config.AiConfigItem;
+import com.guarantee.ai.config.AiConfigService;
+import com.guarantee.ai.config.AiConfigSnapshot;
+import com.guarantee.ai.config.mapper.AiConfigItemMapper;
 import com.guarantee.ai.knowledge.KnowledgeProperties;
 import com.guarantee.ai.knowledge.KnowledgeService;
 import com.guarantee.ai.service.ProposalService;
@@ -20,11 +25,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * 工具注册裁剪单元测试（TEST-16 / TEST-10 / SYS-P-12a）。
@@ -41,11 +48,27 @@ class AiToolRegistryTest {
 
     @BeforeEach
     void setUp() {
-        registry = buildRegistry(new KnowledgeProperties());
+        registry = buildRegistry(new KnowledgeProperties(), configService());
     }
 
-    /** 构造注册表（知识层开关可注入，便于断言降级行为）。 */
-    private static AiToolRegistry buildRegistry(KnowledgeProperties knowledgeProperties) {
+    /** 空表配置服务：快照 = 目录默认值（全 true）⇒ 工具集合与改造前一致（AC-CFG-08）。 */
+    private static AiConfigService configService(String... keyValuePairs) {
+        AiConfigItemMapper mapper = mock(AiConfigItemMapper.class);
+        List<AiConfigItem> rows = new ArrayList<>();
+        for (int i = 0; i + 1 < keyValuePairs.length; i += 2) {
+            AiConfigItem row = new AiConfigItem();
+            row.setConfigKey(keyValuePairs[i]);
+            row.setConfigValue(keyValuePairs[i + 1]);
+            row.setVersion(1L);
+            rows.add(row);
+        }
+        when(mapper.selectAll()).thenReturn(rows);
+        return new AiConfigService(mapper, new AiConfigCatalog());
+    }
+
+    /** 构造注册表（知识层应急开关与配置服务都可注入，便于断言降级/开关行为）。 */
+    private static AiToolRegistry buildRegistry(KnowledgeProperties knowledgeProperties,
+                                                AiConfigService configService) {
         return new AiToolRegistry(
                 new OrderSummaryTool(mock(OrderStatisticsService.class)),
                 new OrderDistributionTool(mock(OrderAnalysisService.class)),
@@ -76,7 +99,8 @@ class AiToolRegistryTest {
                 new QueryBusinessKnowledgeTool(mock(KnowledgeService.class)),
                 mock(AiToolCallRecorder.class),
                 new tools.jackson.databind.ObjectMapper(),
-                knowledgeProperties);
+                knowledgeProperties,
+                configService);
     }
 
     /** ADMIN 的全部权限（与 PermissionCatalog 的矩阵一致）。 */
@@ -171,7 +195,7 @@ class AiToolRegistryTest {
     void knowledgeToolIsNotRegisteredWhenDisabled() {
         KnowledgeProperties disabled = new KnowledgeProperties();
         disabled.setEnabled(false);
-        AiToolRegistry degraded = buildRegistry(disabled);
+        AiToolRegistry degraded = buildRegistry(disabled, configService());
 
         List<String> names = degraded.availableToolNames(ADMIN_PERMISSIONS);
 
@@ -181,6 +205,79 @@ class AiToolRegistryTest {
                 .contains("queryOrderSummary", "queryOrderDistribution", "queryOrderTrend",
                         "queryOrg", "queryOperationAudit");
         assertThat(degraded.writeToolCallbacks(ADMIN_PERMISSIONS)).as("写工具同样不受影响").hasSize(5);
+    }
+
+    // ==================================================================
+    // T4-01：能力开关（REQ-CFG-04）——缺省全 true = 与改造前一致
+    // ==================================================================
+
+    @Test
+    @DisplayName("缺省配置（全 true）：工具集合与改造前逐项一致（AC-CFG-08）")
+    void defaultSwitchesKeepLegacyToolSet() {
+        // 默认配置服务 = 空表 + 目录默认值；显式用 2 参重载走一遍，证明"缺省即现状"
+        AiConfigSnapshot defaults = configService().snapshot();
+        AiToolRegistry legacy = buildRegistry(new KnowledgeProperties(), configService());
+
+        assertThat(legacy.availableToolNames(ADMIN_PERMISSIONS, defaults))
+                .containsExactlyInAnyOrderElementsOf(registry.availableToolNames(ADMIN_PERMISSIONS));
+        assertThat(legacy.availableToolNames(ADMIN_PERMISSIONS, defaults))
+                .as("改造前的 11 个只读 + 5 个写工具 + 知识检索全部在位")
+                .contains("queryOrderSummary", "queryOrderDistribution", "queryOrderTrend",
+                        "queryOrg", "queryDepartment", "queryUser", "queryRole", "queryInsuranceType",
+                        "queryOperationAudit", "queryMyToolCalls", "queryMyProposals",
+                        "queryBusinessKnowledge",
+                        "proposeOrgChange", "proposeDepartmentChange", "proposeUserChange",
+                        "proposeRoleChange", "proposeInsuranceTypeChange");
+    }
+
+    @Test
+    @DisplayName("单组关闭：只摘掉该组工具，其它组与权限裁剪都不受影响（REQ-CFG-04）")
+    void singleGroupSwitchOnlyRemovesThatGroup() {
+        AiConfigSnapshot analysisOff = configService(
+                AiConfigCatalog.TOOLS_ANALYSIS_ENABLED, "false").snapshot();
+
+        assertThat(registry.availableToolNames(ADMIN_PERMISSIONS, analysisOff))
+                .as("关掉分析组：分布/趋势不再注册")
+                .doesNotContain("queryOrderDistribution", "queryOrderTrend")
+                .as("订单汇总与系统域工具照旧")
+                .contains("queryOrderSummary", "queryOrg", "queryOperationAudit", "queryBusinessKnowledge");
+
+        AiConfigSnapshot systemOff = configService(AiConfigCatalog.TOOLS_SYSTEM_ENABLED, "false").snapshot();
+        assertThat(registry.availableToolNames(ADMIN_PERMISSIONS, systemOff))
+                .as("关掉系统组：机构/部门/用户/角色/险种与两个自查工具全部不注册")
+                .doesNotContain("queryOrg", "queryDepartment", "queryUser", "queryRole",
+                        "queryInsuranceType", "queryMyToolCalls", "queryMyProposals")
+                .contains("queryOrderSummary", "queryOperationAudit");
+
+        AiConfigSnapshot auditOff = configService(AiConfigCatalog.TOOLS_AUDIT_ENABLED, "false").snapshot();
+        assertThat(registry.availableToolNames(ADMIN_PERMISSIONS, auditOff))
+                .doesNotContain("queryOperationAudit")
+                .contains("queryOrderSummary", "queryOrg");
+
+        AiConfigSnapshot orderOff = configService(AiConfigCatalog.TOOLS_ORDER_ENABLED, "false").snapshot();
+        assertThat(registry.availableToolNames(ADMIN_PERMISSIONS, orderOff))
+                .doesNotContain("queryOrderSummary", "getCurrentDate")
+                .contains("queryOrderDistribution");
+
+        AiConfigSnapshot knowledgeOff = configService(AiConfigCatalog.KNOWLEDGE_ENABLED, "false").snapshot();
+        assertThat(registry.availableToolNames(ADMIN_PERMISSIONS, knowledgeOff))
+                .doesNotContain("queryBusinessKnowledge")
+                .contains("queryOrderSummary");
+    }
+
+    @Test
+    @DisplayName("写能力总开关：tools.proposal.enabled=false 时连 ADMIN 也注册不到 propose*（与权限码取「与」）")
+    void proposalSwitchDisablesAllWriteTools() {
+        AiConfigSnapshot proposalOff = configService(
+                AiConfigCatalog.TOOLS_PROPOSAL_ENABLED, "false").snapshot();
+
+        assertThat(registry.availableToolNames(ADMIN_PERMISSIONS, proposalOff))
+                .as("ADMIN 权限齐备也一样：开关只能更严，不能更松")
+                .noneMatch(name -> name.startsWith("propose"));
+        assertThat(registry.availableToolNames(ADMIN_PERMISSIONS, proposalOff))
+                .as("只读工具完全不受影响")
+                .contains("queryOrderSummary", "queryOrg", "queryOperationAudit", "queryBusinessKnowledge");
+        assertThat(registry.writeToolCallbacks(ADMIN_PERMISSIONS, proposalOff)).isEmpty();
     }
 
     @Test

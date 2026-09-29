@@ -43,19 +43,28 @@ public class BoundedToolCallback implements ToolCallback {
 
     private static final Logger log = LoggerFactory.getLogger(BoundedToolCallback.class);
 
-    /** 单次工具返回结果序列化后的字节上限。 */
+    /**
+     * 单次工具返回结果序列化后的字节上限（**默认值** = 16KB）。
+     *
+     * <p>T4-01 起运行期以配置项 {@code budget.tool-result-bytes} 为准
+     * （见 {@code AiConfigCatalog.BUDGET_TOOL_RESULT_BYTES}）；本常量是"改造前默认值"，
+     * 既作为无配置时的兜底，也是 AC-CFG-08「缺省一致」断言的对照锚点。
+     * 注意两者的相等关系有单测钉住，不允许各改各的（同值常量与配置默认值两处定义必然漂移）。</p>
+     */
     public static final int MAX_RESULT_BYTES = 16 * 1024;
 
     /**
-     * 单次工具执行时长上限（毫秒，REQ-BA-06）。
+     * 单次工具执行时长上限（毫秒，**默认值** = 10s，REQ-BA-06）。
      *
      * <p>依据：工具本身 p95 ≤ 300ms、合计 &lt;1s（需求文档 §7），10 秒给足了一个数量级的余量；
      * 真机上超时只可能来自"SQL 没走索引 / 数据量异常放大"，而不是正常查询。
      * 一旦触顶，宁可让模型得到一条"该项没取到"的可读失败，也不要让整轮预算被一个查询吃掉。</p>
+     *
+     * <p>T4-01 起运行期以配置项 {@code budget.tool-timeout-ms} 为准；本常量是无配置时的兜底。</p>
      */
     public static final long TOOL_TIMEOUT_MS = 10_000L;
 
-    /** 截断提示语，模型会据此说明"结果不完整"。 */
+    /** 截断提示语（16KB 默认口径的文案；实际生效上限不同时由 {@link #truncatedHint()} 生成）。 */
     public static final String TRUNCATED_HINT =
             "结果超出 16KB 上限已截断，仅返回部分数据；请缩小查询范围（例如加时间条件、减小 limit）后重试";
 
@@ -73,16 +82,29 @@ public class BoundedToolCallback implements ToolCallback {
     /** 单次执行超时（毫秒）；{@code <=0} 表示不限期。 */
     private final long timeoutMs;
 
+    /** 单次返回结果字节上限（T4-01 起来自配置，默认 {@link #MAX_RESULT_BYTES}）。 */
+    private final int maxResultBytes;
+
     public BoundedToolCallback(ToolCallback delegate) {
-        this(delegate, TOOL_TIMEOUT_MS);
+        this(delegate, MAX_RESULT_BYTES, TOOL_TIMEOUT_MS);
     }
 
     /**
-     * 供单元测试注入更短/更长的超时；生产链路恒用 {@link #TOOL_TIMEOUT_MS}
-     * （{@link AiToolRegistry} 只走单参构造）。
+     * 供单元测试注入更短/更长的超时；生产链路走
+     * {@link #BoundedToolCallback(ToolCallback, int, long)}（由 {@code AiToolRegistry} 传配置值）。
      */
     public BoundedToolCallback(ToolCallback delegate, long timeoutMs) {
+        this(delegate, MAX_RESULT_BYTES, timeoutMs);
+    }
+
+    /**
+     * 完整构造：结果字节上限 + 执行超时都可配（T4-01）。
+     *
+     * @param maxResultBytes 结果上限（&le;0 视为使用默认值，避免配置写坏后把结果全截成空）
+     */
+    public BoundedToolCallback(ToolCallback delegate, int maxResultBytes, long timeoutMs) {
         this.delegate = delegate;
+        this.maxResultBytes = maxResultBytes > 0 ? maxResultBytes : MAX_RESULT_BYTES;
         this.timeoutMs = timeoutMs;
     }
 
@@ -210,27 +232,44 @@ public class BoundedToolCallback implements ToolCallback {
      * 超限时截断并标记。
      *
      * <p>先尝试在 {@code meta} 里打标记（保留结构化信息），失败则退化为纯文本截断——
-     * 无论如何都不允许把超过 16KB 的内容交给模型。</p>
+     * 无论如何都不允许把超过上限的内容交给模型。</p>
      */
     private String bound(String result) {
         if (result == null) {
             return null;
         }
         byte[] bytes = result.getBytes(StandardCharsets.UTF_8);
-        if (bytes.length <= MAX_RESULT_BYTES) {
+        if (bytes.length <= maxResultBytes) {
             return result;
         }
-        log.warn("工具返回结果 {} 字节，超出 {} 字节上限，已截断", bytes.length, MAX_RESULT_BYTES);
+        log.warn("工具返回结果 {} 字节，超出 {} 字节上限，已截断", bytes.length, maxResultBytes);
         String marked = markTruncated(result);
-        if (marked != null && marked.getBytes(StandardCharsets.UTF_8).length <= MAX_RESULT_BYTES) {
+        if (marked != null && marked.getBytes(StandardCharsets.UTF_8).length <= maxResultBytes) {
             return marked;
         }
         // 兜底：按字节边界安全截断（避免截断到多字节字符中间）
-        String cut = new String(bytes, 0, MAX_RESULT_BYTES, StandardCharsets.UTF_8);
+        String cut = new String(bytes, 0, maxResultBytes, StandardCharsets.UTF_8);
         if (!cut.isEmpty() && cut.charAt(cut.length() - 1) == '\uFFFD') {
             cut = cut.substring(0, cut.length() - 1);
         }
         return cut + "\n...(结果超限已截断)";
+    }
+
+    /**
+     * 截断提示语（按**本轮生效**的上限生成）。
+     *
+     * <p>上限可配之后，文案里的数字不能再写死 16KB——否则模型会告诉用户一个错的上限。
+     * 恰好 16KB（默认值）时返回既有的 {@link #TRUNCATED_HINT}，保持文案不变。</p>
+     */
+    private String truncatedHint() {
+        if (maxResultBytes == MAX_RESULT_BYTES) {
+            return TRUNCATED_HINT;
+        }
+        String limit = maxResultBytes % 1024 == 0
+                ? (maxResultBytes / 1024) + "KB"
+                : maxResultBytes + " 字节";
+        return "结果超出 " + limit + " 上限已截断，仅返回部分数据；"
+                + "请缩小查询范围（例如加时间条件、减小 limit）后重试";
     }
 
     /**
@@ -239,7 +278,7 @@ public class BoundedToolCallback implements ToolCallback {
      * <p>只做字符串层面的定点插入，不引入完整 JSON 解析——工具返回值是框架生成的
      * 紧凑 JSON，形如 {@code {"a":1,...,"meta":{...}}}，末端的 {@code meta} 是稳定的。</p>
      */
-    private static String markTruncated(String json) {
+    private String markTruncated(String json) {
         int idx = json.lastIndexOf("\"truncated\":");
         if (idx < 0) {
             return null;
@@ -254,7 +293,7 @@ public class BoundedToolCallback implements ToolCallback {
         sb.replace(valueStart, valueEnd, "true");
         // 追加 truncatedHint（在 meta 对象内、截断标记之后）
         int insertAt = valueStart + "true".length();
-        sb.insert(insertAt, ",\"truncatedHint\":\"" + TRUNCATED_HINT + "\"");
+        sb.insert(insertAt, ",\"truncatedHint\":\"" + truncatedHint() + "\"");
         return sb.toString();
     }
 }
