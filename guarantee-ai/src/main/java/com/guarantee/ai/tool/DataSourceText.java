@@ -3,6 +3,7 @@ package com.guarantee.ai.tool;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -138,6 +139,25 @@ public final class DataSourceText {
             if ("0".equals(text)) {
                 return "停用";
             }
+        }
+        /*
+          险种类别也要翻译：口径行与「数据摘要」的块标题都直接取自 dataSource，
+          而它们都是**给业务用户看的正文**。原先这里原样输出 code，于是用户在口径里看到
+          「险种类别：TENDER」——正是提示词第 42 条禁止的那种内部编码（2026-09-30 黄金问题集
+          GQ-10 真机实测抓到）。
+        */
+        if ("category".equals(key)) {
+            String text = String.valueOf(value).trim().toUpperCase(Locale.ROOT);
+            return switch (text) {
+                case "TENDER", "BID" -> "投标担保";
+                case "PERFORMANCE", "CONTRACT" -> "履约担保";
+                case "QUALITY" -> "质量保证";
+                case "ADVANCE" -> "预付款担保";
+                case "OWNER" -> "业主支付";
+                case "OTHER" -> "其他";
+                // 未登记的取值原样回显：宁可露出一个陌生码，也不要静默吞掉一个查询条件
+                default -> String.valueOf(value);
+            };
         }
         return String.valueOf(value);
     }

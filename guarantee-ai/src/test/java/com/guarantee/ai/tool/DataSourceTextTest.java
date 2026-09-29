@@ -127,6 +127,21 @@ class DataSourceTextTest {
     }
 
     @Test
+    @DisplayName("险种类别翻成业务名：口径行与数据摘要都是给用户看的正文，不能出现 TENDER")
+    void translatesInsuranceCategory() {
+        // 真机来源：黄金问题集 GQ-10（问某险种状态与费率）实测口径行里出现「险种类别：TENDER」，
+        // 正是提示词第 42 条禁止的内部编码
+        assertThat(DataSourceText.of("险种配置", DataSourceText.parts("category", "TENDER")))
+                .isEqualTo("险种配置 · 险种类别：投标担保")
+                .doesNotContain("TENDER");
+        assertThat(DataSourceText.of("险种配置", DataSourceText.parts("category", "performance")))
+                .as("大小写不敏感").contains("履约担保");
+        assertThat(DataSourceText.of("险种配置", DataSourceText.parts("category", "未登记类别")))
+                .as("未登记的取值原样回显，不静默吞掉查询条件")
+                .contains("未登记类别");
+    }
+
+    @Test
     @DisplayName("空 parts 不抛异常")
     void handlesNullAndEmptyParts() {
         assertThat(DataSourceText.of("机构配置", null)).isEqualTo("机构配置 · 未加过滤（全量）");

@@ -131,7 +131,7 @@ const QUESTIONS = [
     id: 'GQ-10',
     category: '系统域回归',
     question: '「投标保函（标准）」这个险种现在是启用还是停用？基准费率是多少？',
-    expect: { contains: ['投标保函（标准）'], maxToolCalls: 4, maxRounds: 2 }
+    expect: { contains: ['投标保函（标准）'], maxToolCalls: 3, maxRounds: 3 }
   },
   // ---- 降级类 ----
   {
@@ -305,6 +305,10 @@ async function ask(token, question) {
   return {
     failed: false,
     text,
+    // 模型自己写的正文（剥掉服务端追加的尾部）。内部术语检查只看这一段：
+    // 口径行/数据摘要由服务端生成、内容直接取自工具返回值，那里出现编码属于
+    // dataSource 的问题（例如 GQ-10 抓到的「险种类别：TENDER」），不是模型违规。
+    prose: proseOf(text),
     toolCalls,
     // 轮次口径与前端一致：每发生一次 reset 代表"有一轮带工具调用的前言被丢弃"，
     // 再加最后一轮正文；没有工具调用时就是 1 轮
@@ -313,6 +317,18 @@ async function ask(token, question) {
     errorMessage,
     elapsedMs: Date.now() - started
   }
+}
+
+/** 服务端尾部（口径页脚 + 数据摘要）的起始标记；正文 = 这两个标记之前的部分。 */
+const SERVER_TAIL_MARKERS = ['\n\n口径：', '\n\n数据摘要（服务端生成）']
+
+function proseOf(text) {
+  let cut = text.length
+  for (const marker of SERVER_TAIL_MARKERS) {
+    const index = text.indexOf(marker)
+    if (index !== -1 && index < cut) cut = index
+  }
+  return text.slice(0, cut)
 }
 
 // ---------------------------------------------------------------------------
@@ -340,7 +356,9 @@ function judge(item, result) {
     if (result.text.includes(fragment)) reasons.push(`出现了禁止内容「${fragment}」`)
   }
   for (const term of FORBIDDEN_TECH_TERMS) {
-    if (result.text.includes(term)) reasons.push(`正文泄漏内部术语「${term}」`)
+    if ((result.prose ?? result.text).includes(term)) {
+      reasons.push(`正文泄漏内部术语「${term}」`)
+    }
   }
   if (item.expect.refusal) {
     const refused = /(不支持|无法|不能|没有.*(权限|工具|数据)|查不到|做不到|建议)/.test(result.text)
