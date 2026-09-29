@@ -109,6 +109,9 @@ class AiConfigWiringTest {
                     return message;
                 });
         when(promptProvider.build(any(Optional.class))).thenReturn("（测试用 System Prompt）");
+        // T4-03 接上 prompt_version 后，本轮生效的提示词版本来自 promptProvider；
+        // 这里固定为 7，使"回答级回溯"两条断言能验证版本被真的写下去。
+        when(promptProvider.activeVersionNo()).thenReturn(7);
         when(timeSemanticParser.parse(anyString())).thenReturn(Optional.empty());
         when(toolRegistry.callbacks(any(), any())).thenReturn(new ToolCallback[0]);
 
@@ -277,13 +280,8 @@ class AiConfigWiringTest {
     }
 
     @Test
-    @DisplayName("回答级回溯：只更新 config_version，且**不覆盖** T4-03 写的 prompt_version")
+    @DisplayName("回答级回溯：写入本轮实际生效的 prompt_version（T4-03）与 config_version（T4-01）")
     void recordsConfigVersionAtTurnEnd() {
-        AiConversation existing = new AiConversation();
-        existing.setId(CONVERSATION_ID);
-        existing.setPromptVersion(7);
-        when(conversationMapper.selectById(CONVERSATION_ID)).thenReturn(existing);
-
         chat();
         verify(conversationMapper).updateVersionTrace(eq(CONVERSATION_ID), eq(7), eq(0L));
 

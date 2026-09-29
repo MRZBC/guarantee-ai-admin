@@ -63,7 +63,11 @@ class AiConfigChangeAuditTest {
         Environment environment = mock(Environment.class);
         AiConfigCatalog catalog = new AiConfigCatalog();
         AiConfigService configService = new AiConfigService(mapper, catalog);
-        controller = new AiConfigController(configService, catalog, webAuditor, environment);
+        // 提示词版本服务不参与本测试的配置变更路径，用 mock 占位（T4-03 扩了控制器构造器）
+        com.guarantee.ai.config.PromptVersionService promptVersionService =
+                mock(com.guarantee.ai.config.PromptVersionService.class);
+        controller = new AiConfigController(configService, catalog, webAuditor, environment,
+                promptVersionService);
         CurrentUser.set(new CurrentUser.Principal(7L, "admin", "超级管理员",
                 List.of(Roles.ADMIN), List.of()));
     }

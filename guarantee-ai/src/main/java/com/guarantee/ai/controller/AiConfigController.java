@@ -4,6 +4,8 @@ import com.guarantee.ai.config.AiConfigCatalog;
 import com.guarantee.ai.config.AiConfigDefinition;
 import com.guarantee.ai.config.AiConfigService;
 import com.guarantee.ai.config.AiConfigSnapshot;
+import com.guarantee.ai.config.AiPromptVersion;
+import com.guarantee.ai.config.PromptVersionService;
 import com.guarantee.ai.service.OperationAuditService;
 import com.guarantee.common.api.Result;
 import com.guarantee.common.api.ResultCode;
@@ -14,10 +16,12 @@ import com.guarantee.common.security.SensitiveFieldMasker;
 import com.guarantee.system.service.WebAuditor;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import org.springframework.core.env.Environment;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -66,15 +70,18 @@ public class AiConfigController {
     private final AiConfigCatalog catalog;
     private final WebAuditor webAuditor;
     private final Environment environment;
+    private final PromptVersionService promptVersionService;
 
     public AiConfigController(AiConfigService configService,
                               AiConfigCatalog catalog,
                               WebAuditor webAuditor,
-                              Environment environment) {
+                              Environment environment,
+                              PromptVersionService promptVersionService) {
         this.configService = configService;
         this.catalog = catalog;
         this.webAuditor = webAuditor;
         this.environment = environment;
+        this.promptVersionService = promptVersionService;
     }
 
     // ==================================================================
@@ -149,6 +156,74 @@ public class AiConfigController {
     }
 
     // ==================================================================
+    // 提示词版本（REQ-CFG-02 / REQ-CFG-11）
+    // ==================================================================
+
+    /**
+     * 版本历史 + 当前草稿 + 当前门禁结果。
+     *
+     * <p>门禁结果**必须如实返回**：{@code ran=false} 就是"未跑"（脚本不存在 / {@code --suite}
+     * 尚未实现 / 执行失败），页面据此显示"未跑"，而不是把它显示成"通过"。</p>
+     */
+    @GetMapping("/prompts")
+    @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_VIEW + "')")
+    public Result<PromptHistoryView> promptHistory() {
+        List<PromptVersionView> versions = promptVersionService.history().stream()
+                .map(AiConfigController::toPromptView)
+                .toList();
+        return Result.ok(new PromptHistoryView(versions,
+                toPromptView(promptVersionService.draft()),
+                toGateView(promptVersionService.evaluateGate())));
+    }
+
+    /** 单个版本正文 + 缺失的保护标记（编辑页据此给出强警告）。 */
+    @GetMapping("/prompts/{versionNo}")
+    @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_VIEW + "')")
+    public Result<PromptDetailView> promptDetail(@PathVariable int versionNo) {
+        return Result.ok(toPromptDetail(promptVersionService.requireVersion(versionNo)));
+    }
+
+    /** 只查门禁结果（发布前页面先刷一次，避免"点了发布才知道未跑"）。 */
+    @GetMapping("/prompts/gate")
+    @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_VIEW + "')")
+    public Result<GateView> promptGate() {
+        return Result.ok(toGateView(promptVersionService.evaluateGate()));
+    }
+
+    /** 保存草稿（已有草稿则原地更新；已发布版本不可改）。 */
+    @PostMapping("/prompts/draft")
+    @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_UPDATE + "')")
+    public Result<PromptDetailView> savePromptDraft(@Valid @RequestBody PromptDraftRequest request) {
+        AiPromptVersion draft = promptVersionService.saveDraft(request.content(), request.note(),
+                requireUserId().toString());
+        return Result.ok(toPromptDetail(draft));
+    }
+
+    /**
+     * 发布草稿：服务端先校验保护标记，再跑确定性黄金问题集门禁；两者任一不通过都拒绝发布。
+     *
+     * <p>门禁"未跑"同样拒绝（REQ-CFG-11 / AC-CFG-10），错误信息里带原因，页面照原样展示。</p>
+     */
+    @PostMapping("/prompts/publish")
+    @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_UPDATE + "')")
+    public Result<PromptPublishResult> publishPrompt(@Valid @RequestBody PromptVersionRequest request) {
+        AiPromptVersion published = promptVersionService.publish(request.versionNo(),
+                requireUserId().toString());
+        return Result.ok(new PromptPublishResult(published.getVersionNo(), published.getStatus(),
+                published.getContentHash(), true, "发布成功（确定性门禁通过），下一个请求生效"));
+    }
+
+    /** 回滚到历史版本（应急路径，不重跑门禁；写审计）。 */
+    @PostMapping("/prompts/rollback")
+    @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_UPDATE + "')")
+    public Result<PromptPublishResult> rollbackPrompt(@Valid @RequestBody PromptVersionRequest request) {
+        AiPromptVersion version = promptVersionService.rollback(request.versionNo(),
+                requireUserId().toString());
+        return Result.ok(new PromptPublishResult(version.getVersionNo(), version.getStatus(),
+                version.getContentHash(), false, "已回滚到 v" + version.getVersionNo() + "，下一个请求生效"));
+    }
+
+    // ==================================================================
     // 视图与请求体
     // ==================================================================
 
@@ -206,9 +281,74 @@ public class AiConfigController {
             String message) {
     }
 
+    /** 提示词版本（列表用，不含正文）。 */
+    public record PromptVersionView(
+            int versionNo,
+            String status,
+            String note,
+            String contentHash,
+            String createdBy,
+            LocalDateTime createdAt,
+            String publishedBy,
+            LocalDateTime publishedAt,
+            int contentLength) {
+    }
+
+    /** 版本正文 + 缺失的保护标记（缺失非空即不可发布）。 */
+    public record PromptDetailView(PromptVersionView version, String content,
+                                   List<String> missingProtectedMarkers) {
+    }
+
+    /** 版本历史 + 当前草稿 + 门禁结果。 */
+    public record PromptHistoryView(List<PromptVersionView> versions, PromptVersionView draft,
+                                    GateView gate) {
+    }
+
+    /** 门禁结果：{@code ran=false} 就是"未跑"，页面必须如实显示而不是当成通过（AC-CFG-10）。 */
+    public record GateView(boolean ran, boolean passed, String summary) {
+    }
+
+    /** 保存草稿请求。 */
+    public record PromptDraftRequest(@NotBlank String content, String note) {
+    }
+
+    /** 发布 / 回滚的目标版本。 */
+    public record PromptVersionRequest(@NotNull Integer versionNo) {
+    }
+
+    /** 发布 / 回滚结果。 */
+    public record PromptPublishResult(int versionNo, String status, String contentHash,
+                                      boolean gated, String message) {
+    }
+
     // ==================================================================
     // 内部
     // ==================================================================
+
+    private static PromptVersionView toPromptView(AiPromptVersion version) {
+        if (version == null) {
+            return null;
+        }
+        return new PromptVersionView(
+                version.getVersionNo() == null ? 0 : version.getVersionNo(),
+                version.getStatus(),
+                version.getNote(),
+                version.getContentHash(),
+                version.getCreatedBy(),
+                version.getCreatedAt(),
+                version.getPublishedBy(),
+                version.getPublishedAt(),
+                version.getContent() == null ? 0 : version.getContent().length());
+    }
+
+    private static PromptDetailView toPromptDetail(AiPromptVersion version) {
+        return new PromptDetailView(toPromptView(version), version.getContent(),
+                PromptVersionService.missingProtectedMarkers(version.getContent()));
+    }
+
+    private static GateView toGateView(PromptVersionService.GateResult result) {
+        return new GateView(result.ran(), result.passed(), result.summary());
+    }
 
     private AiConfigItemView toView(AiConfigDefinition def, AiConfigSnapshot snapshot) {
         boolean secret = SECRET_CLASS_KEYS.contains(def.key());

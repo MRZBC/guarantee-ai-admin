@@ -7,6 +7,9 @@ import com.guarantee.ai.dto.AiChatRequest;
 import com.guarantee.ai.entity.AiConversation;
 import com.guarantee.ai.entity.AiMessage;
 import com.guarantee.ai.mapper.AiConversationMapper;
+import com.guarantee.ai.metrics.AiChatMetrics;
+import com.guarantee.ai.metrics.AiTurnMetric;
+import com.guarantee.ai.metrics.TurnMetricService;
 import com.guarantee.ai.time.TimeRange;
 import com.guarantee.ai.time.TimeSemanticParser;
 import com.guarantee.ai.tool.AiToolContextKeys;
@@ -256,6 +259,22 @@ public class AiChatService {
      */
     private final AiConversationMapper conversationMapper;
 
+    /**
+     * 观测指标（T5-01 / REQ-MCP-08）：**只读旁路**，任何异常都不该影响回答。
+     * 单测用的包内构造器不注入它，因此可能为 {@code null}（调用点做空值跳过）。
+     */
+    private AiChatMetrics metrics;
+
+    /**
+     * 单轮指标落库（T5-01 / REQ-MCP-09）：一次问答一行（含失败与触顶）。
+     * 与 {@link #metrics} 一样，单测路径可能为 {@code null}。
+     */
+    private TurnMetricService turnMetricService;
+
+    /** 单轮指标落库开关（REQ §6.3）：运维应急可关；关掉后回答与指标计数都不受影响。 */
+    @Value("${guarantee.ai.observability.turn-metric-persist:true}")
+    private boolean turnMetricPersistEnabled = true;
+
     @Autowired
     public AiChatService(ChatModel chatModel,
                          ToolCallingManager toolCallingManager,
@@ -270,10 +289,14 @@ public class AiChatService {
                          ObjectMapper objectMapper,
                          AiConfigService configService,
                          AiConversationMapper conversationMapper,
+                         AiChatMetrics metrics,
+                         TurnMetricService turnMetricService,
                          @Value("${spring.ai.openai.chat.model:unknown}") String modelName) {
         this(chatModel, toolCallingManager, conversationService, promptProvider, timeSemanticParser,
                 toolRegistry, proposalEventPublisher, proposalClaimGuard, dataSourceClaimGuard,
                 numberClaimGuard, objectMapper, configService, conversationMapper, modelName, System::nanoTime);
+        this.metrics = metrics;
+        this.turnMetricService = turnMetricService;
     }
 
     /** 仅供单测注入时间源（软超时判定），生产链路走上面的 14 参构造。 */
@@ -320,6 +343,12 @@ public class AiChatService {
      */
     public Flux<ServerSentEvent<String>> stream(Long userId, AiChatRequest request) {
         String userText = request.getMessage();
+        /*
+          TraceId 快照（REQ-MCP-10 / AC-MCP-10）：此处仍在 **Web 线程**，MDC 有效；
+          流式链路随后切到 Reactor 线程，MDC 会丢。因此把值显式抓住、随本轮上下文下传
+          （ToolContext + TurnCost），绝不依赖 Reactor 上的自然传播。
+        */
+        String traceId = TraceContext.currentTraceId();
 
         // 本轮配置快照：DB 不可用时返回上一份/默认值，绝不因此让助手不可用（AC-CFG-07）
         AiConfigSnapshot config = configService.refreshIfStale();
@@ -365,6 +394,13 @@ public class AiChatService {
         */
         ToolCallBudget budget = new ToolCallBudget(config.getInt(AiConfigCatalog.BUDGET_MAX_CALLS_PER_ROUND));
         TurnCost cost = new TurnCost(nanoClock);
+        // 本轮上下文绑定（REQ-MCP-09/10）：traceId 与提示词版本随 cost 的**显式**下传，
+        // 收尾时即便跑在 Reactor 线程上也能落库/打日志，不依赖 MDC 传播。
+        //
+        // prompt_version（T4-03）：取的是**本轮实际生效**的提示词版本（DB 无发布版、
+        // 回落到 classpath 内置提示词时为 null）。不能用 conversation.getPromptVersion()：
+        // 那是上一轮写下的值，提示词刚发布时会把新版本记成旧版本。
+        cost.bindTurn(traceId, normalizePromptVersion(promptProvider.activeVersionNo()));
 
         Map<String, Object> toolContext = buildToolContext(conversationId, userId, userText,
                 principalContext(), new ToolCallEventSink(sink), proposalSink, turnFacts, knowledgeTurn);
@@ -449,8 +485,8 @@ public class AiChatService {
             log.error("AI 流式对话失败 conversationId={}", conversationId, ex);
             persistAssistant(persisted, conversationId, userId, answer.toString());
             conversationService.audit(conversationId, userId, "ERROR", safeMessage(ex));
-            // 出错轮也必须留下成本日志（REQ-BA-11：每次分析可查）；logged 保证一轮只写一条
-            cost.log(conversationId, budget.executedTotal());
+            // 出错轮也必须留下成本日志与指标行（REQ-BA-11 / REQ-MCP-09：含失败）；logged 保证一轮只写一条
+            finishTurnCost(null, conversationId, userId, config, cost, budget, AiTurnMetric.OUTCOME_ERROR);
             return Flux.just(event("error", new ChatStreamEvents.Error(safeMessage(ex))));
         });
 
@@ -677,39 +713,47 @@ public class AiChatService {
           conversationId / 轮次 / 工具调用数 / 工具耗时合计 / 输入输出 token / 本次总耗时 / 是否触顶。
           放在落库之后：即便这里抛异常（不会），也已经有一条助手消息可查。
         */
-        cost.log(conversationId, budget.executedTotal());
+        // 收尾三件事共用同一次收尾：成本日志 + 单轮指标落库 + Micrometer 指标
+        finishTurnCost(messageId, conversationId, userId, config, cost, budget,
+                cost.capped() ? AiTurnMetric.OUTCOME_CAPPED : AiTurnMetric.OUTCOME_SUCCESS);
         /*
-          回答级回溯（REQ-CFG-05 / V8 §3）：记下"这一轮回答用的是哪一版配置"。
-          prompt_version 由 T4-03 接（本处传 null，mapper 允许两列各自为空），
-          T4-01 只负责 config_version。
+          回答级回溯（REQ-CFG-05 / V8 §3）：记下"这一轮回答用的是哪一版配置 + 哪一版提示词"。
+          prompt_version 由 T4-03 在这里接上（取本轮绑定的实际生效版本，见上面的 bindTurn），
+          config_version 由 T4-01 负责；两列由同一条 updateVersionTrace 写入。
         */
-        recordConfigVersion(conversationId, config.version());
+        recordConfigVersion(conversationId, config.version(), cost.promptVersion());
         return events.concatWith(Flux.just(
                 event("done", new ChatStreamEvents.Done(conversationId, messageId))));
     }
 
     /**
-     * 写入本轮回答所用的配置快照版本号（REQ-CFG-05 回答级回溯）。
+     * 提示词版本号归一化：版本从 1 开始，{@code <=0} 一律记为 null
+     * （"无 DB 发布版" 与 "取值失败" 都不该在库里写成 0，那会被读成"第 0 版"）。
+     */
+    private static Integer normalizePromptVersion(Integer version) {
+        return version == null || version <= 0 ? null : version;
+    }
+
+    /**
+     * 写入本轮回答所用的配置快照版本号与提示词版本号（REQ-CFG-05 回答级回溯）。
      *
-     * <p><b>为什么先读一次 existing.promptVersion</b>：{@code updateVersionTrace} 会同时写
-     * {@code prompt_version} 与 {@code config_version} 两列（V8 §3）。T4-01 只负责
-     * {@code config_version}，{@code prompt_version} 由 T4-03 接——若这里硬写 null，
-     * 等 T4-03 落地后每轮都会把它清掉。因此读了再写：prompt_version 保持 T4-03 写下的值。</p>
+     * <p><b>两列一次写完</b>：{@code updateVersionTrace} 同时写 {@code prompt_version} 与
+     * {@code config_version}（V8 §3）。{@code promptVersion} 由调用方传入**本轮实际生效**的值
+     * （T4-03）；为 null 表示本轮用的是 classpath 内置提示词（DB 无发布版），这本身就是
+     * 一次可回溯的事实，不能拿上一轮的值来填。</p>
      *
      * <p><b>写失败只告警，绝不影响回答</b>：这是一条审计线索，不是答案的一部分；
      * 让它把一次成功的问答变成 error 是本末倒置（与成本日志同一取舍）。</p>
      */
-    private void recordConfigVersion(Long conversationId, long configVersion) {
+    private void recordConfigVersion(Long conversationId, long configVersion, Integer promptVersion) {
         if (conversationId == null) {
             return;
         }
         try {
-            AiConversation existing = conversationMapper.selectById(conversationId);
-            Integer promptVersion = existing == null ? null : existing.getPromptVersion();
             conversationMapper.updateVersionTrace(conversationId, promptVersion, configVersion);
         } catch (RuntimeException ex) {
-            log.warn("记录回答级配置版本失败（不影响回答）conversationId={} configVersion={}",
-                    conversationId, configVersion, ex);
+            log.warn("记录回答级版本回溯失败（不影响回答）conversationId={} configVersion={} promptVersion={}",
+                    conversationId, configVersion, promptVersion, ex);
         }
     }
 
@@ -1164,6 +1208,8 @@ public class AiChatService {
                                                         TurnFacts turnFacts,
                                                         KnowledgeClaimGuard.TurnKnowledge knowledgeTurn) {
         Map<String, Object> context = new HashMap<>();
+        // 助手侧调用一律记 CHAT：落进 ai_tool_call.source 与 ai.tool.calls{source}（AC-MCP-05）
+        context.put(AiToolContextKeys.CALL_SOURCE, AiTurnMetric.SOURCE_CHAT);
         putIfNotNull(context, AiToolContextKeys.CONVERSATION_ID, conversationId);
         putIfNotNull(context, AiToolContextKeys.USER_ID, userId);
         putIfNotNull(context, AiToolContextKeys.TRACE_ID, TraceContext.currentTraceId());
@@ -1358,6 +1404,71 @@ public class AiChatService {
     }
 
     /**
+     * 收尾的统一入口：**结构化成本日志 + 单轮指标落库 + Micrometer 指标**三件事一起做。
+     *
+     * <p><b>为什么合成一个方法</b>：三者口径必须一一对应（REQ-MCP-09 要求"与 AI_TURN_COST
+     * 日志同源、字段一一对应"），分三处写迟早漂移；而 {@code TurnCost.log} 的 CAS 保证了
+     * 失败路径与正常路径只会真正收尾一次，所以这里用它的返回值当唯一闸门。</p>
+     *
+     * <p><b>失败语义</b>：Micrometer 先记（落库被开关关掉或写失败都不该让计数断掉）；
+     * 落库由 {@link TurnMetricService#record} 内部吞异常并告警——**绝不影响回答**
+     * （与审计"写失败要回滚业务"相反）。</p>
+     *
+     * @param messageId 助手消息 id；失败路径可能为 null
+     * @param outcome   SUCCESS / ERROR / CAPPED
+     */
+    private void finishTurnCost(Long messageId, Long conversationId, Long userId,
+                                AiConfigSnapshot config, TurnCost cost, ToolCallBudget budget,
+                                String outcome) {
+        if (!cost.log(conversationId, budget.executedTotal(), outcome)) {
+            return;
+        }
+
+        String model = resolveModelName(config);
+        if (metrics != null) {
+            metrics.chatRequest(outcome, model);
+            metrics.chatDuration(outcome, cost.elapsedMs());
+            metrics.chatRounds(cost.rounds(), cost.capped());
+            metrics.tokens(cost.inputTokens(), cost.outputTokens(), model);
+        }
+
+        if (turnMetricService == null || !turnMetricPersistEnabled) {
+            return;
+        }
+        AiTurnMetric row = new AiTurnMetric();
+        row.setConversationId(conversationId);
+        row.setMessageId(messageId);
+        row.setUserId(userId);
+        row.setModel(model);
+        // 提示词版本来自会话记录（第四阶段 prompt_version，INT）→ 本表用 VARCHAR(32) 兼容
+        // "版本号"与"降级时的文件名"两种形态
+        Integer promptVersion = cost.promptVersion();
+        row.setPromptVersion(promptVersion == null ? null : String.valueOf(promptVersion));
+        row.setRounds(cost.rounds());
+        row.setToolCalls(budget.executedTotal());
+        row.setToolCostMs(cost.toolCostMs());
+        row.setTotalCostMs(cost.elapsedMs());
+        row.setInputTokens(cost.inputTokens());
+        row.setOutputTokens(cost.outputTokens());
+        row.setCapped(cost.capped() ? 1 : 0);
+        row.setCapReason(capReasonOf(cost));
+        row.setSource(AiTurnMetric.SOURCE_CHAT);
+        row.setOutcome(outcome);
+        row.setTraceId(cost.traceId());
+        turnMetricService.record(row);
+    }
+
+    /** 触顶原因映射：{@link TurnCost} 的内部值 → {@code ai_turn_metric.cap_reason} 的登记枚举。 */
+    private static String capReasonOf(TurnCost cost) {
+        return switch (cost.capReason()) {
+            case TurnCost.CAP_DURATION -> AiTurnMetric.CAP_SOFT_TIMEOUT;
+            case TurnCost.CAP_ROUNDS -> AiTurnMetric.CAP_MAX_ROUNDS;
+            case TurnCost.CAP_TOOL_LIMIT -> AiTurnMetric.CAP_FRAMEWORK_LIMIT;
+            default -> null;
+        };
+    }
+
+    /**
      * 本轮成本与耗时的**可变累加器**（REQ-BA-11）。
      *
      * <p>只属于一次请求：{@code AiChatService} 是单例 Bean，任何计数都不能挂在字段上，
@@ -1386,9 +1497,48 @@ public class AiChatService {
         private final AtomicReference<String> capReason = new AtomicReference<>(CAP_NONE);
         private final AtomicBoolean logged = new AtomicBoolean();
 
+        /**
+         * 本轮的 traceId 与提示词版本：由 {@code stream()} 在 **Web 线程**绑定
+         * （见 {@link #bindTurn}），收尾时在 Reactor 线程上直接读——
+         * 这是"不依赖 MDC 自然传播"的落地方式（REQ-MCP-10）。
+         */
+        private final AtomicReference<String> traceId = new AtomicReference<>();
+        private final AtomicReference<Integer> promptVersion = new AtomicReference<>();
+
         TurnCost(LongSupplier nanoClock) {
             this.nanoClock = nanoClock;
             this.startNanos = nanoClock.getAsLong();
+        }
+
+        /** 绑定本轮上下文（traceId 可能为 null：非 Web 线程/无 MDC 的集成测试）。 */
+        void bindTurn(String traceId, Integer promptVersion) {
+            this.traceId.set(traceId);
+            this.promptVersion.set(promptVersion);
+        }
+
+        String traceId() {
+            return traceId.get();
+        }
+
+        Integer promptVersion() {
+            return promptVersion.get();
+        }
+
+        int rounds() {
+            return modelRounds.get();
+        }
+
+        int inputTokens() {
+            return inputTokens.get();
+        }
+
+        int outputTokens() {
+            return outputTokens.get();
+        }
+
+        /** 是否触顶（capReason 非 none）。 */
+        boolean capped() {
+            return !CAP_NONE.equals(capReason.get());
         }
 
         void addToolCostMs(long millis) {
@@ -1434,21 +1584,33 @@ public class AiChatService {
             return capReason.get();
         }
 
+        long toolCostMs() {
+            return toolCostMs.get();
+        }
+
         /**
          * 写一条结构化成本日志（固定字段）：
-         * {@code conversationId / rounds 轮次 / toolCalls 工具调用数 / toolCostMs 工具耗时合计 /
-         * inputTokens+outputTokens 输入输出 token / totalCostMs 本次总耗时 / capped 是否触顶}。
+         * {@code traceId / conversationId / rounds 轮次 / toolCalls 工具调用数 / toolCostMs 工具耗时合计 /
+         * inputTokens+outputTokens 输入输出 token / totalCostMs 本次总耗时 / capped 是否触顶 / source / outcome}。
+         *
+         * <p><b>为什么带 traceId 且要做成返回值</b>：这条日志跑在 Reactor 线程，字段里没有 traceId 时
+         * 恰好串不起"一次异常问答的成本"（AC-MCP-10）；返回值用于把"一条日志"与"一行指标"绑成同一次收尾，
+         * 避免失败路径重复落库（{@code logged} 的 CAS 是唯一闸门）。</p>
          *
          * @param toolCalls 本轮实际执行的工具调用数（来自 {@link ToolCallBudget#executedTotal()}）
+         * @param outcome   SUCCESS / ERROR / CAPPED（与 {@code ai.chat.requests} 的 outcome 标签同值域）
+         * @return true 表示本次调用真的写了日志（调用方据此决定是否落指标行）
          */
-        void log(Long conversationId, int toolCalls) {
+        boolean log(Long conversationId, int toolCalls, String outcome) {
             if (!logged.compareAndSet(false, true)) {
-                return;
+                return false;
             }
-            log.info("{} conversationId={} rounds={} toolCalls={} toolCostMs={} inputTokens={} "
-                            + "outputTokens={} totalCostMs={} capped={}",
-                    COST_LOG_TAG, conversationId, modelRounds.get(), toolCalls, toolCostMs.get(),
-                    inputTokens.get(), outputTokens.get(), elapsedMs(), capReason.get());
+            log.info("{} traceId={} conversationId={} rounds={} toolCalls={} toolCostMs={} inputTokens={} "
+                            + "outputTokens={} totalCostMs={} capped={} capReason={} source={} outcome={}",
+                    COST_LOG_TAG, traceId.get(), conversationId, modelRounds.get(), toolCalls, toolCostMs.get(),
+                    inputTokens.get(), outputTokens.get(), elapsedMs(), capReason.get(),
+                    AiTurnMetric.SOURCE_CHAT, outcome);
+            return true;
         }
     }
 }
