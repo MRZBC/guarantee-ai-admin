@@ -129,14 +129,13 @@ temp/
 #   .mcp.json    项目级 MCP 配置（本机路径绑定）
 #   adapters/    各 Runtime（dsh / OpenCode / Codex CLI / Claude Code）接入说明
 #
-# 注意：本段**不排除** `knowledge/` 与 `tools/knowledge-os-mcp/`。
-# 项目 STATE 把它们当仓库内的正式资产，而不是本机辅助：
-#   - Handoff Notes 第 3 条：知识库的源在仓库 `knowledge/`，改完必须重跑
-#     `node tools/knowledge-os-mcp/scripts/apply-knowledge.mjs`；
-#   - Completed 列表把 MCP Server 与 `apply-knowledge.mjs` 记为已交付物。
-# 排除它们会让这两条指令在别人的 clone 里无法执行（源文件与脚本都不存在），
-# 属自相矛盾，故按 STATE 的口径保留在版本库中。
-# 这两个子树内部的 `node_modules/`、`dist/`、`target/` 仍由上方通用规则排除。
+# 注意：本段**不排除** `tools/knowledge-os-mcp/`（工具链，仍是仓库内的正式资产）。
+# 但仓库里**不再有** `knowledge/` —— 该目录已于 2026-09-30 退役并删除：
+# 知识的唯一真源是外部 Obsidian Vault（路径见 `.agent/vault.local.yaml`），
+# 仓库内不再保留知识源副本，以消除「仓库源文件 + 应用器」两份内容漂移的问题
+# （2026-09-29 曾因一处空格差异导致 Vault 里一整页内容被重复追加）。
+# 写入 Vault 的入口是 `tools/knowledge-os-mcp/scripts/kos.mjs`（经 MCP）。
+# 该子树内部的 `node_modules/`、`dist/`、`target/` 仍由上方通用规则排除。
 #
 # 若你的团队确实想共用这套「跨 Agent 项目上下文」能力，把本段整体删掉即可 ——
 # 各部分的用途与接入方式都有独立 README。

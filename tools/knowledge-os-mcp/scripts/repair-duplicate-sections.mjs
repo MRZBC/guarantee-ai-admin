@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * repair-duplicate-sections.mjs — 修复由 apply-knowledge 早期缺陷生成的重复结构。
+ * repair-duplicate-sections.mjs — 修复由 apply-knowledge（已于 2026-09-30 退役）早期缺陷
+ * 生成的重复结构。本脚本本身仍可用于修 Vault 里既存的重复小节。
  *
  * 缺陷（已修）：`knowledge/wiki-*.md` 源文件自带 `# 标题`，而 MCP 也会依据
  * frontmatter.title 生成一个标题 → 页面上出现两个连续的同名一级标题。

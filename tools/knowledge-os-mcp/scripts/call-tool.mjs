@@ -2,9 +2,9 @@
 /**
  * call-tool.mjs — 通过 MCP stdio 调用 knowledge-os 的**单个**工具。
  *
- * 为什么需要它：`apply-knowledge.mjs` 只负责把 `knowledge/` 源文件批量应用到 Vault，
- * 而 `knowledge_append_log` 这类「本次工作做完才写一次」的动作没有源文件可放
- * （LOG 是追加式历史，逐条不同）。没有这个入口时，Agent 只能绕过 MCP 直接改
+ * 为什么需要它：`knowledge_append_log` 这类「本次工作做完才写一次」的动作没有
+ * 可批量应用的知识源文件（LOG 是追加式历史，逐条不同；仓库内也不再保留知识源副本）。
+ * 没有这个入口时，Agent 只能绕过 MCP 直接改
  * `LOG.md`，那会丢掉身份校验与路径守卫（Skill §11 说明的降级代价）。
  *
  * 用法：
@@ -48,7 +48,7 @@ if (rawArgs === '--file') {
   }
 }
 
-/** 极简 JSON-RPC / stdio 客户端（与 apply-knowledge.mjs 同形，刻意不共享代码以免互相牵连）。 */
+/** 极简 JSON-RPC / stdio 客户端（与 kos.mjs 各自独立，刻意不共享代码以免互相牵连）。 */
 class Client {
   #child;
   #buffer = '';

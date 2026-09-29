@@ -564,3 +564,20 @@ sh scripts/setup-git.sh              # Linux / macOS / Git Bash
 | 权限 | 登录态与权限编码已下发，前端按菜单展示；第一阶段未在接口上开启 `@PreAuthorize` 细粒度拦截。 |
 | 真实模型验证 | 本机未提供 `DEEPSEEK_API_KEY`，因此**真实模型**的问答未做端到端实测；工具链路由 `AiToolChainIT`（Stub 模型）确定性验证，未配 Key 时的行为也已实测为「明确报错、不编造数据」。 |
 | 前端运行验证 | 前端 `npm run build` 通过（vue-tsc 类型检查 + 打包）；SSE 客户端已按后端实测事件协议对齐。但本次开发会话的沙箱禁止 Node 监听端口（`listen EACCES`），**未能启动 Vite dev server 做浏览器实测**；在你自己的终端里 `npm run dev` 可正常启动。 |
+
+---
+
+## 知识库（跨 Agent 项目上下文）
+
+本项目的长期上下文（状态、任务、决策、Wiki、日志）存放在**外部 Obsidian Vault**，
+它就是知识的**唯一真源**：**仓库内不再保留知识源副本**（仓库侧 `knowledge/` 已于 2026-09-30 退役并删除）。
+
+- Vault 路径：以 `.agent/vault.local.yaml` 的 `vault.path` 为准（本机配置，不入库）。
+- 读写入口：经 knowledge-os MCP；本项目提供 CLI 入口
+  `node tools/knowledge-os-mcp/scripts/kos.mjs`（`health` / `resolve` / `state` / `call` / `script`）。
+- 工作方法：`.agents/skills/knowledge-continuity`（何时读、何时写、如何交接）。
+- 工具链说明：`tools/knowledge-os-mcp/scripts/README.md`；
+  冷启动连续性验证：`node tools/knowledge-os-mcp/scripts/cold-start-check.mjs`。
+
+> 这套能力是**作者本机**的 Agent 协作设施，对「跑起本项目」零贡献：
+> 相关配置（`.agent/`、`.agents/`、`.mcp.json`、`adapters/`）已在 `.gitignore` 中排除。

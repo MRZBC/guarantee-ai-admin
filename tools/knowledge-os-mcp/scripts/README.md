@@ -8,7 +8,16 @@
 
 ---
 
-## `apply-knowledge.mjs` — 把仓库里的知识源应用进 Vault（推荐入口）
+## `apply-knowledge.mjs` — 已退役（2026-09-30）
+
+> ⚠️ **该脚本与其读取的 `knowledge/` 目录已于 2026-09-30 退役并删除。**
+> 知识的唯一真源是外部 Obsidian Vault，仓库内不再保留知识源副本。
+> 退役原因：仓库源文件与 Vault 两份内容必然漂移 —— 2026-09-29 就因一处空格差异，
+> 应用器把一整页内容重复追加了一次。
+
+退役前它把 `knowledge/*.md` 映射进 Vault：`project.md` → `PROJECT.md`、
+`tasks.md` → `TASKS.md`、`state-*.md` → `STATE.md`、`wiki-*.md` → `03_Wiki/<Type>/`、
+`decision-*.md` → `03_Wiki/Decisions/`。当时的用法（仅供查阅，脚本已不存在）：
 
 ```bash
 # 预演：只打印将执行哪些调用，不连接 MCP
@@ -21,40 +30,31 @@ node tools/knowledge-os-mcp/scripts/apply-knowledge.mjs
 node tools/knowledge-os-mcp/scripts/apply-knowledge.mjs --prune-placeholders
 ```
 
-知识内容本身是仓库 `knowledge/` 下**可评审、可 diff 的 Markdown 源文件**，
-不是转义过的 JSON：
+需要查看实现或恢复它：
 
-| 源文件 | 写入目标 | 约定 |
-| --- | --- | --- |
-| `knowledge/project.md` | `PROJECT.md` | 每个 `# 标题` → 一个 `## 标题` 小节 |
-| `knowledge/tasks.md` | `TASKS.md` | 同上；frontmatter 可给 `scope` / `sectionsFile` |
-| `knowledge/state-*.md` | `STATE.md` | `### 字段名` → 语义字段；其它标题 → 自定义小节 |
-| `knowledge/wiki-*.md` | `03_Wiki/<Type>/` | frontmatter 给 `type` / `title` / `related` |
-| `knowledge/decision-*.md` | `03_Wiki/Decisions/` | frontmatter 给 `title`；`### decision` / `### why` 必填 |
+```bash
+git show <退役前提交>:tools/knowledge-os-mcp/scripts/apply-knowledge.mjs
+```
 
-**为什么用「源文件 + 应用器」而不是一次性 JSON：**
+**现在写入真实 Vault 的推荐入口是 `kos.mjs`（含 `script` 模式）—— 见下节。**
 
-1. 可读可评审可 diff —— 它就是 Markdown，不是转义字符串；
-2. 可重跑 —— MCP 的合并 / 追加语义让它天然幂等（实测第二次执行全部 `changed=0`）；
-3. 可审计 —— 仓库里能看到「到底往 Vault 写了什么」。
-
-> ⚠️ `knowledge/` **不是**知识库本身。知识库是 Vault 里的 Markdown。
-> 这里是它的**源**，用于初始化与批量修订。改完源文件必须重跑本脚本才生效。
-
-### 关于占位小节
+### 关于占位小节（能力属于 MCP，不随应用器退役）
 
 Vault 初始化时 `knowledge_bootstrap` 会用模板骨架建出
 `## Phase 1 — <阶段名>` 这类占位小节。真实内容以别的标题写进去后，占位就成了孤儿。
-`--prune-placeholders` 会找出标题里带 `<...>` 的小节并删除。
 
-**为什么需要 `__KOS_DELETE_SECTION__` 哨兵**：MCP 刻意不提供通用删除能力
+**`__KOS_DELETE_SECTION__` 哨兵仍然有效**：MCP 刻意不提供通用删除能力
 （`delete` / `arbitrary_write` 都在禁止清单里），因此用一个**受限的语义化哨兵**
 表达「移除这一个小节」—— 只能删小节、不能删文件，目标范围仍由
 `scope` / `sectionsFile` 决定，调用方依然给不出路径。
 
+`--prune-placeholders` 这个开关随应用器退役；需要清理占位小节时，
+按 MCP 的 `sections` + `__KOS_DELETE_SECTION__` 语义自行组装调用
+（经 `kos.mjs call` / `kos.mjs script`）。
+
 ---
 
-## `kos.mjs` — 手动调用任意 MCP 工具
+## `kos.mjs` — 写入真实 Vault 的唯一入口（手动调用任意 MCP 工具）
 
 ```bash
 # 快捷方式
