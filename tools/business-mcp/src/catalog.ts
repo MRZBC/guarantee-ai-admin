@@ -10,8 +10,9 @@
  *     3. 没有任何"万能 HTTP 透传"入口：网关只认这些名字，其余一律拒。
  *
  * 与 Java 侧的关系（**不要在别处再写第二份**）：
- *   本清单 = `AiToolRegistry.readTools` 里注册的 12 个只读 `@Tool` 方法
- *   （11 个只读类：`OrderSummaryTool` 同时提供 queryOrderSummary 与 getCurrentDate）。
+ *   本清单 = `AiToolRegistry.readTools` 里注册的 13 个只读 `@Tool` 方法
+ *   （12 个只读类：`OrderSummaryTool` 同时提供 queryOrderSummary 与 getCurrentDate，
+ *   `QueryBusinessKnowledgeTool` 提供第三阶段的知识检索）。
  *   写工具（5 个 `propose*` 类）**永不出现**在这里。
  *   清单的一致性由 `scripts/single-source-of-truth.mjs` 从两侧源码统计并比对（REQ-MCP-12）。
  *
@@ -36,6 +37,12 @@ export const STATIC_READ_ONLY_TOOLS: readonly StaticToolEntry[] = [
     backendName: 'getCurrentDate',
     description:
       '获取系统当前日期（yyyy-MM-dd，只读）。把"本季度/上月/最近三个月"这类相对时间换算成明确日期前先调用它。',
+  },
+  {
+    backendName: 'queryBusinessKnowledge',
+    description:
+      '业务知识检索（只读）：按关键词/域检索制度、口径、概念类知识条目，返回条目号、标题、版本与来源。'
+      + '用于"是什么/怎么规定/口径"类问题；**数字类问题仍必须用业务取数工具**，不要拿知识条目当统计值。',
   },
   {
     backendName: 'queryOrderDistribution',

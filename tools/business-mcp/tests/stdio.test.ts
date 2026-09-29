@@ -31,6 +31,7 @@ const TOKEN = 'test-token-not-a-secret';
 /** 只读白名单（硬编码，故意**不**从源码 import —— 否则断言就是同义反复）。 */
 const EXPECTED_READONLY = [
   'getCurrentDate',
+  'queryBusinessKnowledge',
   'queryDepartment',
   'queryInsuranceType',
   'queryMyProposals',
@@ -107,7 +108,7 @@ describe('业务 MCP 网关 · stdio 协议（TEST-MCP-05）', () => {
     expect(typeof result.protocolVersion).toBe('string');
   });
 
-  it('tools/list 返回 12 个只读工具，与静态白名单逐名一致，且不含任何写工具', async () => {
+  it('tools/list 返回 13 个只读工具，与静态白名单逐名一致，且不含任何写工具', async () => {
     const stub = await startStub();
     const client = await startGateway({ baseUrl: stub.url });
     await client.initialize();
@@ -115,7 +116,7 @@ describe('业务 MCP 网关 · stdio 协议（TEST-MCP-05）', () => {
     const tools = await client.listTools();
 
     expect(tools.map((t) => t.name).sort()).toEqual(EXPECTED_EXPOSED);
-    expect(tools).toHaveLength(12);
+    expect(tools).toHaveLength(13);
 
     const forbidden = /(propose|create|update|delete|remove|disable|enable|execute|shell|command|raw_write|import|export)/i;
     for (const tool of tools) {
@@ -273,7 +274,7 @@ describe('业务 MCP 网关 · stdio 协议（TEST-MCP-05）', () => {
     const tools = await client.listTools();
 
     expect(tools.map((t) => t.name)).not.toContain(`${PREFIX}proposeOrgChange`);
-    expect(tools).toHaveLength(12);
+    expect(tools).toHaveLength(13);
     expect(client.stderr.join('')).toContain('已丢弃');
   });
 

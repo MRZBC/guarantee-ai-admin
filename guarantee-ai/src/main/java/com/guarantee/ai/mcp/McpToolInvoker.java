@@ -1,5 +1,6 @@
 package com.guarantee.ai.mcp;
 
+import com.guarantee.ai.metrics.AiTurnMetric;
 import com.guarantee.ai.tool.AiToolContextKeys;
 import com.guarantee.ai.tool.AiToolRegistry;
 import org.slf4j.Logger;
@@ -126,6 +127,8 @@ public class McpToolInvoker {
      */
     private Map<String, Object> buildToolContext(McpPrincipal principal) {
         Map<String, Object> context = new HashMap<>();
+        // 来源固定为 MCP：落进 ai_tool_call.source 与 ai.tool.calls{source} 标签（AC-MCP-05）
+        context.put(AiToolContextKeys.CALL_SOURCE, AiTurnMetric.SOURCE_MCP);
         if (principal == null) {
             // fail-closed：没有主体就没有权限快照 → 注册裁剪只会留下公开只读工具
             context.put(AiToolContextKeys.PERMISSIONS, List.of());

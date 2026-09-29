@@ -54,6 +54,19 @@ public final class Permissions {
      */
     public static final String AI_CONFIG_UPDATE = "ai:config:update";
 
+    /**
+     * 业务 MCP 只读能力（REQ-MCP-02 / AC-MCP-03）。
+     *
+     * <p><b>危险权限</b>：拿到它就等于拿到平台受控取数面的入口。只授予**服务账号**
+     * （{@code sys_user.account_type=SERVICE}），不参与登录、不计入人类用户统计；
+     * 数据范围仍由 {@code DataScopeService} 按服务账号判定，与页面/助手同源。
+     * 无该权限时 MCP 工具在注册期即被裁掉（fail-closed）。</p>
+     *
+     * <p>命名警告：本仓库里裸 {@code mcp} 是 JWT"首登强制改密"claim，不得复用；
+     * 一切与业务 MCP 相关的标识符统一 {@code ai:mcp:*} / {@code AI_MCP_*}。</p>
+     */
+    public static final String AI_MCP_READ = "ai:mcp:read";
+
     // ---------------- 险种 ----------------
 
     public static final String INSURANCE_VIEW = "system:insurance:view";

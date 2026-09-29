@@ -80,6 +80,15 @@ public class SecurityConfig {
                         // 要调用它必须先持有该令牌，不构成新的攻击面。
                         .requestMatchers("/api/auth/logout").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                        // 指标端点免登录（T5-01 / REQ-MCP-08，AC-MCP-07）：Prometheus 抓取端没有
+                        // 平台账号，而本项目 JWT 走 Redis 白名单且会过期，用令牌抓取不现实。
+                        // 免登录是**内网/白名单采集**的通行做法；该端点只暴露**低基数**指标名与
+                        // 枚举标签（tool/model/status/source/direction/domain/hit/outcome/capped/result，
+                        // 已由 AiChatMetrics.sanitize() 卡死），**不含**用户 id、会话 id、问题正文与参数值
+                        // （AC-MCP-08）。**生产部署必须靠网络层收敛**（仅采集网可达），不要对公网暴露。
+                        // 故意只放行这一个路径，不写 "/actuator/**"：其余端点（env/beans/heapdump 等）
+                        // 仍必须鉴权。
+                        .requestMatchers("/actuator/prometheus").permitAll()
                         // 前端静态资源（管理后台首页）无需登录即可加载，登录由前端路由守卫处理
                         .requestMatchers("/", "/index.html", "/favicon.svg", "/assets/**").permitAll()
                         .anyRequest().authenticated())

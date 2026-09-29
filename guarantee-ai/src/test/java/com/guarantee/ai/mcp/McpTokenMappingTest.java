@@ -170,9 +170,15 @@ class McpTokenMappingTest {
         assertThat(ddl).contains("CREATE TABLE IF NOT EXISTS ai_mcp_token");
         assertThat(ddl).contains("account_type");
         assertThat(ddl)
-                .as("MCP 无会话，ai_tool_call.conversation_id 的 NOT NULL 是待裁决项，必须留下痕迹")
+                .as("MCP 无会话：conversation_id 必须放开为可空（Lead 已批准方案 A），且 ALTER 已启用")
                 .contains("conversation_id")
-                .contains("待裁决");
+                .contains("已拍板")
+                .contains("MODIFY COLUMN conversation_id BIGINT NULL");
+        assertThat(ddl)
+                .as("必须写明排除 B/C 的理由与已复核的 NULL 影响面（INNER JOIN 会静默排除 MCP 行）")
+                .contains("会话列表")
+                .contains("INNER JOIN")
+                .contains("source = 'MCP'");
     }
 
     // ==================================================================

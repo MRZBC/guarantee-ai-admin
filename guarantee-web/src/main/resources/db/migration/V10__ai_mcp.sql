@@ -103,28 +103,45 @@ SET @ddl := IF(@n_idx_sys_user_account_type = 1, 'DO 0',
 PREPARE stmt_account_type_idx FROM @ddl; EXECUTE stmt_account_type_idx; DEALLOCATE PREPARE stmt_account_type_idx;
 
 -- ---------------------------------------------------------------------
--- 3) ⚠️ 待裁决（**未启用**）：MCP 调用记录如何落 ai_tool_call
+-- 3) ai_tool_call.conversation_id 放开为可空（**已拍板：方案 A**，Lead 2026-09-30 批准）
 --
---    事实：ai_tool_call.conversation_id 目前是 BIGINT **NOT NULL**，
---    而 MCP 调用没有会话（AiToolCallRecorder 从 ToolContext 取到的 conversationId 为 null）。
---    后果：MCP 调用的工具记录**落不了库**（AiToolCallRecorder 会吞掉异常并打 ERROR 日志），
+--    事实：ai_tool_call.conversation_id 目前是 BIGINT **NOT NULL**，而 MCP 调用没有会话
+--    （AiToolCallRecorder 从 ToolContext 取到的 conversationId 为 null）→ MCP 行的工具记录
+--    会因 NOT NULL 约束落不了库（Recorder 吞异常并打 ERROR 日志），
 --    于是 AC-MCP-05"每次 MCP 调用在 ai_tool_call 中可识别来源"无法达成。
 --
---    三个候选（需 Lead 拍板后再启用，本次不执行）：
---      A) 放开可空：ALTER TABLE ai_tool_call MODIFY conversation_id BIGINT NULL;
---         —— 最贴合事实（MCP 真的没有会话），但改变了既有列约束；
---      B) 为 MCP 建一个系统会话占位（conversation_id = 固定哨兵）
---         —— 不动表结构，但会污染"会话"语义与列表；
---      C) 另建 ai_mcp_call_log 表
---         —— 语义最干净，但表数再 +1，且与 AC-MCP-05 要求的"在 ai_tool_call 中可识别"不符。
+--    为什么选 A（放开可空），而不是 B / C：
+--      · A：最贴合事实——MCP 调用**真的**没有会话；约束应表达真实可空性；
+--      · B（固定哨兵会话）：会**污染用户可见的会话列表**——一次外部机器调用就凭空多出
+--        一个"会话"，而且此后所有按 conversation 聚合/展示的功能都要额外加白名单；
+--      · C（另建 ai_mcp_call_log）：与 AC-MCP-05 明确要求的"在 ai_tool_call 中可识别"矛盾，
+--        且是同一件事的重复建模（工具调用记录只能有一处真源）。
 --
---    推荐 A；启用时取消下面两行注释即可（幂等写法同第 2 节）：
+--    只读复核结论（2026-09-30，未执行本脚本时完成）：
+--      · AiToolCall.conversationId / ToolCallVO.conversationId / MyToolCallItem.conversationId
+--        都是 `Long`（可空），全链路不存在拆箱 NPE；
+--      · GET /api/ai/conversations/tool-calls/{conversationId} 用路径变量（必填），不受 NULL 影响；
+--      · ⚠️ queryMyToolCalls 的数据源（AiToolCallMapper.selectMine / countMine）是
+--        `INNER JOIN ai_conversation c ON c.id = t.conversation_id`：
+--        conversation_id 为 NULL 的 MCP 行会**被静默排除**（不报错、也查不到）。
+--        task-15 必须显式决定它的可见性（推荐：MCP 行不进"某人的自查列表"，
+--        改由审计/运维视图查看——ai_tool_call 本身没有 user_id 列，跨会话归属只能来自
+--        同一次调用写入的 ai_audit_log 行；若确需服务账号自查，需再加 caller_id 归因列）。
 --
--- SET @ddl := IF((SELECT COUNT(*) FROM information_schema.COLUMNS
---                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_tool_call'
---                    AND COLUMN_NAME = 'conversation_id' AND IS_NULLABLE = 'YES') = 1, 'DO 0',
---   'ALTER TABLE ai_tool_call MODIFY COLUMN conversation_id BIGINT NULL COMMENT ''关联会话；MCP/评测调用没有会话时为 NULL''');
--- PREPARE stmt_tool_call_conv FROM @ddl; EXECUTE stmt_tool_call_conv; DEALLOCATE PREPARE stmt_tool_call_conv;
+--    MCP 行必须写全（AC-MCP-05 靠这两项识别与追溯）：
+--      · `source = 'MCP'`；
+--      · `trace_id` 由**同一次调用**写入的 `ai_audit_log` 行承载
+--        （AiToolCallRecorder 同时写 ai_tool_call 与 ai_audit_log，后者带 trace_id 与
+--         user_id = 服务账号 id）；若要直接从 ai_tool_call 追溯，需另加 trace_id 列（未批准）。
+-- ---------------------------------------------------------------------
+SET @n_ai_tool_call_conv_nullable := (SELECT COUNT(*) FROM information_schema.COLUMNS
+                                        WHERE TABLE_SCHEMA = DATABASE()
+                                          AND TABLE_NAME = 'ai_tool_call'
+                                          AND COLUMN_NAME = 'conversation_id'
+                                          AND IS_NULLABLE = 'YES');
+SET @ddl := IF(@n_ai_tool_call_conv_nullable = 1, 'DO 0',
+  'ALTER TABLE ai_tool_call MODIFY COLUMN conversation_id BIGINT NULL COMMENT ''关联会话；MCP/评测调用没有会话时为 NULL''');
+PREPARE stmt_tool_call_conv FROM @ddl; EXECUTE stmt_tool_call_conv; DEALLOCATE PREPARE stmt_tool_call_conv;
 -- ---------------------------------------------------------------------
 
 -- 复核（三项都应为 1；account_type 列存在、索引存在）
@@ -139,3 +156,8 @@ SELECT COUNT(*) AS sys_user_account_type_present
 SELECT COUNT(*) AS idx_ai_mcp_token_deleted_present
   FROM information_schema.STATISTICS
  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_mcp_token' AND INDEX_NAME = 'idx_ai_mcp_token_deleted';
+
+SELECT COUNT(*) AS ai_tool_call_conversation_id_nullable
+  FROM information_schema.COLUMNS
+ WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_tool_call'
+   AND COLUMN_NAME = 'conversation_id' AND IS_NULLABLE = 'YES';

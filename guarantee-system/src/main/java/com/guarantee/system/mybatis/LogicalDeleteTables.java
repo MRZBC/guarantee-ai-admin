@@ -55,7 +55,11 @@ public final class LogicalDeleteTables {
             // 两者都带逻辑删除三列；ai_prompt_version 的"逻辑删除"只用于彻底下架一个版本，
             // 正常的版本生命周期走 status（DRAFT/PUBLISHED/ARCHIVED），不是删除。
             "ai_config_item",
-            "ai_prompt_version");
+            "ai_prompt_version",
+            // 阶段五：MCP 机器凭据（REQ-MCP-02）。带逻辑删除三列 → 必须登记，
+            // 否则 LogicalDeleteSchemaIntegrationTest 的"表数 == MANAGED.size()"会红。
+            // 注意：同阶段的 ai_turn_metric 是**只追加的指标流水**，不带三列、**不登记**（同 ai_knowledge_import_log）。
+            "ai_mcp_token");
 
     /** 明确不加字段、保持物理删除的表（LD-EX-01）。 */
     public static final String PHYSICAL_DELETE_EXCEPTION = "ai_operation_secret";

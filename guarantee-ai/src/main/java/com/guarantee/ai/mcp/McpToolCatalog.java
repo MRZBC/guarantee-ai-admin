@@ -6,9 +6,9 @@ import java.util.List;
  * 业务 MCP 的**只读工具白名单**（REQ-MCP-01 / REQ-MCP-04 / AC-MCP-04）。
  *
  * <p>这是 Java 侧的权威清单，与网关侧 {@code tools/business-mcp/src/catalog.ts}
- * 的 12 个 {@code backendName} **逐名一致**（由 {@code McpToolCatalogTest} 读源文件断言，
- * 不靠人工同步）。它同时等于 {@code AiToolRegistry.readTools} 注册的 12 个只读
- * {@code @Tool} 方法（11 个只读类，其中 {@code OrderSummaryTool} 提供两个方法）。</p>
+ * 的 13 个 {@code backendName} **逐名一致**（由 {@code McpToolCatalogTest} 读源文件断言，
+ * 不靠人工同步）。它同时等于 {@code AiToolRegistry.readTools} 注册的 13 个只读
+ * {@code @Tool} 方法（12 个只读类，其中 {@code OrderSummaryTool} 提供两个方法）。</p>
  *
  * <p><b>为什么是白名单而不是"排除 propose*"</b>：写能力清单会长大，黑名单必然滞后；
  * 只有"名字在清单里才放行"才能保证新增写工具默认不会被外部 Agent 调用到
@@ -29,10 +29,13 @@ public final class McpToolCatalog {
      */
     public static final String PERMISSION_MCP_READ = "ai:mcp:read";
 
-    /** 12 个只读工具（与 {@code AiToolRegistry.readTools} 的方法名一一对应）。 */
+    /** 13 个只读工具（与 {@code AiToolRegistry.readTools} 的方法名一一对应）。 */
     private static final List<String> READ_ONLY_TOOLS = List.of(
             "queryOrderSummary",
             "getCurrentDate",
+            // 第三阶段的知识检索工具：只读、登录级（结果由 Service 按 permission_code 裁剪）。
+            // 必须与 tools/business-mcp/src/catalog.ts 逐名一致（McpToolCatalogTest 断言）。
+            "queryBusinessKnowledge",
             "queryOrderDistribution",
             "queryOrderTrend",
             "queryOrg",
