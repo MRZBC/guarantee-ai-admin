@@ -81,6 +81,17 @@ public class AiChatService {
     private static final int MAX_TOOL_ROUNDS = 4;
 
     /**
+     * 收尾轮（工具轮次用尽后那一轮）的指令。
+     *
+     * <p>措辞与 {@link #REPAIR_MARKER} 同一风格：说清事实与要求，不指责、不要求道歉——
+     * 模型多写一段检讨，用户就多读一段废话。</p>
+     */
+    static final String FINAL_ROUND_INSTRUCTION =
+            "【系统提示：本轮只读工具调用已达到上限（" + MAX_TOOL_ROUNDS + " 轮），"
+                    + "并且已取消你的工具调用能力。请立即依据上面**已经获得的数据**给出最终结论，"
+                    + "不要再尝试调用任何工具；若某个维度确实没有查到数据，就如实说明该维度缺失。】";
+
+    /**
      * 自动重试指令的识别前缀（第三道兜底的**修复**动作）。
      *
      * <p>用 {@code public} 是为了让集成测试的假模型能识别"这一轮是修复轮"
@@ -232,9 +243,17 @@ public class AiChatService {
          * 而不是退回到最初的 {@code messages}——否则模型会把已经查过的东西再查一遍。</p>
          */
         AtomicReference<Prompt> lastPrompt = new AtomicReference<>();
+        /**
+         * 本轮是否**因为工具轮次用尽**而进入收尾轮。
+         *
+         * <p>空回答兜底文案要据此区分原因：轮次用尽说明"数据其实查过了、只是没能收口"，
+         * 与"模型什么都没返回"给出的建议不一样。</p>
+         */
+        AtomicBoolean roundsExhausted = new AtomicBoolean(false);
 
         Flux<ServerSentEvent<String>> contentEvents =
-                runToolLoop(new Prompt(messages, options), answer, 0, toolsExecuted, lastPrompt)
+                runToolLoop(new Prompt(messages, options), answer, 0, toolsExecuted, lastPrompt,
+                        roundsExhausted)
                 /*
                   收尾必须挂在**内容流之内**，不能在 merge 之后另起一段 concatWith：
 
@@ -247,7 +266,7 @@ public class AiChatService {
                   收尾跑完才关闭三个通道，merge 随之完成。
                 */
                 .concatWith(Flux.defer(() -> tailEvents(answer, lastPrompt, options, toolsExecuted,
-                        conversationId, userId, persisted)))
+                        roundsExhausted, conversationId, userId, persisted)))
                 .doOnComplete(() -> {
                     sink.tryEmitComplete();
                     proposalSink.tryEmitComplete();
@@ -308,6 +327,7 @@ public class AiChatService {
     private Flux<ServerSentEvent<String>> tailEvents(StringBuilder answer, AtomicReference<Prompt> promptRef,
                                                      ToolCallingChatOptions options,
                                                      AtomicBoolean toolsExecuted,
+                                                     AtomicBoolean roundsExhausted,
                                                      Long conversationId, Long userId,
                                                      AtomicBoolean persisted) {
         Prompt finalPrompt = promptRef.get();
@@ -317,7 +337,7 @@ public class AiChatService {
             return repairFabricatedProposal(answer, finalPrompt, options, toolsExecuted,
                     conversationId, userId, persisted, promptRef);
         }
-        return finishTurn(answer, toolsExecuted, conversationId, userId, persisted);
+        return finishTurn(answer, toolsExecuted, roundsExhausted, conversationId, userId, persisted);
     }
 
     /**
@@ -346,15 +366,19 @@ public class AiChatService {
         List<Message> instructions = new ArrayList<>(sourcePrompt.getInstructions());
         instructions.add(new AssistantMessage(answer.toString()));
         instructions.add(new UserMessage(REPAIR_INSTRUCTION));
+        // 修复轮同样受工具轮次上限约束，用尽时也会转入收尾轮；它的收尾原因归到修复轮自己
+        AtomicBoolean repairedRoundsExhausted = new AtomicBoolean(false);
         return Flux.concat(
                 Flux.just(event("reset", new ChatStreamEvents.Reset())),
-                runToolLoop(new Prompt(instructions, options), repaired, 0, toolsExecuted, promptRef),
+                runToolLoop(new Prompt(instructions, options), repaired, 0, toolsExecuted, promptRef,
+                        repairedRoundsExhausted),
                 Flux.defer(() -> {
                     if (StringUtils.hasText(repaired)) {
                         answer.setLength(0);
                         answer.append(repaired);
                     }
-                    return finishTurn(answer, toolsExecuted, conversationId, userId, persisted);
+                    return finishTurn(answer, toolsExecuted, repairedRoundsExhausted, conversationId,
+                            userId, persisted);
                 }));
     }
 
@@ -365,18 +389,31 @@ public class AiChatService {
      * {@code conversationService.appendMessage}（即 {@code ProposalService.appendResultMessage}
      * 的机制）：那会额外落一条 ASSISTANT 消息，用户会看到"编造的原话"与"纠正"分成两个气泡，
      * 纠正反而像是无关的一句。这里只有一条消息、一次落库，不存在消息重复。</p>
+     *
+     * <p>三类兜底：① 编造提案 ② 零工具却写口径行 ③ 空回答（见
+     * {@link #emptyAnswerNotice(boolean)}）。</p>
      */
     private Flux<ServerSentEvent<String>> finishTurn(StringBuilder answer, AtomicBoolean toolsExecuted,
+                                                     AtomicBoolean roundsExhausted,
                                                      Long conversationId, Long userId,
                                                      AtomicBoolean persisted) {
         String produced = answer.toString();
         List<String> corrections = new ArrayList<>(2);
-        // ① 声称有提案但会话内没有 PENDING 提案（自动重试后仍未解决时才会走到这里）
-        proposalClaimGuard.correctionFor(userId, conversationId, produced)
-                .ifPresent(corrections::add);
-        // ② 本轮零工具调用却出现「口径：」行
-        dataSourceClaimGuard.correctionFor(produced, toolsExecuted.get())
-                .ifPresent(corrections::add);
+        if (produced.isBlank()) {
+            /*
+              ③ 空回答兜底：无论什么原因，都不能让用户对着空气泡。
+              现场反馈原话：「就算有bug或者做不了，也应该兜底一下吧」——
+              前端在"零正文 + 零工具调用"时会把气泡整个删掉，用户看到的是"什么都没发生"。
+            */
+            corrections.add(emptyAnswerNotice(roundsExhausted.get()));
+        } else {
+            // ① 声称有提案但会话内没有 PENDING 提案（自动重试后仍未解决时才会走到这里）
+            proposalClaimGuard.correctionFor(userId, conversationId, produced)
+                    .ifPresent(corrections::add);
+            // ② 本轮零工具调用却出现「口径：」行
+            dataSourceClaimGuard.correctionFor(produced, toolsExecuted.get())
+                    .ifPresent(corrections::add);
+        }
 
         Flux<ServerSentEvent<String>> correction = Flux.empty();
         if (!corrections.isEmpty()) {
@@ -388,6 +425,29 @@ public class AiChatService {
         conversationService.audit(conversationId, userId, "CHAT", "助手回答已完成");
         return correction.concatWith(Flux.just(
                 event("done", new ChatStreamEvents.Done(conversationId, messageId))));
+    }
+
+    /**
+     * 空回答兜底文案（第三道兜底）。
+     *
+     * <p>写成一条**独立可测**的静态方法：这是唯一一处"确实没答案"时要对用户说的话，
+     * 措辞需要能随现场反馈迭代，但不应该被埋在流式装配里。</p>
+     *
+     * <p>用户看到的必须是「这次没成 + 为什么 + 下一步怎么办」，不能是空气泡。
+     * 文案里也刻意**不带口径行**：口径只能逐字来自工具返回值（提示词第 39 条），
+     * 兜底文案没有对应的工具返回值，带上就是编造。</p>
+     *
+     * @param roundsExhausted 是否因工具轮次用尽而收场（为 true 说明数据其实已经查过，
+     *                        只是没能收口；为 false 说明模型压根没返回内容）
+     */
+    static String emptyAnswerNotice(boolean roundsExhausted) {
+        String cause = roundsExhausted
+                ? "这一轮我把 " + MAX_TOOL_ROUNDS + " 轮工具调用都用在了取数上，收尾那一轮也没能给出结论"
+                : "模型这一轮没有返回任何内容";
+        return "\n\n抱歉，这次没能给出结论：" + cause + "。"
+                + "请重试一次；如果仍然如此，建议把问题拆小一点再问，"
+                + "例如先问「2026 年第二季度投标订单的订单量与担保金额」，"
+                + "再单独问某一个维度（区域 / 机构 / 险种）的变化。";
     }
 
     // ------------------------------------------------------------------
@@ -437,10 +497,12 @@ public class AiChatService {
      */
     private Flux<ServerSentEvent<String>> runToolLoop(Prompt prompt, StringBuilder answer, int depth,
                                                       AtomicBoolean toolsExecuted,
-                                                      AtomicReference<Prompt> lastPromptRef) {
+                                                      AtomicReference<Prompt> lastPromptRef,
+                                                      AtomicBoolean roundsExhausted) {
         if (depth >= MAX_TOOL_ROUNDS) {
-            log.warn("工具调用达到最大轮次 {}，停止循环", MAX_TOOL_ROUNDS);
-            return Flux.empty();
+            log.warn("工具调用达到最大轮次 {}，转入收尾轮（摘掉工具，只要求最终回答）", MAX_TOOL_ROUNDS);
+            roundsExhausted.set(true);
+            return finalAnswerRound(prompt, answer);
         }
         return Flux.defer(() -> {
             // 记下本轮 Prompt：收尾的自动重试要接着它继续（含本轮已执行工具的结果）
@@ -486,10 +548,64 @@ public class AiChatService {
                             ToolExecutionResult result =
                                     toolCallingManager.executeToolCalls(prompt, aggregate(toolCalls));
                             Prompt next = new Prompt(result.conversationHistory(), prompt.getOptions());
-                            return runToolLoop(next, answer, depth + 1, toolsExecuted, lastPromptRef);
+                            return runToolLoop(next, answer, depth + 1, toolsExecuted, lastPromptRef,
+                                    roundsExhausted);
                         }));
             }));
         });
+    }
+
+    /**
+     * 轮次用尽后的收尾轮：**摘掉工具**再要一次回答，只能用已经查到的数据作答。
+     *
+     * <p><b>为什么不能像原先那样直接收场</b>（2026-09-29 22:25 现场复现，SSE 原文实测）：
+     * 用户问「请分析 2026 年第二季度投标订单，和第一季度比较，并从区域、机构、险种三个维度
+     * 找出主要变化」，模型把 4 轮**全部**用在查数据上（36 次只读工具调用，含逐区域、逐机构展开），
+     * 第 5 轮被 {@link #MAX_TOOL_ROUNDS} 挡掉后 {@code Flux.empty()} 收场 →
+     * {@code answer} 为空 → 前端只剩一个空气泡。用户看到的是"助手坏了"，
+     * 而不是"这次的数据面不够、结论如下"。上限的本意是防死循环，不是"不回答"。</p>
+     *
+     * <p><b>为什么是"摘掉工具"而不是"再提示一句"</b>：提示只降低概率，模型仍可能再发起工具调用；
+     * 而按既有口径，**只要那一轮有工具调用，正文（前言）就不计入最终回答**——
+     * 等于什么都没发生。摘掉工具是硬保证：没有可调用的工具，模型只能输出正文。
+     * 同时补一条 {@link #FINAL_ROUND_INSTRUCTION} 说明"为什么必须现在收口"，
+     * 并要求它如实说明没查到的维度。</p>
+     *
+     * <p>本轮正文按"最终回答轮"处理：直接写入 {@code answer} 并流式下发，
+     * 之后照常走 {@link #tailEvents} 的兜底校验与落库。</p>
+     */
+    private Flux<ServerSentEvent<String>> finalAnswerRound(Prompt prompt, StringBuilder answer) {
+        List<Message> instructions = new ArrayList<>(prompt.getInstructions());
+        instructions.add(new UserMessage(FINAL_ROUND_INSTRUCTION));
+        Prompt answerOnly = new Prompt(instructions, withoutTools(prompt.getOptions()));
+
+        StringBuilder roundText = new StringBuilder();
+        return chatModel.stream(answerOnly)
+                .concatMap(chunk -> {
+                    String text = textOf(chunk);
+                    if (text == null || text.isEmpty()) {
+                        return Flux.empty();
+                    }
+                    roundText.append(text);
+                    return Flux.just(event("delta", new ChatStreamEvents.Delta(text)));
+                })
+                .concatWith(Flux.defer(() -> {
+                    answer.append(roundText);
+                    return Flux.empty();
+                }));
+    }
+
+    /**
+     * 摘掉工具调用能力，保留模型 / 温度等其余选项。
+     *
+     * <p>不能从零构造 options（会丢模型自身的实现类型，见
+     * {@link #buildToolCallingOptions} 的说明），必须在原 options 上 mutate。</p>
+     */
+    private static ChatOptions withoutTools(ChatOptions options) {
+        if (!(options instanceof ToolCallingChatOptions toolOptions)) {
+            return options;
+        }
+        return toolOptions.mutate().toolCallbacks(List.of()).build();
     }
 
     private static String textOf(ChatResponse response) {

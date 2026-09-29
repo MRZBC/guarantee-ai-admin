@@ -503,11 +503,18 @@ async function send(): Promise<void> {
     if (streamError) {
       ElMessage.error(streamError)
       if (!streamingMessage.content.trim() && !hasToolCalls(streamingMessage.id)) {
-        messages.value = messages.value.filter((message) => message !== streamingMessage)
+        /*
+          兜底：原来这里是把气泡**直接删掉**，用户看到的就只是"问了没反应"。
+          现场反馈原话：「就算有bug或者做不了，也应该兜底一下吧」——
+          留着气泡并写明失败原因，比让界面回到"什么都没发生"更有用。
+          （后端正常路径已保证非空正文，这里兜的是流被中断这类客户端侧情况。）
+        */
+        streamingMessage.content = `回答失败：${streamError}`
       }
     } else if (!streamingMessage.content.trim() && !hasToolCalls(streamingMessage.id)) {
-      // 流被中断且没有任何内容
-      messages.value = messages.value.filter((message) => message !== streamingMessage)
+      // 流被中断且没有任何内容：同样留一条可读说明，不静默删气泡
+      streamingMessage.content =
+        '这一轮没有收到任何内容（回答可能被中断）。请重试一次；如果仍然如此，建议把问题拆小一点再问。'
     } else if (!replacedPlaceholder && conversationId.value) {
       // 补充拉取一次工具调用，避免流式事件丢失
       void loadToolCalls(conversationId.value)
