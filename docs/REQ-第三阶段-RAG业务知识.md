@@ -460,8 +460,38 @@ CREATE TABLE IF NOT EXISTS ai_knowledge_item (
 
 ---
 
-## 14. 变更记录
+## 14. 实施记录（2026-09-30，v1.1）
+
+**已交付**
+
+- `ai_knowledge_item` + `ai_knowledge_import_log`（`schema.sql` L384–395；迁移 `V7__ai_knowledge.sql`；受管表登记为第 20→23 张之一）
+- 真源 **18 条**（SYSTEM 12 / ORDER 5 / CONCEPT 1），启动时幂等导入；检索服务 + `queryBusinessKnowledge` 工具；`KnowledgeClaimGuard`（服务端「知识来源」行）
+- 提示词 **298 → 268 行**（编号 1~48 零缺失零重复；行为约束一条未迁，新增"业务知识检索"一节）；黄金问题集 **25 条**（GQ-16~25）
+- 降级开关 `guarantee.ai.knowledge.*`（`enabled=false` 时不注册工具、数字链路不退化）
+
+**证据**
+
+| 项 | 结果 |
+|---|---|
+| 单测 | 知识 54 例；定向 36 例（注册集/来源行/limit 归一/降级）全绿 |
+| IT | `KnowledgeRetrievalIT` 4/4、`KnowledgeDisabledIT` 1/1（逐字段相等、来源行逐字一致、伪造行剥离、越权正反对照、SSE 事件集合不变） |
+| 真机（真库） | 首次导入 `created=18`、二次 `unchanged=18` 且 `import_log` 0 增行；`KB-ORDER-0005` 改真源后 `version 1→2→3` 留痕可查（AC-RAG-08） |
+| 整仓 | `mvn -DskipITs test` 8/8 模块绿 |
+| 独立验证（`docs/TEST-第三阶段-验证报告.md`） | **成立 5 / 不成立 0 / 无法验证 4**（4 条全部因缺 `DEEPSEEK_API_KEY`，已如实标"未跑"） |
+
+**偏差（如实登记）**
+
+1. **检索是高召回口径**（2-gram 会命中"保函"），"未收录"问题须选词面无重叠的问法；阈值/IDF/ngram 为后续增强（REQ 已列）；
+2. **REQ-RAG-08 的"过期条目被显式命中要说明失效"未实现**（默认不返回，P1，无 AC 覆盖）；
+3. **系统管理域知识映射为"登录可见"**（而非 `ai:system:query`）：迁移不得降低既有可见性；只有审计口径类收紧为 `system:audit:view`；
+4. `KnowledgeClaimGuard` 做成**无状态工具类**（不做 `@Component`），避免给多阶段共用的 `AiChatService` 构造器加参；
+5. 知识条目正文会被 `SanitizingToolCallback` 压成单行（既有安全机制），断言按"空白归一后相等"。
+
+**验证反馈闭环**：验证员发现"伪造来源行的 Markdown 装饰变体不被剥离"（AC-RAG-05 曾判不成立）→ 已修（**12/12 变体**剥离+纠正，含独立复现），并补 6 个反例测试。同类既有缺陷在 `DataSourceClaimGuard` 上**只登记不修**（见 `TASKS.md`）。
+
+## 15. 变更记录
 
 | 日期 | 版本 | 说明 |
 |---|---|---|
 | 2026-09-30 | v1.0 | 首版：基于当日只读实测（提示词 298 行与分类、20 张表无知识表、`.m2` 中无 vector-store 但已有 `OpenAiEmbeddingModel`/`OpenAiEmbeddingAutoConfiguration`、DeepSeek 无 embeddings 端点属待验证外部资料），给出第三阶段的范围、需求、验收与 ≈4.5 人日的 P0 计划；登记 6 项待拍板（Q-RAG-01~06）与补充未决项（Q-RAG-07~08）及 8 项风险（RK-RAG-01~08） |
+| 2026-09-30 | v1.1 | ① §0 决策按用户确认**全部照建议执行**；② 新增 §14 实施记录（交付/证据/偏差/验证反馈闭环）；③ 更正 §6.1：补 `ai_knowledge_import_log` 的列与索引、唯一键函数索引补双括号（v1.0 写法在 MySQL 8 会语法错） |

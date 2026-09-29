@@ -473,8 +473,40 @@
 
 ---
 
-## 14. 变更记录
+## 14. 实施记录（2026-09-30，v1.1）
+
+**已交付**
+
+- **观测**：`ai_turn_metric`（每轮一行，含 `outcome`/`trace_id`/`source`）+ `ai_tool_call.source/trace_id` + `ai_message.token_count` 注释更正；`AiChatMetrics` **9 项指标**（标签经 `sanitize()` 卡基数）；`/actuator/prometheus` 免登录放行；`AI_TURN_COST` 日志带 traceId，Reactor 线程 traceId 显式下传；`AiRuntimeController` + 「AI 运行」页
+- **评测**：`scripts/ai-golden-questions.mjs` 升级（`--suite=all|deterministic|live`、`--baseline`、JSON+Markdown、基线 diff、打分、内嵌 SSOT）；评测集 **33 条**；确定性集由 `EvaluationDeterministicIT` 承载并纳入 `mvn verify`；`scripts/single-source-of-truth.mjs` 成为测试项/评测条数/指标/MCP 工具清单的唯一事实源
+- **MCP**：网关 `tools/business-mcp`（Node stdio，**13 个只读工具**，17 个协议用例）+ 平台侧 `McpController`（`GET/POST /api/ai/mcp/tools[/{name}]`、`/api/system/mcp-tokens`）+ `McpRateLimiter`（Redis QPS + 每日配额）+ 权限码 `ai:mcp:read`（硬门禁）/`ai:mcp:manage`；默认关闭（yml 级、需重启）
+- **T5-06 附带**：服务账号 `account_type` 映射 + 登录拒绝 SERVICE + MCP 签发强校验
+
+**证据**
+
+| 项 | 结果 |
+|---|---|
+| 单测 | guarantee-ai 418 例全绿（含 `AiChatMetricsTest` 8、`McpRateLimiterTest` 8、`McpToolCatalogTest` 13、`McpControllerProtocolTest` 12） |
+| IT | `AiObservabilityIT` 2/2（指标/工具调用/审计 trace_id 三段一致 + 失败路径 `outcome=ERROR`）；`McpBackendIT` 8/8（含 HUMAN 账号签发被拒 + `COUNT(*)==0`）；`McpRateLimitIT`/`McpQuotaIT` 各 1/1；`LogicalDeleteSchemaIntegrationTest` 11/11 |
+| 真机 | `/actuator/prometheus` **200 / 441 行**，含 `userId\|conversationId\|question=\|prompt=` 的行 **0**；MCP e2e：签发→`tools/list` 13（与 `catalog.ts` 逐名一致）→三条 `tools/call`→**撤销后 401**→写工具 **403**→同秒第 6 次 **429**；真实 stdio 网关全链路跑通；默认关闭实例三类路径 **404** 且平台自身正常 |
+| 评测 | `--self-check` 通过（33 条 ↔ 脚本/文档一一对应）；`--suite=deterministic` **12/12、exit 0**；`--baseline` diff 全 0；SSOT `--check` **exit 0** |
+| 可视化 | CDP 实测：24h 概览 32/4/12.5%/1.88 轮/98ms、7d 提案 11/10/2、Top 工具计数与 p95 —— 与 SQL 同刻聚合一致 |
+
+**偏差（如实登记）**
+
+1. **MCP 开关是 yml 级、需重启**（与第四阶段"DB 配置项不重启生效"是两条路径；对外暴露面重启更保守）；
+2. **协议面用真实 HTTP 状态**（401/403/429）以迁就冻结网关，**页面面仍 HTTP 200 + 业务码**——两套口径并存是有意的；
+3. **`ai:mcp:read` 是 MCP 入口硬门禁**（无它 → 空清单 + 403），与聊天链路"登录可见 4 个公开工具"不同层；
+4. `ai.knowledge.retrieval` 拆成 counter + `.duration`（Micrometer 不允许同名不同类型）；`token-pricing` 键未落地（Q-MCP-05 只报 token 与耗时）；
+5. `docs/MCP-外部接入.md` 的"12 个工具"漂移已更正为 13；`reports/` 是**可再生**评测产物（每次跑会重写，diff 主要是时间戳）。
+
+**本阶段未覆盖（已在 `TASKS.md` 登记）**：真机 33 条（缺 `DEEPSEEK_API_KEY`）；`ai_operation_audit` 分区名与真实边界差一年（既有缺陷）；`DataSourceClaimGuard`/`ProposalNumberGuard` 的形态类既有缺陷。
+
+---
+
+## 15. 变更记录
 
 | 日期 | 版本 | 说明 |
 |---|---|---|
 | 2026-09-30 | v1.0 | 首版：基于当日只读实测（actuator 仅 health/info、唯一自定义指示器 `authRevocation`、只有 starter-actuator 一个依赖且 `.m2` 无 prometheus/tracing/OTel 构件；`AI_TURN_COST` 是唯一成本日志且不含 traceId、`ai_message.token_count` 是字数估算、轮次与成本不落库；黄金问题集 15 条需真实 Key 且无 CI、仓库仅 `commit-msg` 钩子；业务侧无 MCP 且 `mcp` 标识符已被 JWT claim 占用；工具口径为 17 个 `@Tool` 方法 / 16 个类；`SYS-NF-08` 承诺的指标至今未实现；三处文档测试数字互相矛盾），给出第五阶段的范围、需求、验收与 ≈9 人日计划；登记 7 项待拍板（Q-MCP-01~07）与补充未决项（Q-MCP-08~09）及 10 项风险 |
+| 2026-09-30 | v1.1 | ① §0 决策按用户确认**全部照建议执行**；② 新增 §14 实施记录（交付/证据/偏差）；③ 更正 §6.1/§6.2/§6.3：`ai_mcp_token` 补 `created_by`/`revoked_by`、可视化 API 补 `30d`/`limit`/`proposals`、区分 MCP 平台 HTTP 面与网关 stdio 面并补 12 个状态码、删除未落地的 `token-pricing`、`deterministic-in-verify` 注明是 `-D` 系统属性；④ §5.3.1 的 `ai.knowledge.retrieval` 拆成 counter + `.duration`；⑤ 补 `outcome` 列与 `V9/V10` 迁移编号更正 |
