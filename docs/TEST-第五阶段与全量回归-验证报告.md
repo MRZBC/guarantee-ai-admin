@@ -303,3 +303,83 @@ GET  /api/ai/mcp/tools（撤销后）        -> HTTP 401 code=401  "MCP Token �
 | 日期 | 版本 | 说明 |
 |---|---|---|
 | 2026-09-30 | v1.0 | 首版：AC-MCP-01~13 逐条三态（**成立 12 / 不成立 1 / 无法验证 0**）、TEST-MCP-01~08 状态、跨阶段回归（阶段三红线与黄金断言 / 阶段四缺省一致性 / SSE / health）、对抗式检查、8 项缺陷与副作用、未跑项清单。验证快照 = HEAD `817d74c`（04:34:18）；真机证据包含**真实 stdio 网关对真机后端**的 initialize/tools/list/tools/call、真机 MCP 协议面 401/403/429/撤销、真机 prometheus 与 `/actuator/health`、失败轮三段 traceId 对照；`--suite=live` 未跑（缺 `DEEPSEEK_API_KEY`）。 |
+| 2026-09-30 | v1.1 | **追加"复验记录"**（见下节）：针对 `023c07d` 的 SSOT 计数归一、`AI_TURN_COST` 日志对齐、失败轮版本回填三处做定向复核。**AC-MCP-12 由"不成立"改判「成立」**（快照 `66a5163` 已把 REQ 三处 12→13 更正，SSOT 计数与一次全新 `mvn verify` 逐项一致）。原报告 1–305 行未改动。 |
+
+---
+
+# 复验记录（v1.1，2026-09-30 04:56–05:01）—— SSOT 计数 / 日志对齐 / 失败轮版本回填
+
+> 本节**追加**在原报告之后，**不修改**原报告 1–305 行。复验对象 = 提交 **`023c07d`**（04:55:49，T5-07 缺陷修复）+ **`66a5163`**（REQ 三处 12→13 口径更正）+ `b5f7cbd`（实施记录 v1.1）。工作区干净，无在途改动。
+
+| 项 | 内容 |
+|---|---|
+| 复验快照 | **HEAD `023c07d`**（工作区 clean） |
+| 复跑 | `mvn -B verify` → **BUILD SUCCESS**；`guarantee-web` IT **113 / 0 failures**；`AiObservabilityIT` 2/2、`AiChatServiceBudgetGuardTest` **5/5**（含 D3/D4 新增 2 例）、`PromptVersionServiceTest` 19/19、`AiConfigChangeAuditIT` 4/4 |
+| 真机 | 我自起 8088 临时实例 → 无 Key 触发失败轮；用完 `Stop-Process`（PID 24304）并复核端口 |
+| 日志 | `.agent/verify/t5b-mvn-verify.log`、`.agent/verify/t5b-ssot.json`、`.agent/verify/t5b-app-8088.log` |
+
+### ① 三个数字的实测对比（`mvn verify` vs `node scripts/single-source-of-truth.mjs`）—— **逐项一致**
+
+| 口径 | 我这次 `mvn verify`（按模块汇总相加） | SSOT 脚本输出 | 一致 |
+|---|---|---|---|
+| 单测（surefire） | common 7 + system 120 + auth 28 + order 2 + analysis 6 + **ai 422** + web 11 = **596** | **596**（75 个测试类 / 0 失败） | ✅ |
+| 集成（failsafe） | analysis 1 + web 113 = **114** | **114**（28 个测试类 / 0 失败） | ✅ |
+| 合计 | 710 | **710**（**103** 个测试类） | ✅ |
+| 新鲜度 | 报告最新时间 04:58（= 本次 verify） | `stale=false`；`--check` → **exit 0**「✅ 单一事实源校验通过」 | ✅ |
+
+- **虚增 88 已消失**：脚本现在按"类名归属"归一（类名以 `IT` 结尾 → failsafe，其余 → surefire），并显式丢弃 **23 份陈旧 XML / 99 个用例**，明细我与现场完全对得上：`guarantee-web/target/surefire-reports` 里 21 个 03:1x 的 `*IT` XML（87 例）+ `guarantee-system/target/failsafe-reports` 的 `LogicalDeleteSchemaIntegrationTest`（11 例，名字不含 `IT` 故归 surefire）+ `guarantee-analysis/.../surefire-reports` 的 `OrderTrendGranularityIT`（1 例）。修复前这三个数字分别是 682/125、虚增 88；现在与"一次全新 verify"**逐项相等**。
+- 关于"与一次全新 `mvn verify` 逐项一致"的说明：`target/` 里的陈旧 XML **仍在磁盘上**，但脚本在读取时按归属丢弃（`json.tests.dedup` 里有逐条明细），因此输出反映的是"最近一次构建的真实结果"，不依赖手工清理。作者声明的 684→596 / 125→114 / 809→710 与我实测的 596/114/710 一致（684/809 是修复前含陈旧 surefire 的读数）。
+
+### ② AC-MCP-12 最终三态 —— **成立**
+
+- 脚本产出：评测 **33** 条（脚本↔文档一致）、只读工具 **13**、指标 **10**、测试项数 **710/103 类**；`--check` exit 0。
+- 文档一致性：`README.md`（33 条 / 13 个只读工具）、`docs/MCP-外部接入.md`（13）、**`docs/REQ-第五阶段-MCP评测与可观测.md` 三处已改为 13**（L21 Q-MCP-03、L168 暴露范围并注明"v1.0 写 12/11 未含第三阶段知识检索工具"、L482 实施记录；搜索全文档已无"12 个工具"残留）。
+- 因此 §3.12 判"不成立"的两个理由**均已消除**：① 文档间的 12 vs 13 矛盾已修；② SSOT 测试项数已与真实构建逐项一致。→ **AC-MCP-12 改判「成立」**。
+- 残余观察（非缺陷）：去重依赖"类名约定 ↔ 插件"的映射；若将来有人用 `-Dit.test=` 把 `*IntegrationTest` 塞进 failsafe，该份报告会被丢弃——脚本已在代码注释里显式登记这一情形。仍建议 CI 在统计前只清 `target/*/surefire-reports`，让磁盘上的残留不具误导性。
+
+### ③ D3（`AI_TURN_COST` 字段错位）—— **已修复，我复核了日志文本本身**
+
+- **修复**：`AiChatService.java` 的日志实参补上 `capped()`（模板 13 个占位符 ↔ **13 个实参**）。
+- **真机日志文本（新快照，失败轮）**：
+  ```
+  AI_TURN_COST traceId=3f2064dccb7a418da7efbf8561fca3c3 conversationId=1727 rounds=1 toolCalls=0 toolCostMs=0
+  inputTokens=0 outputTokens=0 totalCostMs=959 capped=false capReason=none source=CHAT outcome=ERROR
+  ```
+  四键 `capped=false / capReason=none / source=CHAT / outcome=ERROR` **逐键正确**，且**不再出现未替换的 `{}`**（对比修复前实测 `capped=none capReason=CHAT source=ERROR outcome={}`）。
+- **断言有效性（我独立做了判别力检验，未改任何代码）**：把新测试使用的模式 `capped=false capReason=none source=CHAT outcome=ERROR` + `不含 "{}"` 分别套到两条真实日志上——
+  - 修复前那行：`patternMatch=False`、`containsPlaceholder=True` → **断言 FAIL（红）**；
+  - 修复后那行：`patternMatch=True`、`containsPlaceholder=False` → **断言 PASS**。
+  即该断言确实能抓住"键在、值错位"与"占位符未填"两种形态（与作者的反证实验结论一致，我以外部数据独立复现）。
+
+### ④ D4（失败轮版本回填）—— **已修复，代码路径 + 真机 + IT 三重复核**
+
+- **代码路径**：`onErrorResume` 分支在 `finishTurnCost(..., OUTCOME_ERROR)` 之后新增 `recordConfigVersion(conversationId, config.version(), cost.promptVersion())`（`AiChatService.java:489+`）；`config` 是本轮快照、`cost.promptVersion()` 由 `bindTurn` 在错误发生前绑定。
+- **真机（同一失败轮，conversationId=1727）**：
+  ```
+  ai_conversation: prompt_version=NULL  config_version=299      ← config_version 非空且 >0；无发布版时 prompt_version 如实为空
+  ai_turn_metric : outcome=ERROR source=CHAT trace_id=3f2064dccb7a418da7efbf8561fca3c3   ← 与日志 traceId 一致
+  ```
+- **IT 断言**：`AiObservabilityIT` 失败路径用例新增 `SELECT prompt_version, config_version FROM ai_conversation`，断言 `config_version` 非空且 >0、`prompt_version` 若非空必须为正版本号；`AiChatServiceBudgetGuardTest` 新增 `failingTurnBackfillsVersionTrace` 断言写入的正是**本轮快照版本号**（不是 null、也不是上一轮的值）。两者我复跑均绿（2/2、5/5）。
+- 影响：**AC-CFG-09 的"每轮可回溯"在失败轮同样成立**（第四阶段报告的 D12/本报告 §7 已随之消解）。
+
+### ⑤ 是否还有新增缺陷
+
+- **无新增缺陷**。本轮三处修复我都做了正反两侧复核（新值正确 + 旧形态会被抓住 / 真机 + 单测）。
+- 两条观察（不构成缺陷）：① 陈旧报告仍在 `target/` 里，统计时被显式丢弃（见 ①）；② `--format=json` 的数值在 `tests.unit.totals.*` / `tests.integration.totals.*` 下（结构完整，只是不在 `tests.unit.tests` 这一层），调用方按 JSON 取值时注意层级。
+
+### ⑥ 对 v1.0 已"成立"项的影响 —— **无任何降级**
+
+| 项 | 影响 | 依据 |
+|---|---|---|
+| **AC-MCP-10** | **加强（原记录的 D3 缺陷已消解）** | 修复后日志四键与 `ai_turn_metric` 字段真正一一对应；traceId 三点仍一致（真机 `3f2064dc…` 同时出现在日志与指标行） |
+| **AC-MCP-13** | 不受影响 | `mvn verify` 仍全绿（596 单测 / 114 IT / 0 失败）；`/actuator/health`、`RevocationFailClosedIT` 等未触及 |
+| **AC-MCP-07/08/09/11** | 不受影响 | 本次改动只涉及日志实参、失败轮版本列、统计脚本；指标标签、聚合查询、评测脚本未变 |
+| **跨阶段回归** | 不受影响 | `AiChatService` 的改动是**追加**（错误路径多写一次版本列 + 补一个日志实参），不改变回答内容、SSE 事件集合、配置快照语义；`business-assistant.st`（268 行 / 规则 1–48 / 5 个保护标记）未变 |
+| **第四阶段 AC-CFG-09** | 加强 | 失败轮也回填 `config_version`，该 AC 的"每轮"覆盖失败轮 |
+| **本报告 §7 缺陷 D3/D4** | **已关闭** | 见上 |
+
+### ⑦ 复验后的最终三态汇总
+
+> 第五阶段：**成立 13 / 不成立 0 / 无法验证 0**（AC-MCP-12 由不成立改判成立）
+> 第四阶段：原报告 **成立 10 / 不成立 1 / 无法验证 0**（AC-CFG-10 已消解；AC-CFG-06 仍为"不成立（按字面）"，属已批准决策，待文档收窄）
+> 第三阶段：**成立 5 / 不成立 0 / 无法验证 4**（真机黄金问题集未跑，缺 Key）
