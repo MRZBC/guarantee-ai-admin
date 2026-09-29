@@ -201,7 +201,10 @@
 
 #### 5.1.5 REQ-CFG-05 配置审计（P0）
 
-- 复用 `ai_operation_audit`，新增动作 `CONFIG_UPDATE`（`source=AI|WEB`、`target_type=AI_CONFIG`、`target_id=配置键或提示词版本号`、`before_value`/`after_value`/`changed_fields`）；
+- 复用 `ai_operation_audit`，新增动作 `CONFIG_UPDATE`（`source=AI|WEB`、`target_type=AI_CONFIG`、`target_name=配置键或提示词版本号`、`before_value`/`after_value`/`changed_fields`）；
+  **更正（v1.1）**：`ai_operation_audit.target_id` 是 `BIGINT`，而配置键是字符串、提示词版本号也只是逻辑编号，
+  因此**不使用 `target_id`**：配置类用 `target_name=配置键` + `target_id=NULL`；提示词版本类用 `target_name=版本号`。
+  该目标类型与既有口径一致地归入 **ADMIN-only**（非管理员显式 403，而不是返回空列表）。
 - 密钥类配置项：只记录"是否发生变化"（沿用 `SensitiveFieldMasker` 的 `<changed>` 口径），**绝不记录值**；
 - 提示词变更：审计记录**版本号 + 内容哈希 + diff 摘要**（正文可能超 8KB，按既有截断规则处理）；
 - 回答级回溯：每轮对话可查到使用的 `promptVersion` 与配置 `version`（写入会话记录或审计，见 §6.3）；

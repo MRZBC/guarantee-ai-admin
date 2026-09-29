@@ -274,6 +274,7 @@
 | `rounds` / `tool_calls` / `tool_cost_ms` / `total_cost_ms` | 与现有日志字段一一对应 |
 | `input_tokens` / `output_tokens` | **真实 usage**（现有 `ai_message.token_count` 是字数估算，两者并存但口径必须写清） |
 | `capped` / `cap_reason` | 是否触顶及原因（软超时 / 轮次 / 框架上限） |
+| `outcome` | **补列（v1.1，实现期新增）**：`SUCCESS` / `ERROR` / `CAPPED`，与 §5.3.1 的 `ai.chat.requests{outcome}` 标签**同值域**。没有它，AC-MCP-09 的"失败率"只能靠猜；两处口径共用一套枚举以免漂移 |
 | `source` | `CHAT` / `MCP` / `EVAL` |
 | `trace_id` | 与审计、日志串起来 |
 | `created_at` | 分区/索引依据 |
