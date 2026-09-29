@@ -1,8 +1,11 @@
-# 助手「黄金问题集」——阶段二验收基线
+# 助手「黄金问题集」——阶段二验收基线 + 阶段三扩容
 
-> 归属：`docs/REQ-助手业务分析能力阶段二收尾.md` §5.3.2（REQ-BA-12）/ TEST-BA-06
+> 归属：`docs/REQ-助手业务分析能力阶段二收尾.md` §5.3.2（REQ-BA-12）/ TEST-BA-06；
+> 阶段三扩容见 `docs/REQ-第三阶段-RAG业务知识.md` §5.2.1（REQ-RAG-10）
 > 脚本：`scripts/ai-golden-questions.mjs`
 > 定位：这是**阶段二「完成」的判定工具**，也是阶段五 Evaluation 的起点（不是完整的评测平台）。
+> 规模：**25 条**（阶段二 GQ-01~15 + 阶段三 GQ-16~25 知识类）；脚本与本文档的编号必须一一对应，
+> 用 `node scripts/ai-golden-questions.mjs --self-check` 静态校验（不需要后端与模型）。
 
 ---
 
@@ -31,16 +34,29 @@
 4. 本地 MySQL/Redis 在跑（DB 端口 3307）。
 
 ```bash
-# 全量 15 条
+# 全量 25 条
 node scripts/ai-golden-questions.mjs
 
 # 只跑某几条（改动某块能力后快速回归）
 node scripts/ai-golden-questions.mjs --only=GQ-03,GQ-05
 
+# 静态自检（不需要后端/模型）：id 唯一、知识类带 mustCall、与本文档编号一一对应
+node scripts/ai-golden-questions.mjs --self-check
+
 # 换环境/账号（注意：账号变量叫 GOLDEN_USER，不是 USERNAME）
 BASE_URL=http://localhost:8081 GOLDEN_USER=admin GOLDEN_PASSWORD=Admin@123 \
   node scripts/ai-golden-questions.mjs
 ```
+
+**阶段三的两条问题需要额外前置条件**（不满足时脚本报**「未跑」**，既不算通过也不算失败）：
+
+| 编号 | 前置条件 | 怎么满足 |
+|---|---|---|
+| GQ-24 | 需要**只读账号**（VIEWER） | 演示数据自带 `user0015` / `User@123`；可用 `GOLDEN_VIEWER_USER` / `GOLDEN_VIEWER_PASSWORD` 覆盖 |
+| GQ-25 | 后端必须以 `guarantee.ai.knowledge.enabled=false` 重启 | `GOLDEN_KNOWLEDGE_DISABLED=1 node scripts/ai-golden-questions.mjs --only=GQ-25`（同时用 `application.yml`/启动参数把开关关掉） |
+
+> ⚠️ 「未跑」不是「通过」：本项目的验收红线是**不得把未验证写成已验证**。
+> 真机集缺 `DEEPSEEK_API_KEY` 时，整份结果都只能记「未跑」，并写明原因。
 
 > ⚠️ 脚本刻意**不读** `USERNAME` / `PASSWORD`：Windows 上 `USERNAME` 是系统预置变量
 > （当前登录用户），拿它当账号会报出"用户名或密码错误"这种误导性错误（已踩过一次）。
@@ -49,7 +65,7 @@ BASE_URL=http://localhost:8081 GOLDEN_USER=admin GOLDEN_PASSWORD=Admin@123 \
 
 ---
 
-## 3. 问题集（15 条）
+## 3. 问题集（15 条 · 阶段二）
 
 断言写在脚本里（`expect.contains` / `matches` / `notContains` / `refusal` / `maxToolCalls` / `maxRounds`），
 本表只列**问题与期望类别**；`id` 是两边唯一的连接键。
@@ -78,6 +94,40 @@ BASE_URL=http://localhost:8081 GOLDEN_USER=admin GOLDEN_PASSWORD=Admin@123 \
 2. 正文不得出现内部术语：`queryOrderSummary` / `queryOrderDistribution` / `queryOrderTrend` /
    `orderType` / `TENDER` / `PERFORMANCE` / `SQL` / `JWT` / `dataSource` / `tool_call`（提示词第 42 条）；
 3. 有成功的工具调用时，正文必须带**口径行**（服务端页脚，验证 `DataSourceClaimGuard.footer` 生效）。
+
+---
+
+## 3.1 阶段三扩容：GQ-16~25（10 条知识类）
+
+真源：`docs/REQ-第三阶段-RAG业务知识.md` §5.2.1（REQ-RAG-10）。配比：**定义 4 + 混合 2 + 未收录 2 + 越权 1 + 降级 1**。
+
+| 编号 | 类别 | 问题 | 期望要点 |
+|---|---|---|---|
+| GQ-16 | 知识·定义（有收录） | 停用和删除有什么区别？ | 命中并引用 `KB-SYSTEM-0009/0011`；必须调用检索工具 |
+| GQ-17 | 知识·定义（有收录） | 保额区间的口径是怎么规定的？只讲规定，不要给统计数字。 | 引用 `KB-ORDER-0001`；**不得**出现服务端数据摘要（说明没误用业务工具） |
+| GQ-18 | 知识·定义（有收录） | 区域编码的层级前缀匹配是什么意思？选省和选市有什么区别？ | 引用 `KB-ORDER-0002` |
+| GQ-19 | 知识·定义（有收录） | 逻辑删除是什么意思？删除之后还能恢复吗？ | 引用 `KB-SYSTEM-0009/0011` |
+| GQ-20 | 知识·混合（定义 + 统计） | 保额区间的规则是怎么规定的？另外，平台上「投标保函（标准）」现在配置的区间是多少？ | **知识来源行与数据口径行都在且分开**；两个工具都被调用 |
+| GQ-21 | 知识·混合（定义 + 统计） | 险种的基准费率口径是什么？顺便告诉我「投标保函（标准）」现在的基准费率是多少。 | 同上 |
+| GQ-22 | 知识·未收录 | 保证金退还流程是怎样的？ | 如实说"未收录"；**不得**出现任何知识来源行；仍必须真的查过 |
+| GQ-23 | 知识·未收录 | 保证金专户的规定是什么？ | 同上 |
+| GQ-24 | 知识·越权（只读用户） | 操作审计记录里敏感字段是怎么记录的？（用 VIEWER 账号） | `KB-SYSTEM-0010` 与其标题**不出现**；无存在性提示 |
+| GQ-25 | 知识·降级（关掉知识层） | 2026 年第二季度投标订单量是多少？另外，你现在还能查业务知识库吗？ | 数字照常作答 + 如实说明知识层不可用；**不得**出现知识来源行 |
+
+**知识类问题的额外检查**（脚本已实现）：
+
+1. **正向断言 `mustCall: queryBusinessKnowledge`**——不看这个，"模型凭记忆瞎答"与"真的查了知识库"
+   在正文上无法区分（沿用阶段二为防"旧工具蛮力枚举也能通过"而补 `mustCall` 的做法）；
+2. **知识来源行**由服务端产出，断言写成正则（如 `知识来源：[^\n]*KB-SYSTEM-0011`），
+   而不是逐字——条目内容修订会涨版本（v2/v3），逐字断言会假失败；
+3. **未收录类必须没有来源行**（`notContains: ['知识来源：']`），对应 AC-RAG-03；
+4. **越权类只断言"条目号与标题不出现"**（Lead 裁定口径），不断言"检索返回 0 条"——
+   同一次检索可能命中其它无关条目，那不是越权（见 REQ-RAG-07 / AC-RAG-06）。
+
+> **未收录类为什么选"保证金"这两个问法**：第一版检索是"人工标签 + 关键词（2/3-gram）"的高召回口径
+> （REQ-RAG-03 / RK-RAG-02），领域常见词（如「保函」「投标」）会命中多条无关条目。
+> 这两问在现有 18 条真源里**词面无重叠**，才能稳定地考出"未收录"这条行为。
+> 检索精度（阈值 / IDF / ngram 全文索引）登记为后续增强项，不在本阶段。
 
 ---
 
@@ -160,6 +210,57 @@ BASE_URL=http://localhost:8081 GOLDEN_USER=admin GOLDEN_PASSWORD=Admin@123 \
 **阶段二验收结论**：M2.1（取数面）+ M2.2（受约束执行）+ M2.4（可观测与验收）已交付并闭环；
 M2.3（企业/项目维度）按决策缓做，重新拾起的触发条件见需求文档 Q-BA-01。
 下一轮验收只需在本表**追加一行**，并对比"调用次数是否出现翻倍"这类退化即可。
+
+---
+
+## 4.1 阶段三（知识类）验收记录
+
+### 2026-09-30 · 提示词迁移 + 问题集扩容（T3-03，本机无 API Key）
+
+**提示词迁移前后对照**（`guarantee-ai/src/main/resources/prompts/business-assistant.st`）：
+
+| 项 | 迁移前 | 迁移后 | 判定 |
+|---|---|---|---|
+| 总行数 | 298 | **268** | 落在 250 ± 20 内 |
+| 非空行数 | — | 237 | 同口径仍在带内 |
+| 字节数 | 27,298 | 25,426 | — |
+| 既有编号规则 | 1~48 | **1~48（无缺失、无重复）** | 行为约束一条未丢 |
+| 迁出的知识 | 「系统管理域知识」整块（31 行）+ 停用/删除定义 + 删除前置检查定义 + 区域前缀语义 + 金额单位口径 + 险种分类/费率口径 | 全部变成知识条目：`KB-SYSTEM-0001~0012` / `KB-ORDER-0001~0005` / `KB-CONCEPT-0001`（18 条） | AC-RAG-02 可判定（提示词里已无该段，仍能答对只能来自检索） |
+| 新增 | — | 「业务知识检索」一节（项目符号，**不占用 1~48 编号**，避免"第 3 条"出现两个指代） | 只讲"何时查、怎么引用、不得编造" |
+| 保留 | 红线 A–E、取数铁律 1–4、事实/推测、工具失败、写操作铁律 13–16、参数澄清、敏感信息、权限与可见性、危险确认、25~36、37~48 | 原样保留 | 只迁知识、不迁行为约束 |
+
+**静态自检**：`node scripts/ai-golden-questions.mjs --self-check` → **通过**
+（25 条问题、编号与本文档一一对应、知识类均带 `mustCall`）。
+
+> **一处刻意的"不迁"**：L45–53（规则 5–7：必须把相对时间转成明确日期、必须回显区间）
+> 是**行为约束**，按"只迁知识、不迁行为约束"**保留在提示词里**；该节对应的知识条目
+> `KB-ORDER-0005` 只解释"相对时间为什么不是可核对口径、锚点是明确日期区间"，
+> 并把 `source_ref` 写成与事实一致的表述（提示词保留行为要求，本条目只讲语义）。
+> 迁移不等于把文件变短——**行为约束一条不迁**才是原则（REQ-RAG-05 / RK-RAG-04）。
+
+### 2026-09-30 · 外部验证两个缺陷的修复（T3-03 内闭环）
+
+| 缺陷 | 复现 | 修法 | 证据 |
+|---|---|---|---|
+| 来源行剥离只认裸行：`**知识来源：…**` / `- 知识来源：…` / `> 知识来源：…` / `知识来源 ：…` / `**知识来源**: …` / `` `知识来源：…` `` 不剥离也不纠正 | 外部验证（`.agent/verify/repro-guard-ascii.jsh`） | `KnowledgeClaimGuard` 的剥离正则与"是否声明来源"判定统一容忍 Markdown 装饰前缀/后缀（列表/引用/标题/表格/行内代码/标签后置粗体） | 单测 `KnowledgeClaimGuardTest.stripsDecoratedSourceLines`（9 个变体逐个断言"剥离 + 纠正"）；一次性脚本输出：9 个变体全部 `removed=true corrected=true`，行中出现「知识的来源」仍为 `false` |
+| `KB-ORDER-0005` 的 `source_ref` 声称"阶段三迁出"，但提示词规则 5–7 仍在（元数据不实） | 外部验证 | 改 `source_ref` 为"行为要求仍保留、本条只解释时间语义"；条目正文去掉操作规则复述；`version: 2` | 真实库导入：`KB-ORDER-0005` v1 → **v2**，留痕 `1->2 UPDATED`；随后再导入一次 `unchanged=18 / noChanges=true` |
+
+> 上面第二条同时是 **AC-RAG-08** 的真实库证据：改真源文件 → **不重新打包**（资源随启动重读）
+> → 新版本可被检索、来源行版本号变化、导入留痕可查。
+
+**真机 25 条**：**未跑**。原因：本机没有 `DEEPSEEK_API_KEY`，无法调用真实模型。
+不需要 Key 的确定性证据见 `guarantee-web` 的 `KnowledgeRetrievalIT`（Stub ChatModel + 真实 MySQL）。恢复方式：
+
+```bash
+# 1) 起后端（需 DEEPSEEK_API_KEY 有效）
+# 2) 全量 25 条
+node scripts/ai-golden-questions.mjs
+# 3) 降级那一条：把 guarantee.ai.knowledge.enabled 置 false 重启后端后
+GOLDEN_KNOWLEDGE_DISABLED=1 node scripts/ai-golden-questions.mjs --only=GQ-25
+```
+
+> 阶段二 GQ-01~15 的断言（含 `mustCall` / 调用上限 / 内部术语）**未改动**；
+> 迁移只影响提示词文本，脚本侧仅新增尾部标记 `\n\n知识来源：` 的识别（把服务端来源行排除在"模型正文"之外）。
 
 ---
 

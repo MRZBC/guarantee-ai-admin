@@ -22,8 +22,10 @@ import java.util.regex.Pattern;
  * <ol>
  *   <li>本轮**真的检索到条目**才追加：{@code 知识来源：KB-x《标题》vN；KB-y《标题》vM}，
  *       片段逐字取自检索返回值（编号 + 标题 + 版本）；</li>
- *   <li>模型自写的「知识来源：」行无条件剥离（行首判定，行中出现不算——避免误伤
- *       "这条知识的来源是……"这类正常表述）；</li>
+ *   <li>模型自写的「知识来源：」行无条件剥离（**行首**判定，行中出现不算——避免误伤
+ *       "这条知识的来源是……"这类正常表述）；判定容忍 Markdown 装饰
+ *       （粗体 / 列表 / 引用 / 标题 / 表格 / 行内代码）与标签后置的粗体，
+ *       否则"换个写法"就能把编造的来源行留在回答里；</li>
  *   <li>本轮一次检索都没调用，却出现「知识来源：」行 → 剥离并追加一条系统提示
  *       （零检索却有来源行，必然是编造）。</li>
  * </ol>
@@ -53,12 +55,27 @@ public final class KnowledgeClaimGuard {
     /** 来源行的前缀（全角冒号，与服务端产出格式一致）。 */
     public static final String PREFIX = "知识来源：";
 
-    /** 半角冒号变体：模型与用户都可能写。 */
-    private static final String PREFIX_HALF_WIDTH = "知识来源:";
+    /**
+     * Markdown 装饰前缀/后缀：列表符号、引用、标题、表格分隔、粗斜体、行内代码。
+     *
+     * <p><b>为什么必须容忍装饰</b>：模型写来源行时经常带格式（`**知识来源：…**`、
+     * `- 知识来源：…`、`> 知识来源：…`）。只认裸行等于给"换个写法就能把编造的来源行
+     * 留在回答里"开了一条旁路——AC-RAG-05 要求的是**100% 剥离**，不是"裸行剥离"。
+     * 这条旁路是外部验证发现的真实缺陷（见验证报告）。</p>
+     */
+    private static final String DECORATION = "(?:[-*+>|#]|`{1,3}|\\*{1,2}|_{1,2})";
 
-    /** 整行匹配（行首 + 前后空白 + 行尾换行），与 {@code DataSourceClaimGuard} 同款。 */
-    private static final Pattern SOURCE_LINE =
-            Pattern.compile("^[ \\t]*知识来源[：:][^\\r\\n]*(?:\\R|$)", Pattern.MULTILINE);
+    /**
+     * 整行匹配：行首 + 可选装饰 + 「知识来源」+ 可选装饰（标签后置粗体等）+ 可选空白 +
+     * 冒号（全角/半角）+ 行尾换行。
+     */
+    private static final Pattern SOURCE_LINE = Pattern.compile(
+            "^[ \\t]*" + DECORATION + "*[ \\t]*知识来源[ \\t]*(?:" + DECORATION + ")*[ \\t]*[：:][^\\r\\n]*(?:\\R|$)",
+            Pattern.MULTILINE);
+
+    /** 是否出现"声明来源"的行首标记（与 {@link #SOURCE_LINE} 同一套装饰容忍规则）。 */
+    private static final Pattern CLAIM_LINE = Pattern.compile(
+            "(?m)^[ \\t]*" + DECORATION + "*[ \\t]*知识来源[ \\t]*(?:" + DECORATION + ")*[ \\t]*[：:]");
 
     /**
      * 零检索却写出来源行时的纠正文案。
@@ -147,18 +164,12 @@ public final class KnowledgeClaimGuard {
         return Optional.of(CORRECTION);
     }
 
-    /** 正文是否包含形如 {@code 知识来源：…} 的独立行（行首判定，允许缩进）。 */
+    /** 正文是否包含形如 {@code 知识来源：…} 的独立行（行首判定，容忍 Markdown 装饰与缩进）。 */
     static boolean claimsKnowledgeSource(String answer) {
         if (answer == null || answer.isBlank()) {
             return false;
         }
-        for (String line : answer.split("\\R")) {
-            String trimmed = line.strip();
-            if (trimmed.startsWith(PREFIX) || trimmed.startsWith(PREFIX_HALF_WIDTH)) {
-                return true;
-            }
-        }
-        return false;
+        return CLAIM_LINE.matcher(answer).find();
     }
 
     /**

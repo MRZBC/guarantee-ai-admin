@@ -65,6 +65,39 @@ class KnowledgeClaimGuardTest {
     }
 
     @Test
+    @DisplayName("剥离：Markdown 装饰变体一律移除（粗体/列表/引用/标题/表格/行内代码/标签后置粗体）")
+    void stripsDecoratedSourceLines() {
+        // 这一组是外部验证发现的绕过反例：正则只认裸行时，模型"换个写法"就能把编造的来源行留下
+        List<String> variants = List.of(
+                "**知识来源：KB-FAKE-0001《粗体》v1**",
+                "- 知识来源：KB-FAKE-0002《列表》v1",
+                "> 知识来源：KB-FAKE-0003《引用》v1",
+                "知识来源 ：KB-FAKE-0004《冒号前有空格》v1",
+                "**知识来源**: KB-FAKE-0005《标签后置粗体》v1",
+                "`知识来源：KB-FAKE-0006《行内代码》v1`",
+                "## 知识来源：KB-FAKE-0007《标题》v1",
+                "| 知识来源：KB-FAKE-0008《表格》v1 |",
+                "  * 知识来源: KB-FAKE-0009《嵌套列表半角》v1");
+        for (String variant : variants) {
+            String answer = "结论如下。\n" + variant + "\n以上。";
+
+            assertThat(KnowledgeClaimGuard.claimsKnowledgeSource(answer))
+                    .as("必须识别为\"声明来源\"：%s", variant).isTrue();
+            assertThat(KnowledgeClaimGuard.stripSourceLines(answer))
+                    .as("必须剥离：%s", variant)
+                    .doesNotContain("KB-FAKE-")
+                    .contains("结论如下。");
+            assertThat(KnowledgeClaimGuard.correctionFor(answer, false))
+                    .as("零检索时必须触发纠正：%s", variant).isPresent();
+            // 检索过就不再纠正（引用错误 ≠ 编造），但剥离照旧
+            assertThat(KnowledgeClaimGuard.correctionFor(answer, true))
+                    .as("检索过不纠正：%s", variant).isEmpty();
+            assertThat(KnowledgeClaimGuard.stripSourceLines(answer))
+                    .as("检索过也必须剥离：%s", variant).doesNotContain("KB-FAKE-");
+        }
+    }
+
+    @Test
     @DisplayName("剥离：没有来源行时原样返回（调用方据此判断要不要 reset 重发）")
     void stripIsNoOpWhenNothingToStrip() {
         String answer = "停用与删除的区别是：停用是暂停业务。";

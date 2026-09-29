@@ -1,15 +1,25 @@
 #!/usr/bin/env node
 /**
- * 助手「黄金问题集」真机冒烟脚本（需求真源 docs/REQ-助手业务分析能力阶段二收尾.md §5.3.2 / TEST-BA-06）。
+ * 助手「黄金问题集」真机冒烟脚本（需求真源 docs/REQ-助手业务分析能力阶段二收尾.md §5.3.2 / TEST-BA-06；
+ * 阶段三扩容见 docs/REQ-第三阶段-RAG业务知识.md §5.2.1 / REQ-RAG-10）。
  *
- * 它做一件事：把固定的 15 个问题依次打给**真实后端**（真实模型），
+ * 它做一件事：把固定的 25 个问题依次打给**真实后端**（真实模型），
  * 按每条问题的期望值判定通过与否，并输出「调用次数 / 轮次 / 耗时 / 正文字数」对照表。
- * 这是「阶段二完成」的验收证据，也是阶段五 Evaluation 的起点。
+ * 这是「阶段二 + 阶段三完成」的验收证据，也是阶段五 Evaluation 的起点。
  *
  * 用法：
  *   node scripts/ai-golden-questions.mjs
- *   BASE_URL=http://localhost:8081 USERNAME=admin PASSWORD=Admin@123 node scripts/ai-golden-questions.mjs
- *   node scripts/ai-golden-questions.mjs --only=GQ-01,GQ-05     # 只跑指定几条
+ *   BASE_URL=http://localhost:8081 GOLDEN_USER=admin GOLDEN_PASSWORD=Admin@123 node scripts/ai-golden-questions.mjs
+ *   node scripts/ai-golden-questions.mjs --only=GQ-01,GQ-16     # 只跑指定几条
+ *   node scripts/ai-golden-questions.mjs --self-check           # 静态自检（不用后端/模型）：
+ *                                                              # id 唯一、知识类带 mustCall、
+ *                                                              # 与 docs 的编号一一对应
+ *
+ * 阶段三新增的三类问题需要额外条件（不满足时**报"未跑"而不是"通过"**）：
+ *   - GQ-24 用**只读账号**（VIEWER）提问，验证审计口径类知识不出现；
+ *     可用 GOLDEN_VIEWER_USER / GOLDEN_VIEWER_PASSWORD 覆盖（默认 user0015 / User@123）。
+ *   - GQ-25 需要后端以 `guarantee.ai.knowledge.enabled=false` 重启；
+ *     设 `GOLDEN_KNOWLEDGE_DISABLED=1` 声明"当前实例确实关掉了知识层"，否则该项报"未跑"。
  *
  * 前置条件（不满足会明确报错，而不是给出误导性的"失败"）：
  *   1. 后端已启动且已**重启到最新代码**（新工具/护栏都在这一步生效）；
@@ -21,9 +31,12 @@
  *   - **reset 语义必须处理**：服务端在"正文被改写"时会先发 reset 再整体重发，
  *     不处理会把同一段回答拼两遍，误判成"重复内容"；
  *   - 断言写成"期望包含/不得包含/调用数上限"，**不比对逐字文本**——模型措辞每次都会变，
- *     逐字断言只会带来假失败。
+ *     逐字断言只会带来假失败；
+ *   - **"未跑"必须显式**：缺少只读账号、实例没关知识层等都属于"没验证"，
+ *     既不算通过也不算失败，单独统计（阶段三的红线是"不得把未跑写成通过"）。
  */
 import { setTimeout as sleep } from 'node:timers/promises'
+import { readFileSync } from 'node:fs'
 
 const BASE = (process.env.BASE_URL || 'http://localhost:8081').replace(/\/$/, '')
 /**
@@ -39,12 +52,16 @@ const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').replace('
  *
  * expect.contains      正文（含服务端页脚）必须出现的片段
  * expect.matches       正文必须匹配的正则（用于"措辞会变但语义固定"的判定，如 0 条 / 无数据）
- * expect.notContains   正文不得出现的片段（内部术语/越界承诺）
+ * expect.notContains   正文不得出现的片段（内部术语/越界承诺/不该出现的知识条目号）
  * expect.refusal       是否属于"应当如实拒绝/说明"类
  * expect.maxToolCalls  工具调用次数上限（超出=又退回蛮力枚举）
  * expect.maxRounds     工具轮次上限（轮次 = 被 reset 分隔的调用批次）
  * expect.mustCall      必须真的调用过这些工具（**正向**断言：新工具落地后，"模型是否真的用了它"
  *                      不能只看正文措辞——不看这个，模型继续用旧工具蛮力枚举也照样"看起来对"）
+ *
+ * as                   该条问题用哪个账号提问（阶段三 GQ-24 需要只读账号；缺省用 GOLDEN_USER）
+ * requires             该条问题的额外前置声明（'knowledge-disabled' = 当前实例必须已关闭知识层，
+ *                      否则报"未跑"）
  */
 const QUESTIONS = [
   // ---- 三维度对比（含交叉维度）----
@@ -180,6 +197,143 @@ const QUESTIONS = [
       maxToolCalls: 4,
       maxRounds: 2
     }
+  },
+  // ---- 阶段三：业务知识检索（RAG → 业务知识，REQ-RAG-10 / docs/REQ-第三阶段-RAG业务知识.md §5.2.1）----
+  // 知识类问题一律正向断言 mustCall: queryBusinessKnowledge——不这样断，
+  // "模型凭记忆瞎答"与"真的查了知识库"在正文上无法区分（阶段二为防蛮力枚举补 mustCall 的同款理由）。
+  // 知识来源行的断言用正则而不是逐字：条目内容改了会涨版本（v2/v3），逐字断言会假失败。
+  {
+    id: 'GQ-16',
+    category: '知识·定义（有收录）',
+    question: '停用和删除有什么区别？',
+    expect: {
+      contains: ['停用', '删除'],
+      matches: [/知识来源：[^\n]*KB-SYSTEM-(0009|0011)/],
+      mustCall: ['queryBusinessKnowledge'],
+      maxToolCalls: 4,
+      maxRounds: 2
+    }
+  },
+  {
+    id: 'GQ-17',
+    category: '知识·定义（有收录）',
+    question: '保额区间的口径是怎么规定的？只讲规定，不要给统计数字。',
+    expect: {
+      contains: ['保额区间'],
+      matches: [/知识来源：[^\n]*KB-ORDER-0001/],
+      // 定义类问题不得顺手给统计数字：服务端摘要/口径行一旦出现，说明模型误用了业务工具
+      notContains: ['数据摘要（服务端生成）', '口径：订单统计'],
+      mustCall: ['queryBusinessKnowledge'],
+      maxToolCalls: 4,
+      maxRounds: 2
+    }
+  },
+  {
+    id: 'GQ-18',
+    category: '知识·定义（有收录）',
+    question: '区域编码的层级前缀匹配是什么意思？选省和选市有什么区别？',
+    expect: {
+      contains: ['区域'],
+      matches: [/知识来源：[^\n]*KB-ORDER-0002/],
+      mustCall: ['queryBusinessKnowledge'],
+      maxToolCalls: 4,
+      maxRounds: 2
+    }
+  },
+  {
+    id: 'GQ-19',
+    category: '知识·定义（有收录）',
+    question: '逻辑删除是什么意思？删除之后还能恢复吗？',
+    expect: {
+      contains: ['删除'],
+      matches: [/知识来源：[^\n]*KB-SYSTEM-(0009|0011)/],
+      mustCall: ['queryBusinessKnowledge'],
+      maxToolCalls: 4,
+      maxRounds: 2
+    }
+  },
+  {
+    id: 'GQ-20',
+    category: '知识·混合（定义 + 统计）',
+    question: '保额区间的规则是怎么规定的？另外，平台上「投标保函（标准）」现在配置的区间是多少？',
+    expect: {
+      contains: ['保额区间'],
+      // 混合类必须**两行都在**且分开：知识来源行（服务端）+ 数据口径行（服务端）
+      matches: [/知识来源：/, /口径：/],
+      mustCall: ['queryBusinessKnowledge', 'queryInsuranceType'],
+      maxToolCalls: 6,
+      maxRounds: 3
+    }
+  },
+  {
+    id: 'GQ-21',
+    category: '知识·混合（定义 + 统计）',
+    question: '险种的基准费率口径是什么？顺便告诉我「投标保函（标准）」现在的基准费率是多少。',
+    expect: {
+      contains: ['费率'],
+      matches: [/知识来源：/, /口径：/],
+      mustCall: ['queryBusinessKnowledge', 'queryInsuranceType'],
+      maxToolCalls: 6,
+      maxRounds: 3
+    }
+  },
+  {
+    id: 'GQ-22',
+    category: '知识·未收录',
+    question: '保证金退还流程是怎样的？',
+    expect: {
+      // 未收录：如实说没有这条知识，且**不得**出现任何知识来源行（AC-RAG-03）
+      matches: [/未收录|没有收录|未收集|知识库里没有|查不到/],
+      notContains: ['知识来源：'],
+      mustCall: ['queryBusinessKnowledge'],
+      maxToolCalls: 4,
+      maxRounds: 2
+    }
+  },
+  {
+    id: 'GQ-23',
+    category: '知识·未收录',
+    question: '保证金专户的规定是什么？',
+    expect: {
+      matches: [/未收录|没有收录|未收集|知识库里没有|查不到/],
+      notContains: ['知识来源：'],
+      mustCall: ['queryBusinessKnowledge'],
+      maxToolCalls: 4,
+      maxRounds: 2
+    }
+  },
+  {
+    id: 'GQ-24',
+    category: '知识·越权（只读用户不得看到审计口径）',
+    question: '操作审计记录里敏感字段是怎么记录的？',
+    // 只读用户（VIEWER）：没有 system:audit:view → 审计口径条目必须被服务端裁掉（AC-RAG-06）
+    as: {
+      user: process.env.GOLDEN_VIEWER_USER || 'user0015',
+      password: process.env.GOLDEN_VIEWER_PASSWORD || 'User@123'
+    },
+    expect: {
+      // 断言口径按 Lead 裁定：条目号与标题**不出现**，而不是要求"返回 0 条"
+      // （同一次检索可能命中其它无关条目，那不是越权）
+      notContains: ['KB-SYSTEM-0010', '操作审计记录的内容与渠道'],
+      mustCall: ['queryBusinessKnowledge'],
+      maxToolCalls: 4,
+      maxRounds: 3
+    }
+  },
+  {
+    id: 'GQ-25',
+    category: '知识·降级（关掉知识层）',
+    question: '2026 年第二季度投标订单量是多少？另外，你现在还能查业务知识库吗？',
+    // 需要后端以 guarantee.ai.knowledge.enabled=false 重启；
+    // 未声明该前置条件时报"未跑"，绝不算通过
+    requires: 'knowledge-disabled',
+    expect: {
+      contains: ['订单'],
+      matches: [/不可用|没有|未开通|无法.*知识|关闭|不能/],
+      notContains: ['知识来源：', 'queryBusinessKnowledge'],
+      maxToolCalls: 6,
+      maxRounds: 3
+    }
   }
 ]
 
@@ -204,11 +358,11 @@ const FORBIDDEN_TECH_TERMS = [
 /** 当前解析中的 SSE 事件名（`event:` 与 `data:` 分行到达）。 */
 let pendingEvent = ''
 
-async function login() {
+async function login(user = ACCOUNT, secret = SECRET) {
   const res = await fetch(`${BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: ACCOUNT, password: SECRET })
+    body: JSON.stringify({ username: user, password: secret })
   })
   if (!res.ok) {
     throw new Error(`登录失败 HTTP ${res.status}：${(await res.text()).slice(0, 200)}`)
@@ -217,6 +371,17 @@ async function login() {
   const token = body?.data?.token
   if (!token) throw new Error(`登录响应里没有 token：${JSON.stringify(body).slice(0, 200)}`)
   return token
+}
+
+/** 按账号缓存 token：同一次运行里每个账号只登录一次。 */
+const tokenCache = new Map()
+
+async function tokenFor(user, secret) {
+  const key = `${user}::${secret}`
+  if (!tokenCache.has(key)) {
+    tokenCache.set(key, await login(user, secret))
+  }
+  return tokenCache.get(key)
 }
 
 /** 调一次对话，解析 SSE，返回统计与最终正文（正确处理 reset 语义）。 */
@@ -319,8 +484,8 @@ async function ask(token, question) {
   }
 }
 
-/** 服务端尾部（口径页脚 + 数据摘要）的起始标记；正文 = 这两个标记之前的部分。 */
-const SERVER_TAIL_MARKERS = ['\n\n口径：', '\n\n数据摘要（服务端生成）']
+/** 服务端尾部（口径页脚 + 数据摘要 + 知识来源行）的起始标记；正文 = 这些标记之前的部分。 */
+const SERVER_TAIL_MARKERS = ['\n\n口径：', '\n\n数据摘要（服务端生成）', '\n\n知识来源：']
 
 function proseOf(text) {
   let cut = text.length
@@ -386,9 +551,22 @@ function judge(item, result) {
 // 主流程
 // ---------------------------------------------------------------------------
 
+/**
+ * 某条问题的额外前置条件；不满足时返回原因（该条记"未跑"）。
+ *
+ * <p>为什么必须显式：阶段三有两条问题依赖**环境**（只读账号、知识层关闭）。
+ * 把"没验证"算成"通过"是本项目明确禁止的做法。</p>
+ */
+function skipReasonFor(item) {
+  if (item.requires === 'knowledge-disabled' && process.env.GOLDEN_KNOWLEDGE_DISABLED !== '1') {
+    return '需要后端以 guarantee.ai.knowledge.enabled=false 重启，并设 GOLDEN_KNOWLEDGE_DISABLED=1'
+  }
+  return null
+}
+
 async function main() {
-  console.log(`黄金问题集冒烟：${BASE}（用户 ${ACCOUNT}）`)
-  const token = await login()
+  console.log(`黄金问题集冒烟：${BASE}（默认用户 ${ACCOUNT}）`)
+  await tokenFor(ACCOUNT, SECRET)
   console.log('登录成功\n')
 
   const selected = ONLY ? QUESTIONS.filter((q) => ONLY.split(',').includes(q.id)) : QUESTIONS
@@ -399,8 +577,33 @@ async function main() {
 
   const rows = []
   let failed = 0
+  let skipped = 0
   for (const item of selected) {
     process.stdout.write(`${item.id} [${item.category}] … `)
+
+    const skipReason = skipReasonFor(item)
+    if (skipReason) {
+      skipped += 1
+      const verdict = { pass: false, skipped: true, reasons: [skipReason] }
+      rows.push({ item, result: { skipped: true }, verdict })
+      console.log(`SKIP（未跑：${skipReason}）`)
+      continue
+    }
+
+    const user = item.as?.user || ACCOUNT
+    const secret = item.as?.password || SECRET
+    let token
+    try {
+      token = await tokenFor(user, secret)
+    } catch (error) {
+      skipped += 1
+      const reason = `账号 ${user} 登录失败（${error.message}）→ 未跑`
+      const verdict = { pass: false, skipped: true, reasons: [reason] }
+      rows.push({ item, result: { skipped: true }, verdict })
+      console.log(`SKIP（${reason}）`)
+      continue
+    }
+
     let result
     try {
       result = await ask(token, item.question)
@@ -417,18 +620,22 @@ async function main() {
   console.log('\n| 编号 | 类别 | 结果 | 工具调用 | 轮次 | 耗时(s) | 正文字数 | 备注 |')
   console.log('|---|---|---|---|---|---|---|---|')
   for (const { item, result, verdict } of rows) {
-    const note = verdict.pass ? '' : verdict.reasons.join('；').replace(/\|/g, '/')
+    const note = verdict.pass
+      ? ''
+      : (verdict.skipped ? `未跑：${verdict.reasons.join('；')}` : verdict.reasons.join('；')).replace(/\|/g, '/')
+    const mark = verdict.pass ? '✅' : verdict.skipped ? '⏭ 未跑' : '❌'
     console.log(
-      `| ${item.id} | ${item.category} | ${verdict.pass ? '✅' : '❌'} | ${result.toolCalls?.length ?? 0} | ` +
+      `| ${item.id} | ${item.category} | ${mark} | ${result.toolCalls?.length ?? 0} | ` +
         `${result.rounds ?? 0} | ${((result.elapsedMs ?? 0) / 1000).toFixed(1)} | ${(result.text ?? '').length} | ${note} |`
     )
   }
 
-  const passed = rows.length - failed
-  console.log(`\n结果：${passed}/${rows.length} 通过`)
+  const passed = rows.length - failed - skipped
+  const skippedNote = skipped > 0 ? `，${skipped} 条未跑（前置条件不满足，不计入通过）` : ''
+  console.log(`\n结果：${passed}/${rows.length - skipped} 通过${skippedNote}`)
   if (failed > 0) {
     console.log('\n失败明细（正文片段，便于人工判断）：')
-    for (const { item, result, verdict } of rows.filter((r) => !r.verdict.pass)) {
+    for (const { item, result, verdict } of rows.filter((r) => !r.verdict.pass && !r.verdict.skipped)) {
       console.log(`\n--- ${item.id} ${item.question}`)
       console.log(`原因：${verdict.reasons.join('；')}`)
       console.log(`正文：${(result.text ?? '').slice(0, 400)}`)
@@ -437,8 +644,66 @@ async function main() {
   process.exitCode = failed > 0 ? 1 : 0
 }
 
-main().catch((error) => {
-  console.error(`\n脚本自身失败（不是断言失败）：${error.message}`)
-  console.error('检查：后端是否已重启到最新代码、演示数据是否已初始化、DEEPSEEK_API_KEY 是否有效')
-  process.exitCode = 2
-})
+// ---------------------------------------------------------------------------
+// 静态自检（--self-check）：不需要后端、不需要模型，验证"问题集本身"的一致性
+// ---------------------------------------------------------------------------
+
+/**
+ * 静态自检：id 唯一且合法、每条都有可判定的期望、知识类必须带 mustCall、
+ * 且与 `docs/TEST-助手黄金问题集.md` 的编号一一对应（文档与脚本不许各说各话）。
+ *
+ * <p>为什么值得有：真机集合依赖 API Key，本机跑不了；但"脚本漏了一条""文档多了一条"
+ * 这类问题不需要模型就能发现，而且正是它们会让验收结论对不上号。</p>
+ */
+function selfCheck() {
+  const problems = []
+  const seen = new Set()
+  for (const item of QUESTIONS) {
+    if (!/^GQ-\d{2}$/.test(item.id ?? '')) problems.push(`id 不是 GQ-NN 形式：${item.id}`)
+    if (seen.has(item.id)) problems.push(`id 重复：${item.id}`)
+    seen.add(item.id)
+    if (!item.question || !item.expect) {
+      problems.push(`${item.id} 缺少 question 或 expect`)
+      continue
+    }
+    // 知识类问题必须正向断言"真的调用了检索"；唯一例外是**降级类**（知识层被关闭，
+    // 它断言的是"不调用也照常答数字"）
+    const mustRetrieve = (item.expect.mustCall ?? []).includes('queryBusinessKnowledge')
+    if (item.category?.startsWith('知识') && !mustRetrieve && item.requires !== 'knowledge-disabled') {
+      problems.push(`${item.id} 是知识类问题，但没有 mustCall: queryBusinessKnowledge（无法证明真的用了检索）`)
+    }
+  }
+  if (QUESTIONS.length < 25) problems.push(`问题集条数 ${QUESTIONS.length} < 25`)
+
+  let doc = ''
+  try {
+    doc = readFileSync(new URL('../docs/TEST-助手黄金问题集.md', import.meta.url), 'utf8')
+  } catch (error) {
+    problems.push(`读不到 docs/TEST-助手黄金问题集.md：${error.message}`)
+  }
+  const docIds = new Set([...doc.matchAll(/GQ-\d{2}/g)].map((m) => m[0]))
+  for (const id of seen) {
+    if (!docIds.has(id)) problems.push(`文档缺少 ${id}（脚本有、文档没有）`)
+  }
+  for (const id of docIds) {
+    if (!seen.has(id)) problems.push(`脚本缺少 ${id}（文档有、脚本没有）`)
+  }
+
+  if (problems.length > 0) {
+    console.error('静态自检失败：')
+    for (const problem of problems) console.error(`  - ${problem}`)
+    return 1
+  }
+  console.log(`静态自检通过：${QUESTIONS.length} 条问题，编号与 docs/TEST-助手黄金问题集.md 一一对应`)
+  return 0
+}
+
+if (process.argv.includes('--self-check')) {
+  process.exitCode = selfCheck()
+} else {
+  main().catch((error) => {
+    console.error(`\n脚本自身失败（不是断言失败）：${error.message}`)
+    console.error('检查：后端是否已重启到最新代码、演示数据是否已初始化、DEEPSEEK_API_KEY 是否有效')
+    process.exitCode = 2
+  })
+}
