@@ -35,6 +35,10 @@
             <if test="q.entName != null and q.entName != ''">
                 AND en.ent_name LIKE CONCAT('%', #{q.entName}, '%')
             </if>
+            <!-- 选中某一条企业（下拉筛选）：按主键精确收敛，与名称模糊匹配是两种用途 -->
+            <if test="q.entId != null">
+                AND en.id = #{q.entId}
+            </if>
             <if test="q.regionCode != null and q.regionCode != ''">
                 <!-- 层级前缀匹配：选省 = 含其全部市/区县（规则见 RegionCodePrefix） -->
                 <bind name="regionPrefix"

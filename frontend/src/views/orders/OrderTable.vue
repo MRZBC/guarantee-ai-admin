@@ -5,6 +5,7 @@ import { getPerformanceOrder, getTenderOrder, pagePerformanceOrders, pageTenderO
 import { pageProjects } from '@/api/project'
 import { listInsuranceTypeOptions, listOrgOptions } from '@/api/system'
 import RegionSelect from '@/components/RegionSelect.vue'
+import { MIN_KEYWORD_LEN, useRemoteSearch } from '@/composables/useRemoteSearch'
 import { formatAmount, formatDate, formatPercent } from '@/utils/format'
 import type { EnterpriseItem } from '@/types/enterprise'
 import type { OrderItem, OrderQuery, PerformanceOrderItem } from '@/types/order'
@@ -128,12 +129,8 @@ function handleReset(): void {
   query.status = ''
   dateRange.value = null
   // 搜索型筛选项要把"已选 + 关键词 + 候选"一起复位，否则会留下上一位项目的标签
-  selectedProject.value = null
-  selectedEnterprise.value = null
-  projectOptions.value = []
-  enterpriseOptions.value = []
-  projectKeyword.value = ''
-  enterpriseKeyword.value = ''
+  projectSearch.reset()
+  enterpriseSearch.reset()
   query.pageNum = 1
   void loadData()
 }
@@ -205,116 +202,29 @@ const orgLabel = (item: OrgOption): string => optionLabel(item.orgName, item)
 /* ---------------- 项目 / 企业：模糊搜索（不用全量下拉） ----------------
  *
  * 项目与企业各有数千条：全量下拉既渲染不动、也没法用（要在一屏里翻三千项）。
- * 因此走 el-select 的 remote 模式——输入 **至少 2 个字** 才向后端要数据，
- * 300ms 防抖，最多取 20 条，并在候选项里带上编码/区域，便于区分重名。
- * 复用的是既有的分页查询接口（`/api/projects?projectName=`、`/api/enterprises?entName=`），
- * 两者都是"登录即可访问"的业务接口，所以这个筛选不需要任何额外权限。
+ * 规则（至少 2 个字、300ms 防抖、最多 20 条、选中项留在候选里）统一收敛在
+ * {@link useRemoteSearch}，项目页复用同一实现，避免两页行为漂移。
  */
 
-/** 少于这个字数不查：单字关键词会把全表扫一遍且结果没有区分度 */
-const MIN_KEYWORD_LEN = 2
-const SEARCH_PAGE_SIZE = 20
-const SEARCH_DEBOUNCE_MS = 300
+const projectSearch = useRemoteSearch<ProjectItem>({
+  fetch: async (keyword, pageSize) => {
+    const page = await pageProjects({ pageNum: 1, pageSize, projectName: keyword })
+    return page?.list ?? []
+  },
+  labelOf: (item) => `${item.projectName}（${item.projectCode}）`,
+  minLengthText: `请输入至少 ${MIN_KEYWORD_LEN} 个字`,
+  emptyText: '无匹配项目'
+})
 
-const projectOptions = ref<ProjectItem[]>([])
-const enterpriseOptions = ref<EnterpriseItem[]>([])
-const projectSearching = ref(false)
-const enterpriseSearching = ref(false)
-const projectKeyword = ref('')
-const enterpriseKeyword = ref('')
-/** 已选项要一直留在候选里，否则远程搜索把列表换掉后，标签会退化成裸 id */
-const selectedProject = ref<ProjectItem | null>(null)
-const selectedEnterprise = ref<EnterpriseItem | null>(null)
-
-const projectNoDataText = computed(() =>
-  projectKeyword.value.trim().length < MIN_KEYWORD_LEN
-    ? `请输入至少 ${MIN_KEYWORD_LEN} 个字`
-    : '无匹配项目'
-)
-const enterpriseNoDataText = computed(() =>
-  enterpriseKeyword.value.trim().length < MIN_KEYWORD_LEN
-    ? `请输入至少 ${MIN_KEYWORD_LEN} 个字`
-    : '无匹配企业'
-)
-
-const projectLabel = (item: ProjectItem): string => `${item.projectName}（${item.projectCode}）`
-const enterpriseLabel = (item: EnterpriseItem): string => `${item.entName}（${item.entCode}）`
-
-function withSelectedProject(list: ProjectItem[]): ProjectItem[] {
-  const selected = selectedProject.value
-  if (!selected || list.some((item) => item.id === selected.id)) return list
-  return [selected, ...list]
-}
-
-function withSelectedEnterprise(list: EnterpriseItem[]): EnterpriseItem[] {
-  const selected = selectedEnterprise.value
-  if (!selected || list.some((item) => item.id === selected.id)) return list
-  return [selected, ...list]
-}
-
-let projectTimer: ReturnType<typeof setTimeout> | undefined
-let enterpriseTimer: ReturnType<typeof setTimeout> | undefined
-
-function searchProjects(keyword: string): void {
-  const kw = (keyword ?? '').trim()
-  projectKeyword.value = kw
-  clearTimeout(projectTimer)
-  if (kw.length < MIN_KEYWORD_LEN) {
-    projectOptions.value = withSelectedProject([])
-    projectSearching.value = false
-    return
-  }
-  projectSearching.value = true
-  projectTimer = setTimeout(() => {
-    void (async () => {
-      try {
-        const page = await pageProjects({ pageNum: 1, pageSize: SEARCH_PAGE_SIZE, projectName: kw })
-        projectOptions.value = withSelectedProject(page?.list ?? [])
-      } catch {
-        projectOptions.value = withSelectedProject([])
-      } finally {
-        projectSearching.value = false
-      }
-    })()
-  }, SEARCH_DEBOUNCE_MS)
-}
-
-function searchEnterprises(keyword: string): void {
-  const kw = (keyword ?? '').trim()
-  enterpriseKeyword.value = kw
-  clearTimeout(enterpriseTimer)
-  if (kw.length < MIN_KEYWORD_LEN) {
-    enterpriseOptions.value = withSelectedEnterprise([])
-    enterpriseSearching.value = false
-    return
-  }
-  enterpriseSearching.value = true
-  enterpriseTimer = setTimeout(() => {
-    void (async () => {
-      try {
-        const page = await pageEnterprises({ pageNum: 1, pageSize: SEARCH_PAGE_SIZE, entName: kw })
-        enterpriseOptions.value = withSelectedEnterprise(page?.list ?? [])
-      } catch {
-        enterpriseOptions.value = withSelectedEnterprise([])
-      } finally {
-        enterpriseSearching.value = false
-      }
-    })()
-  }, SEARCH_DEBOUNCE_MS)
-}
-
-/** 选中时把整条记录留在候选里（清空则一并清掉） */
-function handleProjectChange(id: number | null): void {
-  selectedProject.value = id == null
-    ? null
-    : projectOptions.value.find((item) => item.id === id) ?? selectedProject.value
-}
-
-function handleEnterpriseChange(id: number | null): void {
-  selectedEnterprise.value = id == null
-    ? null
-    : enterpriseOptions.value.find((item) => item.id === id) ?? selectedEnterprise.value
-}
+const enterpriseSearch = useRemoteSearch<EnterpriseItem>({
+  fetch: async (keyword, pageSize) => {
+    const page = await pageEnterprises({ pageNum: 1, pageSize, entName: keyword })
+    return page?.list ?? []
+  },
+  labelOf: (item) => `${item.entName}（${item.entCode}）`,
+  minLengthText: `请输入至少 ${MIN_KEYWORD_LEN} 个字`,
+  emptyText: '无匹配企业'
+})
 
 onMounted(() => {
   void loadOptions()
@@ -383,17 +293,15 @@ onMounted(() => {
                 placeholder="项目名称（至少 2 个字）"
                 clearable
                 filterable
-                remote
-                remote-show-suffix
-                :remote-method="searchProjects"
-                :loading="projectSearching"
-                :no-data-text="projectNoDataText"
-                @change="handleProjectChange"
+                :filter-method="projectSearch.filterMethod"
+                :loading="projectSearch.searching"
+                :no-data-text="projectSearch.noDataText"
+                @change="projectSearch.handleChange"
               >
                 <el-option
-                  v-for="item in projectOptions"
+                  v-for="item in projectSearch.options.value"
                   :key="item.id"
-                  :label="projectLabel(item)"
+                  :label="projectSearch.labelOf(item)"
                   :value="item.id"
                 />
               </el-select>
@@ -406,17 +314,15 @@ onMounted(() => {
                 placeholder="企业名称（至少 2 个字）"
                 clearable
                 filterable
-                remote
-                remote-show-suffix
-                :remote-method="searchEnterprises"
-                :loading="enterpriseSearching"
-                :no-data-text="enterpriseNoDataText"
-                @change="handleEnterpriseChange"
+                :filter-method="enterpriseSearch.filterMethod"
+                :loading="enterpriseSearch.searching"
+                :no-data-text="enterpriseSearch.noDataText"
+                @change="enterpriseSearch.handleChange"
               >
                 <el-option
-                  v-for="item in enterpriseOptions"
+                  v-for="item in enterpriseSearch.options.value"
                   :key="item.id"
-                  :label="enterpriseLabel(item)"
+                  :label="enterpriseSearch.labelOf(item)"
                   :value="item.id"
                 />
               </el-select>

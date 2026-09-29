@@ -26,6 +26,10 @@
             <if test="q.projectName != null and q.projectName != ''">
                 AND p.project_name LIKE CONCAT('%', #{q.projectName}, '%')
             </if>
+            <!-- 选中某一条项目（下拉筛选）：按主键精确收敛，与名称模糊匹配是两种用途 -->
+            <if test="q.projectId != null">
+                AND p.id = #{q.projectId}
+            </if>
             <if test="q.regionCode != null and q.regionCode != ''">
                 <!-- 层级前缀匹配：选省 = 含其全部市/区县（规则见 RegionCodePrefix） -->
                 <bind name="regionPrefix"

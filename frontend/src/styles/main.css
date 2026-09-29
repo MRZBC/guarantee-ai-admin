@@ -142,3 +142,29 @@ pre.json-block {
   overflow: auto;
   color: #303133;
 }
+
+/* ---------------------------------------------------------------------------
+ * 服务端搜索下拉（订单页 / 项目页的「项目」「企业」）—— 必需覆盖，勿删
+ *
+ * 现象：面板能弹出，但里面是空的（只剩一条 ~20px 的空状态条），候选看不见也点不中。
+ *
+ * 根因（真实浏览器逐层量出来的，非推测）：候选项 <li> **已经渲染在 DOM 里**
+ *       （20 项、每项 34px），但包着它们的 .el-scrollbar 被带上内联 `display:none`
+ *       ——来自 element-plus 2.14.6 select 模板的
+ *         withDirectives(createVNode(el-scrollbar), [
+ *           [vShow, states.options.size > 0 && !loading]
+ *         ])
+ *       该表达式在候选项注册完成前先算了一次假值，之后没有重新求值，于是一直播
+ *       display:none，面板只剩 .el-select-dropdown__empty 的 20px 内边距。
+ *       实测：覆盖前 panel 22px / li 可见 0；覆盖后 panel 296px / li 可见 20。
+ *
+ * 为什么用 :has(.el-select-dropdown__item) 限定：
+ *       只在**确实有候选项**时强制显示。空状态（输不足 2 个字、或无匹配）仍走
+ *       Element Plus 自己的空提示；不加限定会把「请输入至少 2 个字」一起压掉。
+ *
+ * 升级 element-plus 后若该 v-show 被修好，本规则退化为无害冗余，可安全删除。
+ * ------------------------------------------------------------------------- */
+.el-select__popper .el-select-dropdown:has(.el-select-dropdown__item) .el-scrollbar {
+  display: block !important;
+}
+

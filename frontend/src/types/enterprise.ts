@@ -26,7 +26,10 @@ export interface EnterpriseDetail extends EnterpriseItem {
 }
 
 export interface EnterpriseQuery extends PageQuery {
+  /** 名称模糊匹配：用于"搜索企业候选"，仍被订单页/项目页的企业下拉复用 */
   entName?: string
+  /** 主键精确匹配：用于"已选中某一条企业"，企业管理页的筛选走这个 */
+  entId?: number | null
   regionCode?: string
   industry?: string
   entLevel?: string

@@ -23,7 +23,10 @@ export interface ProjectDetail extends ProjectItem {
 }
 
 export interface ProjectQuery extends PageQuery {
+  /** 名称模糊匹配：用于"搜索项目候选"，仍被订单页的项目下拉复用 */
   projectName?: string
+  /** 主键精确匹配：用于"已选中某一条项目"，项目管理页的筛选走这个 */
+  projectId?: number | null
   regionCode?: string
   projectType?: string
   status?: string

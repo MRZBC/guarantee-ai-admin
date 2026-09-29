@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { pageEnterprises } from '@/api/enterprise'
 import { getProject, pageProjects } from '@/api/project'
 import RegionSelect from '@/components/RegionSelect.vue'
+import { MIN_KEYWORD_LEN, useRemoteSearch } from '@/composables/useRemoteSearch'
 import { formatAmount, formatDate } from '@/utils/format'
+import type { EnterpriseItem } from '@/types/enterprise'
 import type { ProjectDetail, ProjectItem, ProjectQuery } from '@/types/project'
 
 const loading = ref(false)
@@ -12,11 +15,49 @@ const total = ref(0)
 const query = reactive<ProjectQuery>({
   pageNum: 1,
   pageSize: 10,
-  projectName: '',
+  projectId: null,
   regionCode: '',
   projectType: '',
   status: '',
   enterpriseId: null
+})
+
+/**
+ * 项目筛选：与投标订单页同款的**下拉 + 服务端模糊搜索**。
+ *
+ * <p>此前这里是 `el-input` 项目名称（按名称 LIKE 模糊匹配一批）。改成下拉后语义变成
+ * "选中某一条项目"，因此提交的是 `projectId` 而不是名称——后端为此新增了主键过滤
+ * （`ProjectQuery.projectId`）。名称模糊匹配仍保留，用于这里的候选搜索本身。</p>
+ *
+ * <p>规则（≥2 字、300ms 防抖、选中项留在候选里）由 {@link useRemoteSearch} 统一实现。</p>
+ */
+const projectSearch = useRemoteSearch<ProjectItem>({
+  fetch: async (keyword, pageSize) => {
+    const page = await pageProjects({ pageNum: 1, pageSize, projectName: keyword })
+    return page?.list ?? []
+  },
+  labelOf: (item) => `${item.projectName}（${item.projectCode}）`,
+  minLengthText: `请输入至少 ${MIN_KEYWORD_LEN} 个字`,
+  emptyText: '无匹配项目'
+})
+
+/**
+ * 企业筛选：与企业页/订单页一致地按**名称**远程模糊搜索。
+ *
+ * <p>此前这里是手填「企业ID」的 `el-input-number`——要用户先知道企业主键才能筛，
+ * 实际上等于筛不了。后端 `ProjectQuery` 只接受 `enterpriseId`，因此与企业/订单页
+ * 同一套做法：前端远程搜出企业、拿到 id 再提交，**不需要后端改动**。</p>
+ *
+ * <p>规则（≥2 字、300ms 防抖、选中项留在候选里）由 {@link useRemoteSearch} 统一实现。</p>
+ */
+const enterpriseSearch = useRemoteSearch<EnterpriseItem>({
+  fetch: async (keyword, pageSize) => {
+    const page = await pageEnterprises({ pageNum: 1, pageSize, entName: keyword })
+    return page?.list ?? []
+  },
+  labelOf: (item) => `${item.entName}（${item.entCode}）`,
+  minLengthText: `请输入至少 ${MIN_KEYWORD_LEN} 个字`,
+  emptyText: '无匹配企业'
 })
 
 const projectTypeMap: Record<string, string> = {
@@ -59,7 +100,7 @@ async function loadData(): Promise<void> {
     const result = await pageProjects({
       pageNum: query.pageNum,
       pageSize: query.pageSize,
-      projectName: query.projectName || undefined,
+      projectId: query.projectId ?? undefined,
       regionCode: query.regionCode || undefined,
       projectType: query.projectType || undefined,
       status: query.status || undefined,
@@ -81,11 +122,14 @@ function handleSearch(): void {
 }
 
 function handleReset(): void {
-  query.projectName = ''
+  query.projectId = null
   query.regionCode = ''
   query.projectType = ''
   query.status = ''
   query.enterpriseId = null
+  // 搜索型筛选项要把"已选 + 关键词 + 候选"一起复位，否则会留下上一家企业/项目的标签
+  projectSearch.reset()
+  enterpriseSearch.reset()
   query.pageNum = 1
   void loadData()
 }
@@ -135,12 +179,27 @@ onMounted(loadData)
         <el-row :gutter="12">
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
             <el-form-item label="项目名称">
-              <el-input
-                v-model="query.projectName"
-                placeholder="请输入项目名称"
+              <!--
+                与投标订单页同款：下拉 + 服务端模糊搜索（≥2 个字才查、300ms 防抖、最多 20 条）。
+                候选项带项目编码，便于区分"浙江省水利工程项目0681"这类重名。
+              -->
+              <el-select
+                v-model="query.projectId"
+                placeholder="项目名称（至少 2 个字）"
                 clearable
-                @keyup.enter="handleSearch"
-              />
+                filterable
+                :filter-method="projectSearch.filterMethod"
+                :loading="projectSearch.searching"
+                :no-data-text="projectSearch.noDataText"
+                @change="projectSearch.handleChange"
+              >
+                <el-option
+                  v-for="item in projectSearch.options.value"
+                  :key="item.id"
+                  :label="projectSearch.labelOf(item)"
+                  :value="item.id"
+                />
+              </el-select>
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
@@ -174,14 +233,28 @@ onMounted(loadData)
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
-            <el-form-item label="企业ID">
-              <el-input-number
+            <el-form-item label="企业">
+              <!--
+                企业有数千条，不做全量下拉：远程模糊搜索，≥2 个字才查，300ms 防抖。
+                候选项带企业编码，便于区分重名（与企业页、订单页同一套规则）。
+              -->
+              <el-select
                 v-model="query.enterpriseId"
-                :min="1"
-                :controls="false"
-                placeholder="企业ID"
-                style="width: 100%"
-              />
+                placeholder="企业名称（至少 2 个字）"
+                clearable
+                filterable
+                :filter-method="enterpriseSearch.filterMethod"
+                :loading="enterpriseSearch.searching"
+                :no-data-text="enterpriseSearch.noDataText"
+                @change="enterpriseSearch.handleChange"
+              >
+                <el-option
+                  v-for="item in enterpriseSearch.options.value"
+                  :key="item.id"
+                  :label="enterpriseSearch.labelOf(item)"
+                  :value="item.id"
+                />
+              </el-select>
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8" :lg="6" class="filter-actions">

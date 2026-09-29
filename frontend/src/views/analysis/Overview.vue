@@ -293,10 +293,15 @@ onMounted(() => {
         <el-row :gutter="12">
           <el-col :xs="24" :sm="12" :md="6">
             <el-form-item label="订单类型">
-              <el-radio-group v-model="filters.orderType" @change="handleSearch">
-                <el-radio-button value="TENDER">投标订单</el-radio-button>
-                <el-radio-button value="PERFORMANCE">履约订单</el-radio-button>
-              </el-radio-group>
+              <!--
+                用下拉而不是分段单选：筛选区其它控件（地区、统计区间）都是"点开再选"，
+                夹一组平铺按钮会让这一项在视觉上突出成另一种东西。
+                选项只有两个，代价是多两次点击，换来与整行控件同构。
+              -->
+              <el-select v-model="filters.orderType" @change="handleSearch">
+                <el-option label="投标订单" value="TENDER" />
+                <el-option label="履约订单" value="PERFORMANCE" />
+              </el-select>
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8">
