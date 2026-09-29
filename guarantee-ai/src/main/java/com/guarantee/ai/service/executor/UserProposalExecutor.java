@@ -8,6 +8,7 @@ import com.guarantee.ai.service.ProposalRequest;
 import com.guarantee.common.security.Roles;
 import com.guarantee.system.dto.UserDto;
 import com.guarantee.system.entity.SysUser;
+import com.guarantee.system.scope.DataScope;
 import com.guarantee.system.service.UserService;
 import org.springframework.stereotype.Component;
 
@@ -35,6 +36,31 @@ public class UserProposalExecutor implements ProposalExecutor {
     @Override
     public String targetType() {
         return "USER";
+    }
+
+    /**
+     * 用户目标指纹（REQ-CFG-09）：资料字段 + {@code updated_at} + {@code isDeleted}。
+     *
+     * <p>手机号/邮箱保留原值参与哈希：这里算的是哈希，不是可读快照——
+     * 明文不会进入日志或审计（日志只打记录值与当前值的哈希）。</p>
+     */
+    @Override
+    public String fingerprint(AiOperationProposal proposal, ProposalRequest request) {
+        if (proposal.getTargetId() == null) {
+            return null; // CREATE 本期不支持，且新建无目标可比对
+        }
+        SysUser user;
+        try {
+            user = userService.requireVisible(proposal.getTargetId(), DataScope.all(null, null));
+        } catch (RuntimeException ex) {
+            return MISSING_FINGERPRINT;
+        }
+        if (user == null) {
+            return MISSING_FINGERPRINT;
+        }
+        return ProposalExecutor.fingerprintHash(user.getUsername(), user.getRealName(), user.getPhone(),
+                user.getEmail(), user.getDeptId(), user.getStatus(), user.getIsDeleted(),
+                user.getUpdatedAt());
     }
 
     @Override

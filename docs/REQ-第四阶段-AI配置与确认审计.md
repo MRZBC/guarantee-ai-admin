@@ -444,3 +444,62 @@
 | 日期 | 版本 | 说明 |
 |---|---|---|
 | 2026-09-30 | v1.0 | 首版：基于当日只读实测（AI 配置仅 4 个 yml 键、temperature 为字面量、无 `*Properties` 类、无配置表、无热刷新基础设施、`@RefreshScope`/Spring Cloud 零命中、actuator 仅 health/info；② ③ 已交付的提案与审计链路可完整复用；发现 `target_fingerprint` 执行期不比对与审计归档无执行体两处缺口），给出第四阶段的范围、需求、验收与 ≈7.5 人日计划；登记 6 项待拍板（Q-CFG-01~06）与补充未决项（Q-CFG-07~09）及 8 项风险 |
+| 2026-09-30 | v1.1 | 实施记录 + 两处收口缺口状态更新：见 §15。① REQ-CFG-09 指纹闭环**已实现**（生产者下沉到域执行器 + 确认期比对 + 拒绝写审计）；② REQ-CFG-12 归档执行体**已实现**（`scripts/archive-operation-audit.ps1` + SOP + 演练记录）；③ 新增 §16 遗留问题：分区名与真实边界的**一年偏差**（RK-CFG-14，属 T4-01 `schema.sql` 范围，本阶段仅登记） |
+
+---
+
+## 15. 实施记录（v1.1，2026-09-30）
+
+> 本节把 §1.3 / §5.1.9 / §5.1.12 登记的两处**「已设计未实现」**更新为**「已实现」**，并给出可复核证据。
+
+### 15.1 REQ-CFG-09 指纹闭环（「已设计未实现」→「已实现」）
+
+**落地前的真实状态（实测）**：`target_fingerprint` 列与 `updateFingerprint` 声明都在，但全仓**没有任何写入点**——`ProposalService.create` 只从 `request.extra().get("fingerprint")` 取值，而 5 个写工具从未计算过它 → 恒为 `null`，"比对"自然无从谈起。这正是 T-09 无法闭环的根因。
+
+**实现（T4-05）**：
+- `ProposalExecutor` 新增 `default String fingerprint(proposal, request)` 与 `fingerprintHash(Object...)`（SHA-256；字段间用不可打印分隔符，`null` 有独立标记，避免拼接歧义）；`MISSING_FINGERPRINT` 哨兵用于"目标已被删除"。
+- 5 个域执行器各自实现：字段集合 = **业务字段 + `updated_at` + `isDeleted`**。纳入 `updated_at` 的理由：业务字段可能"改了又改回"（名称 A→B→A），只看业务字段会漏判；`updated_at` 是行级时间戳，任何 UPDATE 都会变，且同一状态重复读取结果完全一致（不依赖当前时间/随机值，因此指纹稳定）。
+- `ProposalService.create`：显式传入优先，否则按执行器计算后落库（**生产者闭环**）；`CREATE` 类返回 `null` → 不写指纹。
+- `ProposalService.confirm`：**在抢占 `PENDING→EXECUTING` 之后、执行之前**比对；不一致（含目标被删除）→ 置 `INVALIDATED` + **写审计**（`result=REJECTED` + 可读原因）+ 抛「目标在确认前已被他人修改，请重新发起」。指纹为 `null` 时跳过比对，但**不放宽**权限复核、过期判定与执行期业务重校验。
+
+**证据**：
+
+| 命令 | 结果 |
+|---|---|
+| `mvn -pl guarantee-web test "-Dtest=ProposalFingerprintClosureTest"` | **5/5 通过**（稳定 / 业务字段变 / 仅 `updated_at` 变 / CREATE=null / 目标不存在=哨兵 / 不一致拒绝且不执行 / 一致放行） |
+| `mvn -pl guarantee-web verify "-Dit.test=ProposalFingerprintIT"` | **1/1 通过**（真实库：`create` 写入 64 位十六进制指纹 → 把记录改旧 → `confirm` 拒绝、状态 `INVALIDATED`、`audit_id` 非空且审计 `result=REJECTED`、业务行未被改动） |
+
+**未覆盖边界（如实登记）**：角色执行器的指纹**不含权限集合**——授权是独立动作，且"他人给别的角色授权"不应误伤当前提案；若要让授权并发修改也被拦下，需要另立提案类型。
+
+### 15.2 REQ-CFG-12 归档执行体（「已设计未实现」→「已实现」）
+
+**落地前的真实状态（实测）**：`OperationAuditService.purgeBefore` 与 `AiOperationAuditMapper.deleteBefore` 全仓无调用点，`scripts/` 下无归档脚本 → 只有分区设计，没有执行体。
+
+**实现（T4-05）**：`scripts/archive-operation-audit.ps1` —— 方案 A（运维脚本 + SOP），应用进程**不持有** `DROP PARTITION` 权限。
+
+**SOP（每次归档）**：
+1. **先 dry-run**（默认即 dry-run，不加 `-Execute` 不会删任何数据）：`pwsh -File scripts/archive-operation-audit.ps1`；口令走 `DB_PASSWORD` 环境变量（或 `-Password`），脚本不把口令写进日志。
+2. 核对输出：到期分区清单、每个分区的**真实上界**、行数、导出文件路径。
+3. 确认无误后执行：`... -Execute`。执行顺序固定为 **导出 → 校验行数 → `DROP PARTITION`**；任一环节失败立即退出（exit 1）且**不做删除**；`pmax` / `MAXVALUE` 永不触碰；全过程追加写 `.agent/archive/operation-audit/archive-operation-audit.log`（执行留痕 + 失败告警）。
+
+**关键设计：按真实上界判定，不按分区名。** 演练时实测发现 `schema.sql` 的分区名与 `TO_DAYS` 边界存在**一年偏差**（见 §16），按名字归档会删错数据，因此脚本用 `FROM_DAYS(PARTITION_DESCRIPTION)` 判定。
+
+**演练记录（2026-09-30 03:17，DRY-RUN，`-RetentionMonths 6`）**：
+- 到期分区 **14 个**（`p202601`…`p202702`，真实上界 2025-02-01 … 2026-03-01），合计 **0 行**（现有 1853 行都在未到期分区）；
+- 每个分区导出 `.tsv`（表头 + 数据，行数校验通过），**未执行任何 DROP**，退出码 **0**；
+- 演练前后 `SELECT COUNT(*) FROM ai_operation_audit` 均为 **1853**（数据未动）。
+
+### 15.3 §1.3 缺口状态更新
+
+| 缺口 | 原状态 | 现状态 |
+|---|---|---|
+| `target_fingerprint` 执行期不比对（T-09） | 已设计未实现 | **已实现**（§15.1） |
+| 审计归档只有设计没有执行体 | 已设计未实现 | **已实现**（脚本 + SOP + 演练，§15.2） |
+
+---
+
+## 16. 遗留问题（T4-05 发现，未在本阶段修复）
+
+| 编号 | 问题 | 证据 | 影响与建议 |
+|---|---|---|---|
+| RK-CFG-14 | `ai_operation_audit` 的**分区名与真实 `TO_DAYS` 边界存在一年偏差**：DDL 里 `p202601 VALUES LESS THAN (739648)`，而 `FROM_DAYS(739648)` = `2025-02-01`；`p202701`(=740013) 才是 `2026-02-01`。当前 1853 行数据全部落在 `p202709`（真实上界 `2026-10-01`） | `SELECT FROM_DAYS(739648), FROM_DAYS(740013);` → 2025-02-01 / 2026-02-01；`SELECT PARTITION_NAME, FROM_DAYS(PARTITION_DESCRIPTION) FROM information_schema.PARTITIONS …` | 不影响写入与查询（分区仍然生效），但"在线 24 个月"的实际窗口比命名所示**早一年**，且**按分区名归档会删错数据**。属 `schema.sql`（T4-01 范围），本阶段仅登记；修复需重建分区表并按真实日期重算边界 |

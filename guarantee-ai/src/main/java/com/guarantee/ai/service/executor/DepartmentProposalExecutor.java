@@ -8,6 +8,7 @@ import com.guarantee.ai.service.ProposalPreview;
 import com.guarantee.ai.service.ProposalRequest;
 import com.guarantee.system.dto.DepartmentDto;
 import com.guarantee.system.entity.SysDepartment;
+import com.guarantee.system.scope.DataScope;
 import com.guarantee.system.service.DepartmentService;
 import org.springframework.stereotype.Component;
 
@@ -33,6 +34,32 @@ public class DepartmentProposalExecutor implements ProposalExecutor {
     @Override
     public String targetType() {
         return "DEPT";
+    }
+
+    /**
+     * 部门目标指纹（REQ-CFG-09）：业务字段 + {@code updated_at} + {@code isDeleted}。
+     *
+     * <p>读取用不受限范围（{@link DataScope#all}）：这里只求"稳定读到目标行"，
+     * 不是一次授权判定——提案在创建时已做过可见性校验，而**执行期**仍会按
+     * {@code context.scope()} 重新鉴权（{@code requireVisible}）。用受限范围反而会让
+     * 指纹随"谁在确认"变化，那是错的。取不到目标时返回 {@link #MISSING_FINGERPRINT}。</p>
+     */
+    @Override
+    public String fingerprint(AiOperationProposal proposal, ProposalRequest request) {
+        if (proposal.getTargetId() == null) {
+            return null;
+        }
+        SysDepartment dept;
+        try {
+            dept = departmentService.requireVisible(proposal.getTargetId(), DataScope.all(null, null));
+        } catch (RuntimeException ex) {
+            return MISSING_FINGERPRINT;
+        }
+        if (dept == null) {
+            return MISSING_FINGERPRINT;
+        }
+        return ProposalExecutor.fingerprintHash(dept.getDeptCode(), dept.getDeptName(), dept.getParentId(),
+                dept.getStatus(), dept.getSortNo(), dept.getIsDeleted(), dept.getUpdatedAt());
     }
 
     @Override

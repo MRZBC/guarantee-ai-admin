@@ -35,6 +35,25 @@ public class OrgProposalExecutor implements ProposalExecutor {
         return "ORG";
     }
 
+    /**
+     * 机构目标指纹（REQ-CFG-09）：业务字段 + {@code updated_at} + {@code isDeleted}。
+     *
+     * <p>{@code targetId} 为空（CREATE）时返回 null —— 新建没有"确认前被改动"可言。</p>
+     */
+    @Override
+    public String fingerprint(AiOperationProposal proposal, ProposalRequest request) {
+        if (proposal.getTargetId() == null) {
+            return null;
+        }
+        SysOrg org = orgService.getEntityById(proposal.getTargetId());
+        if (org == null) {
+            return MISSING_FINGERPRINT;
+        }
+        return ProposalExecutor.fingerprintHash(org.getOrgCode(), org.getOrgName(), org.getRegionCode(),
+                org.getParentId(), org.getOrgLevel(), org.getStatus(), org.getSortNo(),
+                org.getIsDeleted(), org.getUpdatedAt());
+    }
+
     @Override
     public ProposalExecutionResult execute(AiOperationProposal proposal, ProposalRequest request,
                                            ProposalExecutionContext context) {

@@ -63,6 +63,13 @@ public class ProposalService {
     /** 单次过期清理批量上限，避免一次锁太多行。 */
     private static final int EXPIRE_BATCH = 200;
 
+    /**
+     * 目标指纹不一致时的可读原因（REQ-CFG-09 / AC-CFG-11）。
+     *
+     * <p>措辞必须让用户知道"下一步做什么"，而不是只说"校验失败"。</p>
+     */
+    public static final String FINGERPRINT_MISMATCH_REASON = "目标在确认前已被他人修改，请重新发起";
+
     private final AiOperationProposalMapper proposalMapper;
     private final ProposalSecretStore secretStore;
     private final OperationAuditService auditService;
@@ -160,11 +167,15 @@ public class ProposalService {
         entity.setStatus("PENDING");
         entity.setExpiresAt(LocalDateTime.now().plusMinutes(VALID_MINUTES));
         entity.setTraceId(draft.traceId());
-        // 版本指纹在写工具预检时已算好，随 request 的 extra 传入
-        Object fingerprint = draft.request().extra() == null
-                ? null : draft.request().extra().get("fingerprint");
+        // 版本指纹（REQ-CFG-09 / T-09 闭环）：写工具显式传入优先（历史契约），
+        // 否则由域执行器按**目标当前行**计算。CREATE 类没有目标行 → 执行器返回 null
+        // → 不写指纹（确认时跳过比对，但不得因此放宽其它校验，见 verifyTargetFingerprint）。
+        String fingerprint = explicitFingerprint(draft);
+        if (fingerprint == null) {
+            fingerprint = executorFingerprint(entity, draft.request());
+        }
         if (fingerprint != null) {
-            entity.setTargetFingerprint(String.valueOf(fingerprint));
+            entity.setTargetFingerprint(fingerprint);
         }
         proposalMapper.insert(entity);
 
@@ -298,6 +309,9 @@ public class ProposalService {
         proposal = proposalMapper.selectById(proposalId);
 
         ProposalRequest request = readRequest(proposal);
+        // REQ-CFG-09 / T-09：抢占成功、执行之前，重新计算目标指纹并与提案记录比对。
+        // 位置很关键：放在抢占之前会让"正在执行的另一个请求"误判；放在执行之后已经晚了。
+        verifyTargetFingerprint(proposal, request, context);
         // 合并敏感参数（只在执行这一刻解密）
         request = mergeSecrets(proposal, request);
 
@@ -496,7 +510,7 @@ public class ProposalService {
             case "EXECUTING" -> "该提案正在执行中，请勿重复提交";
             case "REJECTED" -> "该提案已被拒绝";
             case "EXPIRED" -> "该提案已过期（有效期 " + VALID_MINUTES + " 分钟），请重新发起";
-            case "INVALIDATED" -> "该提案已失效（权限已变更），请重新发起";
+            case "INVALIDATED" -> "该提案已失效（目标或权限已变更），请重新发起";
             case "FAILED" -> "该提案执行失败，不可重复执行，请重新发起";
             default -> "提案状态为 " + proposal.getStatus() + "，无法执行";
         };
@@ -519,13 +533,85 @@ public class ProposalService {
     }
 
     private ProposalExecutor findExecutor(String targetType) {
+        ProposalExecutor executor = findExecutorOrNull(targetType);
+        if (executor == null) {
+            throw new BizException("不支持的目标类型，无法执行: " + targetType);
+        }
+        return executor;
+    }
+
+    /** 取执行器；目标类型没有对应执行器时返回 null（指纹计算/build 场景不因此失败）。 */
+    private ProposalExecutor findExecutorOrNull(String targetType) {
+        // ObjectProvider#getIfAvailable 在"容器里没有该类型 bean"时返回 null（mock 场景同样可能返回 null），
+        // 因此必须判空：指纹计算发生在 create 路径上，这里绝不能因为取执行器而抛 NPE。
         List<ProposalExecutor> executors = executorsProvider.getIfAvailable(List::of);
+        if (executors == null) {
+            return null;
+        }
         for (ProposalExecutor executor : executors) {
             if (executor.targetType().equals(targetType)) {
                 return executor;
             }
         }
-        throw new BizException("不支持的目标类型，无法执行: " + targetType);
+        return null;
+    }
+
+    /** 写工具显式传入的指纹（历史契约，优先于执行器计算）。 */
+    private static String explicitFingerprint(ProposalDraft draft) {
+        Object fingerprint = draft.request().extra() == null
+                ? null : draft.request().extra().get("fingerprint");
+        return fingerprint == null ? null : String.valueOf(fingerprint);
+    }
+
+    /** 生成提案时按目标当前行计算指纹；执行器缺失或该动作无目标（CREATE）时返回 null。 */
+    private String executorFingerprint(AiOperationProposal entity, ProposalRequest request) {
+        ProposalExecutor executor = findExecutorOrNull(entity.getTargetType());
+        return executor == null ? null : executor.fingerprint(entity, request);
+    }
+
+    /**
+     * 确认执行前的指纹闭环（REQ-CFG-09 / AC-CFG-11）。
+     *
+     * <p>三条语义：</p>
+     * <ol>
+     *   <li>提案没有记录指纹（CREATE 类 / 目标类型无执行器）→ 跳过比对，
+     *       但**不影响**权限复核、过期判定与执行期业务重校验；</li>
+     *   <li>指纹一致 → 正常继续执行；</li>
+     *   <li>不一致（含"目标已被删除"的哨兵值）→ 置 {@code INVALIDATED} + **写审计** +
+     *       抛可读错误。拒绝必须有痕迹：只改状态而不留审计，事后无法回答"为什么没执行"。</li>
+     * </ol>
+     */
+    private void verifyTargetFingerprint(AiOperationProposal proposal, ProposalRequest request,
+                                         ProposalExecutionContext context) {
+        String recorded = proposal.getTargetFingerprint();
+        if (recorded == null || recorded.isBlank()) {
+            return;
+        }
+        ProposalExecutor executor = findExecutorOrNull(proposal.getTargetType());
+        if (executor == null) {
+            return;
+        }
+        String current = executor.fingerprint(proposal, request);
+        if (recorded.equals(current)) {
+            return;
+        }
+        log.warn("提案 {} 的目标指纹不一致，拒绝执行：target={}:{} recorded={} current={}",
+                proposal.getProposalNo(), proposal.getTargetType(), proposal.getTargetId(),
+                recorded, current);
+
+        Long auditId = auditService.record(
+                new OperationAuditService.AuditEntry("AI", proposal.getAction(), proposal.getTargetType(),
+                        proposal.getTargetId(), proposal.getTargetName(), null, null,
+                        "REJECTED", FINGERPRINT_MISMATCH_REASON, Set.of()),
+                operator(context.userId(), context.username(), context.realName()),
+                proposal.getId(), proposal.getConversationId(), proposal.getTraceId());
+        proposalMapper.updateResult(proposal.getId(), "INVALIDATED", FINGERPRINT_MISMATCH_REASON,
+                FINGERPRINT_MISMATCH_REASON, LocalDateTime.now(), auditId);
+        secretStore.purge(proposal.getId());
+        conversationService.audit(proposal.getConversationId(), proposal.getUserId(), "PROPOSAL_INVALIDATED",
+                "proposalNo=" + proposal.getProposalNo() + " 目标指纹不一致：" + FINGERPRINT_MISMATCH_REASON,
+                proposal.getTraceId());
+        throw new BizException(FINGERPRINT_MISMATCH_REASON);
     }
 
     private Long writeExecutionAudit(AiOperationProposal proposal, ProposalRequest request,

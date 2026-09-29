@@ -31,6 +31,25 @@ public class InsuranceTypeProposalExecutor implements ProposalExecutor {
         return "INSURANCE_TYPE";
     }
 
+    /** 险种目标指纹（REQ-CFG-09）：编码/名称/分类 + {@code updated_at} + {@code isDeleted}。 */
+    @Override
+    public String fingerprint(AiOperationProposal proposal, ProposalRequest request) {
+        if (proposal.getTargetId() == null) {
+            return null; // CREATE：无目标可比对
+        }
+        com.guarantee.system.entity.InsuranceType type;
+        try {
+            type = insuranceTypeService.getEntityById(proposal.getTargetId());
+        } catch (RuntimeException ex) {
+            return MISSING_FINGERPRINT;
+        }
+        if (type == null) {
+            return MISSING_FINGERPRINT;
+        }
+        return ProposalExecutor.fingerprintHash(type.getTypeCode(), type.getTypeName(),
+                type.getCategory(), type.getStatus(), type.getIsDeleted(), type.getUpdatedAt());
+    }
+
     @Override
     public ProposalExecutionResult execute(AiOperationProposal proposal, ProposalRequest request,
                                            ProposalExecutionContext context) {

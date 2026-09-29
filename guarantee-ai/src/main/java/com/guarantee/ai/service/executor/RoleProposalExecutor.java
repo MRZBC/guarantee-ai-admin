@@ -36,6 +36,32 @@ public class RoleProposalExecutor implements ProposalExecutor {
         return "ROLE";
     }
 
+    /**
+     * 角色目标指纹（REQ-CFG-09）：名称/说明 + {@code updated_at} + {@code isDeleted}。
+     *
+     * <p>不把"权限集合"纳入指纹：授权走 {@code ASSIGN_PERMISSIONS} 独立动作，
+     * 其并发修改由角色服务自身的事务与校验负责；把权限集合算进来会让"另一个人给别的角色
+     * 改权限"这类无关操作误伤当前提案。角色行本身的改名/停用/删除会被
+     * {@code updated_at} 捕捉到。</p>
+     */
+    @Override
+    public String fingerprint(AiOperationProposal proposal, ProposalRequest request) {
+        if (proposal.getTargetId() == null) {
+            return null; // CREATE：无目标可比对
+        }
+        SysRole role;
+        try {
+            role = roleService.findEntityById(proposal.getTargetId());
+        } catch (RuntimeException ex) {
+            return MISSING_FINGERPRINT;
+        }
+        if (role == null) {
+            return MISSING_FINGERPRINT;
+        }
+        return ProposalExecutor.fingerprintHash(role.getRoleCode(), role.getRoleName(),
+                role.getDescription(), role.getStatus(), role.getIsDeleted(), role.getUpdatedAt());
+    }
+
     @Override
     public ProposalExecutionResult execute(AiOperationProposal proposal, ProposalRequest request,
                                            ProposalExecutionContext context) {
