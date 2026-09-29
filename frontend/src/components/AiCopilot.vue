@@ -11,6 +11,7 @@ import {
   streamChat
 } from '@/api/ai'
 import ProposalCard from '@/components/ProposalCard.vue'
+import { useAppStore } from '@/stores/app'
 import type {
   ChatMessage,
   ChatRole,
@@ -35,7 +36,21 @@ interface DisplayMessage extends ChatMessage {
 /** 工具调用按 messageId 关联到助手消息上 */
 type ToolCallMap = Record<number, ToolCallItem[]>
 
+/** 侧边栏宽度是"展开态抽屉要避让多少"的唯一来源，因此这里读应用级状态而不是自己算 */
+const appStore = useAppStore()
+
 const HISTORY_KEY = 'guarantee_admin_ai_conv_id'
+
+/** 面板常规宽度（即 el-drawer 的 size）：从右侧滑出的侧栏宽度。 */
+const DRAWER_WIDTH = '600px'
+
+/**
+ * 「展开占满页面」偏好的 localStorage 键。
+ *
+ * <p>与侧边栏折叠状态（{@code guarantee_admin_sidebar_collapsed}）同一处理方式：
+ * 用户按过一次"展开"，说明他就想这么用；每次打开都退回 600px 会变成反复调整。</p>
+ */
+const EXPANDED_KEY = 'guarantee_admin_ai_expanded'
 
 const visible = ref(false)
 const historyVisible = ref(false)
@@ -47,6 +62,32 @@ const conversationTitle = ref('新会话')
 const messages = ref<DisplayMessage[]>([])
 const toolCalls = ref<ToolCallMap>({})
 const conversations = ref<ConversationItem[]>([])
+
+/**
+ * 是否**展开占满「除左侧导航栏以外」的整页**。
+ *
+ * <p>数据密集型问答（多维度对比、Markdown 表格）在 600px 侧栏里要横向滚动才看得全，
+ * 因此提供一个"展开"开关：展开时抽屉宽度 = 100% − 侧边栏宽度，左边缘正好贴住导航栏，
+ * 导航栏仍可点击（抽屉本身是 {@code :modal="false"} + {@code modal-penetrable}）。</p>
+ */
+const expanded = ref(localStorage.getItem(EXPANDED_KEY) === '1')
+
+watch(expanded, (value) => {
+  localStorage.setItem(EXPANDED_KEY, value ? '1' : '0')
+})
+
+/**
+ * 抽屉宽度。
+ *
+ * <p>用 CSS 变量 {@code --app-sidebar-width / --app-sidebar-collapsed-width}（定义在
+ * styles/main.css 的 :root）而不是写死 220/64：侧边栏折叠或将来改宽度时这里自动跟随，
+ * 不会再出现"抽屉与导航栏差 156px"这种对不齐。</p>
+ */
+const drawerSize = computed(() =>
+  expanded.value
+    ? `calc(100% - ${appStore.sidebarCollapsed ? 'var(--app-sidebar-collapsed-width)' : 'var(--app-sidebar-width)'})`
+    : DRAWER_WIDTH
+)
 
 /**
  * 变更提案卡片（二期）。
@@ -262,6 +303,16 @@ function close(): void {
 function toggle(): void {
   if (visible.value) close()
   else open()
+}
+
+/**
+ * 展开 / 还原助手面板。
+ *
+ * <p>展开后可视区域一下子变高变宽，用户视线通常停在最后一条回答上，因此补一次滚到底。</p>
+ */
+function toggleExpanded(): void {
+  expanded.value = !expanded.value
+  void scrollToBottom()
 }
 
 /* ---------------- 会话管理 ---------------- */
@@ -585,7 +636,7 @@ onBeforeUnmount(() => {
     <el-drawer
       v-model="visible"
       :with-header="false"
-      size="600px"
+      :size="drawerSize"
       direction="rtl"
       :modal="false"
       modal-penetrable
@@ -613,6 +664,22 @@ onBeforeUnmount(() => {
               <el-icon><Clock /></el-icon>
               历史会话
             </el-button>
+            <!--
+              展开占满「除左侧导航栏以外」的整页。用图标按钮而不是文字按钮：
+              标题栏已经有"新建会话 / 历史会话"两个文字按钮，再加一个会把标题挤换行。
+            -->
+            <el-tooltip :content="expanded ? '还原为侧栏' : '展开占满页面'" placement="bottom">
+              <el-button
+                class="ai-copilot__expand"
+                size="small"
+                text
+                @click="toggleExpanded"
+              >
+                <el-icon>
+                  <component :is="expanded ? 'ScaleToOriginal' : 'FullScreen'" />
+                </el-icon>
+              </el-button>
+            </el-tooltip>
             <el-button size="small" text @click="close">
               <el-icon><Close /></el-icon>
             </el-button>
