@@ -322,6 +322,8 @@ CREATE TABLE IF NOT EXISTS ai_conversation (
     user_id         BIGINT       NOT NULL,
     title           VARCHAR(128) NOT NULL COMMENT '会话标题',
     model           VARCHAR(64)  NOT NULL COMMENT '模型名',
+    prompt_version  INT          NULL COMMENT '本轮回答所用的提示词版本号（ai_prompt_version.version_no；无版本机制时为 NULL）',
+    config_version  BIGINT       NULL COMMENT '本轮生效的 AI 配置快照版本（ai_config_item.version 最大值；未配置时为 NULL/0）',
     status          VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE/ARCHIVED',
     message_count   INT          NOT NULL DEFAULT 0,
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -340,7 +342,7 @@ CREATE TABLE IF NOT EXISTS ai_message (
     conversation_id BIGINT      NOT NULL,
     role            VARCHAR(16) NOT NULL COMMENT 'USER/ASSISTANT/SYSTEM/TOOL',
     content         MEDIUMTEXT  NOT NULL,
-    token_count     INT         NOT NULL DEFAULT 0,
+    token_count     INT         NOT NULL DEFAULT 0 COMMENT '字数估算，非模型用量；真实 usage 见 ai_turn_metric',
     created_at      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
     deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
@@ -352,15 +354,17 @@ CREATE TABLE IF NOT EXISTS ai_message (
 
 CREATE TABLE IF NOT EXISTS ai_tool_call (
     id              BIGINT       NOT NULL AUTO_INCREMENT,
-    conversation_id BIGINT       NOT NULL,
+    conversation_id BIGINT       NULL COMMENT '关联会话；MCP/评测调用没有会话时为 NULL（V10）',
     message_id      BIGINT       NULL COMMENT '关联的助手消息',
     tool_name       VARCHAR(64)  NOT NULL COMMENT 'Tool 名称',
     tool_type       VARCHAR(8)   NOT NULL DEFAULT 'READ' COMMENT 'READ/WRITE',
+    source          VARCHAR(8)   NOT NULL DEFAULT 'CHAT' COMMENT '调用来源 CHAT/MCP/EVAL（T5-01）',
     arguments       TEXT         NULL COMMENT '入参 JSON',
     result          MEDIUMTEXT   NULL COMMENT '执行结果 JSON',
     status          VARCHAR(16)  NOT NULL COMMENT 'SUCCESS/FAILED',
     duration_ms     BIGINT       NOT NULL DEFAULT 0 COMMENT '执行耗时(ms)',
     error_message   VARCHAR(512) NULL,
+    trace_id        VARCHAR(64)  NULL COMMENT '本次调用的 traceId（与审计、成本日志同源，T5-01）',
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     is_deleted  TINYINT     NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
     deleted_at  DATETIME(6) NULL     DEFAULT NULL COMMENT '删除时间（微秒精度，唯一键分量）',
@@ -368,7 +372,8 @@ CREATE TABLE IF NOT EXISTS ai_tool_call (
     PRIMARY KEY (id),
     KEY idx_ai_tool_call_deleted (is_deleted),
     KEY idx_ai_tool_conv (conversation_id, id),
-    KEY idx_ai_tool_name (tool_name)
+    KEY idx_ai_tool_name (tool_name),
+    KEY idx_ai_tool_call_source (source)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'AI Tool Call 记录';
 
 CREATE TABLE IF NOT EXISTS ai_audit_log (
@@ -650,5 +655,68 @@ CREATE TABLE IF NOT EXISTS ai_prompt_version (
     KEY idx_ai_prompt_version_status (status),
     UNIQUE KEY uk_ai_prompt_version_no (version_no, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000')))
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'AI 提示词版本';
+
+-- ---------------------------------------------------------------------
+-- 五期：单轮 AI 指标（一次问答一行，只追加）
+--
+-- 与 db/migration/V9__ai_observability.sql 保持**同一份定义**（存量库走 V9，全新库走本文件）。
+--   · 只追加的流水表：**不带**逻辑删除三列，也不进 LogicalDeleteTables.MANAGED
+--     （与 ai_knowledge_import_log 同策略）；
+--   · input_tokens/output_tokens 是模型**真实 usage**；ai_message.token_count 只是字数估算；
+--   · outcome 是对 REQ §5.3.2 的补列（SUCCESS/ERROR/CAPPED），用于算失败率（AC-MCP-09）；
+--   · 只放可枚举维度与数值，不放问题正文 / 用户输入 / 参数值（红线 §2.3-5）。
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_turn_metric (
+    id             BIGINT      NOT NULL AUTO_INCREMENT,
+    conversation_id BIGINT     NOT NULL COMMENT '会话 id',
+    message_id     BIGINT      NULL     COMMENT '对应的助手消息 id（失败/触顶时可能为空）',
+    user_id        BIGINT      NOT NULL COMMENT '归属用户（MCP 场景为服务账号）',
+    model          VARCHAR(64) NULL     COMMENT '模型名',
+    prompt_version VARCHAR(32) NULL     COMMENT '提示词版本（第四阶段提供）',
+    rounds         INT         NOT NULL DEFAULT 0 COMMENT '工具轮次',
+    tool_calls     INT         NOT NULL DEFAULT 0 COMMENT '工具调用次数',
+    tool_cost_ms   BIGINT      NOT NULL DEFAULT 0 COMMENT '工具耗时合计(ms)',
+    total_cost_ms  BIGINT      NOT NULL DEFAULT 0 COMMENT '端到端耗时(ms)，与 AI_TURN_COST 日志同源',
+    input_tokens   INT         NOT NULL DEFAULT 0 COMMENT '模型输入 token（真实 usage，非字数估算）',
+    output_tokens  INT         NOT NULL DEFAULT 0 COMMENT '模型输出 token（真实 usage）',
+    capped         TINYINT     NOT NULL DEFAULT 0 COMMENT '是否触顶 0否 1是',
+    cap_reason     VARCHAR(32) NULL     COMMENT '触顶原因 SOFT_TIMEOUT/MAX_ROUNDS/MAX_CALLS_PER_ROUND/FRAMEWORK_LIMIT/UNKNOWN',
+    source         VARCHAR(8)  NOT NULL DEFAULT 'CHAT' COMMENT '来源 CHAT/MCP/EVAL',
+    outcome        VARCHAR(16) NOT NULL DEFAULT 'SUCCESS' COMMENT '结果 SUCCESS/ERROR/CAPPED（失败率口径）',
+    trace_id       VARCHAR(64) NULL     COMMENT '与审计、工具调用、日志串联的 traceId',
+    created_at     DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_ai_turn_metric_created (created_at),
+    KEY idx_ai_turn_metric_user (user_id, created_at),
+    KEY idx_ai_turn_metric_model (model, created_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '单轮 AI 指标（一次问答一行，只追加）';
+
+-- ---------------------------------------------------------------------
+-- 五期：MCP 机器凭据（与 db/migration/V10__ai_mcp.sql 保持同一份定义）
+--
+-- 明文（mcp_<Base64URL(32B)>）**只在签发时返回一次**；库里只有 SHA-256 哈希与展示前缀。
+-- 失效两套并存：revoked_at（显式撤销，即时生效）与逻辑删除三列（行级下架）。
+-- ⚠️ 本表带逻辑删除三列，必须登记进 LogicalDeleteTables.MANAGED（已登记）。
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_mcp_token (
+    id                 BIGINT       NOT NULL AUTO_INCREMENT,
+    service_account_id BIGINT       NOT NULL COMMENT '服务账号 sys_user.id（account_type=SERVICE）',
+    token_prefix       VARCHAR(16)  NOT NULL COMMENT '明文前缀（mcp_ + 6 字符），仅展示用，不是凭据',
+    token_hash         VARCHAR(64)  NOT NULL COMMENT 'SHA-256(明文) 小写十六进制；明文永不入库',
+    permissions        VARCHAR(512) NOT NULL COMMENT '权限范围，逗号分隔（建议含 ai:mcp:read）',
+    expires_at         DATETIME     NULL     COMMENT '有效期；NULL=长期有效（仍可随时撤销）',
+    last_used_at       DATETIME     NULL     COMMENT '最后成功使用时间（不延长有效期）',
+    revoked_at         DATETIME(6)  NULL     COMMENT '撤销时间（微秒）；非空即不可用',
+    revoked_by         VARCHAR(64)  NULL     COMMENT '撤销人：应用写 sys_user.id',
+    created_by         VARCHAR(64)  NULL     COMMENT '签发人：应用写 sys_user.id',
+    created_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_deleted         TINYINT      NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at         DATETIME(6)  NULL     COMMENT '删除时间（微秒精度，唯一键分量）；禁止默认值',
+    deleted_by         VARCHAR(64)  NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
+    PRIMARY KEY (id),
+    KEY idx_ai_mcp_token_deleted (is_deleted),
+    UNIQUE KEY uk_ai_mcp_token_hash (token_hash, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
+    KEY idx_ai_mcp_token_account (service_account_id, revoked_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'MCP 机器凭据（明文不入库）';
 
 

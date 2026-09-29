@@ -4,6 +4,7 @@ import com.guarantee.ai.entity.AiAuditLog;
 import com.guarantee.ai.entity.AiToolCall;
 import com.guarantee.ai.mapper.AiAuditLogMapper;
 import com.guarantee.ai.mapper.AiToolCallMapper;
+import com.guarantee.ai.metrics.AiChatMetrics;
 import com.guarantee.common.security.SensitiveFieldMasker;
 import com.guarantee.common.trace.TraceContext;
 import org.slf4j.Logger;
@@ -31,12 +32,29 @@ public class AiToolCallRecorder {
     private final AiToolCallMapper toolCallMapper;
     private final AiAuditLogMapper auditLogMapper;
     private final ObjectMapper objectMapper;
+    private final AiChatMetrics metrics;
 
     public AiToolCallRecorder(AiToolCallMapper toolCallMapper, AiAuditLogMapper auditLogMapper,
-                              ObjectMapper objectMapper) {
+                              ObjectMapper objectMapper, AiChatMetrics metrics) {
         this.toolCallMapper = toolCallMapper;
         this.auditLogMapper = auditLogMapper;
         this.objectMapper = objectMapper;
+        this.metrics = metrics;
+    }
+
+    /**
+     * 本次调用的来源（CHAT / MCP / EVAL）。
+     *
+     * <p>缺省按 CHAT：写入口（助手）不显式写也不会把助手调用标成别的来源；
+     * MCP 网关与评测运行器会显式写 {@code AiToolContextKeys.CALL_SOURCE}。</p>
+     */
+    static String callSource(ToolContext toolContext) {
+        Object value = toolContext == null || toolContext.getContext() == null
+                ? null : toolContext.getContext().get(AiToolContextKeys.CALL_SOURCE);
+        if (value instanceof String text && !text.isBlank()) {
+            return text.trim().toUpperCase(java.util.Locale.ROOT);
+        }
+        return "CHAT";
     }
 
     /**
@@ -61,6 +79,9 @@ public class AiToolCallRecorder {
         Long conversationId = longValue(toolContext, AiToolContextKeys.CONVERSATION_ID);
         Long userId = longValue(toolContext, AiToolContextKeys.USER_ID);
         ToolCallEventSink sink = sink(toolContext);
+        String source = callSource(toolContext);
+        // traceId 与审计、成本日志同源：优先请求线程写进 ToolContext 的快照，回落 MDC
+        String traceId = resolveTraceId(toolContext);
 
         // 采集本轮工具事实（口径 + 真实提案编号）：这是收尾时服务端生成口径、校验编号的唯一来源。
         // 必须用**脱敏前**的原始返回值，避免掩码把 dataSource 里的内容改掉。
@@ -81,6 +102,9 @@ public class AiToolCallRecorder {
             entity.setStatus(success ? "SUCCESS" : "FAILED");
             entity.setDurationMs(durationMs);
             entity.setErrorMessage(truncate(mask(errorMessage), 500));
+            // 来源与 traceId：AC-MCP-05（可识别是谁发起的）/ AC-MCP-10（三者 trace_id 一致）
+            entity.setSource(source);
+            entity.setTraceId(traceId);
             toolCallMapper.insert(entity);
             id = entity.getId();
 
@@ -90,11 +114,14 @@ public class AiToolCallRecorder {
             audit.setAction("TOOL_CALL");
             audit.setDetail("tool=" + toolName + " type=" + kind + " status="
                     + entity.getStatus() + " durationMs=" + durationMs);
-            audit.setTraceId(resolveTraceId(toolContext));
+            audit.setTraceId(traceId);
             auditLogMapper.insert(audit);
         } catch (Exception ex) {
             log.error("记录 Tool Call 失败 tool={} conversationId={}", toolName, conversationId, ex);
         }
+
+        // 指标与落库解耦：即使上面落库失败，调用计数与耗时的观测也不该断（REQ-MCP-08）
+        metrics.toolCall(toolName, success ? "SUCCESS" : "FAILED", source, durationMs);
 
         if (sink != null) {
             sink.emit(new ToolCallEvent(id, toolName, kind.name(), truncate(safeArguments),

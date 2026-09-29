@@ -1,14 +1,15 @@
 -- =====================================================================
---  观测底座迁移脚本 V9：ai_turn_metric + ai_tool_call.source
+--  观测底座迁移脚本 V9：ai_turn_metric + ai_tool_call(source, trace_id)
 --
 --  依据：docs/REQ-第五阶段-MCP评测与可观测.md §5.3.1/§5.3.2/§5.3.3、§6.1
---        （REQ-MCP-08/09/10）、AC-MCP-07~10
+--        （REQ-MCP-08/09/10）、AC-MCP-05/07~10
 --
 --  背景：
 --    轮次 / 调用数 / token / 耗时 / 是否触顶此前**只写结构化日志**（AI_TURN_COST），
 --    表里查不到；而 ai_message.token_count 是**字数估算**不是模型用量。
 --    本脚本建 ai_turn_metric（一次问答一行，与日志字段一一对应），并给 ai_tool_call
---    加来源列，使"助手调的 / 外部 Agent 调的 / 评测跑的"可区分（AC-MCP-05）。
+--    加**来源**与 **traceId** 两列：前者使"助手调的 / 外部 Agent 调的 / 评测跑的"可区分，
+--    后者让"这次调用能直接按 traceId 串回成本日志与审计"（AC-MCP-05/10 不再依赖联表约定）。
 --
 --  口径要点：
 --    · 一次问答 = 一行，**含失败与触顶**（outcome = SUCCESS/ERROR/CAPPED）；
@@ -44,6 +45,7 @@
 --    mysql -h 127.0.0.1 -P 3307 -u guarantee -p guarantee_ai_admin < V9__ai_observability.sql
 --
 --  回滚（一般不需要；保留供演练）：
+--    ALTER TABLE ai_tool_call DROP COLUMN trace_id;
 --    ALTER TABLE ai_tool_call DROP INDEX idx_ai_tool_call_source;
 --    ALTER TABLE ai_tool_call DROP COLUMN source;
 --    DROP TABLE ai_turn_metric;
@@ -102,7 +104,25 @@ SET @ddl := IF(@n_idx_ai_tool_call_source = 1, 'DO 0',
   'ALTER TABLE ai_tool_call ADD INDEX idx_ai_tool_call_source (source)');
 PREPARE stmt_tool_call_source_idx FROM @ddl; EXECUTE stmt_tool_call_source_idx; DEALLOCATE PREPARE stmt_tool_call_source_idx;
 
--- 复核（三项都应为 1）
+-- ---------------------------------------------------------------------
+-- 4) ai_tool_call.trace_id：让"每次工具调用可追溯到 traceId"直接成立
+--
+--    为什么不能只靠 ai_audit_log 间接追溯：那样"可追溯"会变成"需要联表 + 依赖同批写入"
+--    的隐含约定，而 AC-MCP-05 与 TEST-MCP-03（成本日志 / ai_tool_call / 审计三者 trace_id
+--    一致）要的是一条记录自身就能串起来。trace_id 与 ai_audit_log.trace_id、成本日志同源
+--    （ToolContext 快照优先，回落 MDC）。
+--
+--    存量数据为 NULL：历史调用没有这个信息，不编造。
+-- ---------------------------------------------------------------------
+SET @n_ai_tool_call_trace_id := (SELECT COUNT(*) FROM information_schema.COLUMNS
+                                   WHERE TABLE_SCHEMA = DATABASE()
+                                     AND TABLE_NAME = 'ai_tool_call'
+                                     AND COLUMN_NAME = 'trace_id');
+SET @ddl := IF(@n_ai_tool_call_trace_id = 1, 'DO 0',
+  'ALTER TABLE ai_tool_call ADD COLUMN trace_id VARCHAR(64) NULL COMMENT ''本次调用的 traceId（与审计、成本日志同源）'' AFTER error_message');
+PREPARE stmt_tool_call_trace FROM @ddl; EXECUTE stmt_tool_call_trace; DEALLOCATE PREPARE stmt_tool_call_trace;
+
+-- 复核（四项都应为 1）
 SELECT COUNT(*) AS ai_turn_metric_present
   FROM information_schema.TABLES
  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_turn_metric';
@@ -114,3 +134,7 @@ SELECT COUNT(*) AS ai_tool_call_source_present
 SELECT COUNT(*) AS idx_ai_tool_call_source_present
   FROM information_schema.STATISTICS
  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_tool_call' AND INDEX_NAME = 'idx_ai_tool_call_source';
+
+SELECT COUNT(*) AS ai_tool_call_trace_id_present
+  FROM information_schema.COLUMNS
+ WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_tool_call' AND COLUMN_NAME = 'trace_id';

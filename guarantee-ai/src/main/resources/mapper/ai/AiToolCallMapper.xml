@@ -4,17 +4,17 @@
 <mapper namespace="com.guarantee.ai.mapper.AiToolCallMapper">
 
     <sql id="cols">
-        id, conversation_id, message_id, tool_name, tool_type, arguments, result,
-        status, duration_ms, error_message, created_at
+        id, conversation_id, message_id, tool_name, tool_type, source, arguments, result,
+        status, duration_ms, error_message, trace_id, created_at
     </sql>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO ai_tool_call
-            (conversation_id, message_id, tool_name, tool_type, arguments, result,
-             status, duration_ms, error_message)
+            (conversation_id, message_id, tool_name, tool_type, source, arguments, result,
+             status, duration_ms, error_message, trace_id)
         VALUES
-            (#{conversationId}, #{messageId}, #{toolName}, #{toolType}, #{arguments}, #{result},
-             #{status}, #{durationMs}, #{errorMessage})
+            (#{conversationId}, #{messageId}, #{toolName}, #{toolType}, #{source}, #{arguments}, #{result},
+             #{status}, #{durationMs}, #{errorMessage}, #{traceId})
     </insert>
 
     <select id="selectByConversationId" resultType="com.guarantee.ai.entity.AiToolCall">

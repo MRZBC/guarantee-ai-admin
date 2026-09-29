@@ -20,6 +20,14 @@ public class AiToolCall {
     private String status;
     private Long durationMs;
     private String errorMessage;
+    /**
+     * 调用来源：CHAT（页面/助手）/ MCP（外部 Agent）/ EVAL（评测）。
+     *
+     * <p>没有来源列就无法区分"助手调的"与"外部 Agent 调的"（AC-MCP-05）。</p>
+     */
+    private String source;
+    /** 本次调用的 traceId：与审计、成本日志同源，用来把三者串起来（AC-MCP-10）。 */
+    private String traceId;
     private LocalDateTime createdAt;
     /** 逻辑删除 0正常 1已删除（LD-01：所有业务查询默认只看 0） */
     private Integer isDeleted;

@@ -170,6 +170,37 @@ guarantee:
       embedding:
         enabled: false
 
+    # ---------------------------------------------------------------------
+    # 观测底座（T5-01 / REQ-MCP-08/09）
+    #   metrics-enabled      指标采集开关：置 false 后不再记新数据（故障应急用；
+    #                        /actuator/prometheus 仍可抓取，只是曲线停更）。
+    #   turn-metric-persist  单轮指标落库开关：一次问答一行（含失败与触顶）。
+    #                        写失败**只告警不影响回答**（与审计相反）。
+    #   成本口径（Q-MCP-05）：只报 token 与耗时，**没有货币成本**；
+    #                        要报金额必须先有第四阶段的单价表（未排期）。
+    #   标签纪律（AC-MCP-08）：只允许枚举维度（outcome/model/tool/status/source/direction/
+    #                        domain/hit/result），**禁止** conversationId / userId / 问题文本。
+    # ---------------------------------------------------------------------
+    observability:
+      metrics-enabled: true
+      turn-metric-persist: true
+
+    # ---------------------------------------------------------------------
+    # 业务 MCP（T5-03 / REQ-MCP-05、§6.3）
+    #   enabled      **总开关，默认 false**：未开启时后端不注册 MCP 接口（fail-closed），
+    #                网关也会拒绝启动；平台自身不受影响（AC-MCP-06）。
+    #   gateway-url  网关回连平台的地址（仅用于运维核对/日志，不参与鉴权）。
+    #   qps-limit    每 token 的 QPS 上限；超限返回**可读错误**（不是 500）。
+    #   daily-quota  每 token 每日调用上限。
+    #   注意：机器凭据走 MCP Token（ai_mcp_token，明文不入库），**不走用户名密码**，
+    #        服务账号也不适用"首登强制改密"闸门。
+    # ---------------------------------------------------------------------
+    mcp:
+      enabled: false
+      gateway-url: ""
+      qps-limit: 5
+      daily-quota: 10000
+
   # ---------------------------------------------------------------------
   # 逻辑删除（设计文档 §5.2 / 任务书 §4.1 的"开关"）
   #   true （默认）：LogicalDeleteInnerInterceptor 为受管表注入 is_deleted = 0
@@ -183,7 +214,13 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        # T5-01（REQ-MCP-08）：prometheus 新暴露；health/info 行为不变（AC-MCP-13）。
+        # metrics 一并暴露，便于用 /actuator/metrics 核对标签基数（AC-MCP-08）。
+        include: health,info,metrics,prometheus
+  metrics:
+    tags:
+      # 全局标签只放应用名：**不放** conversationId / userId / 问题文本（AC-MCP-08 基数控制）
+      application: ${spring.application.name:guarantee-ai-admin}
 
 logging:
   level:

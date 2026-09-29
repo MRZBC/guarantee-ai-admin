@@ -33,6 +33,15 @@ public final class AiToolContextKeys {
     /** 当前用户启用角色编码（{@code List<String>}）。 */
     public static final String ROLES = "aiRoles";
 
+    /**
+     * 本次调用的来源（String）：{@code CHAT} / {@code MCP} / {@code EVAL}。
+     *
+     * <p>由请求入口写入（助手写 CHAT，MCP 网关写 MCP，评测写 EVAL），缺省按 CHAT 处理。
+     * 它决定 {@code ai_tool_call.source} 与 {@code ai.tool.calls} 指标标签，
+     * 是"这次调用是谁发起的"唯一可信来源（AC-MCP-05）。</p>
+     */
+    public static final String CALL_SOURCE = "aiCallSource";
+
     /** 本次请求的 TraceId（String）。 */
     public static final String TRACE_ID = "aiTraceId";
 
