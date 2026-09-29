@@ -82,7 +82,7 @@
 2. 运行期读取：内存快照 + 版本号，改配置**不重启**生效；
 3. 提示词版本化：草稿 / 发布 / 回滚 / diff，回答与审计可绑定 `promptVersion`；
 4. 能力开关：工具组启停、写能力总开关、预算参数（轮次 / 单轮调用 / 软超时 / 结果上限）；
-5. 配置变更的提案与审计：新增 `AiConfigProposalExecutor` + `CONFIG_UPDATE` 审计动作 + 危险项二次确认；
+5. 配置变更的审计与确认：**页面渠道**（表单 + 二次确认）直接落库并 100% 写 `CONFIG_UPDATE` 审计（**v1.1 更正**：按 Q-CFG-06/07 拍板，第一版**不建** `AiConfigProposalExecutor`、助手无配置能力，见 §2.3-3 与 §5.1.4）；
 6. 权限与菜单：新增权限码与"系统管理 → AI 配置"页（模型 / 提示词 / 能力开关 / 变更历史）；
 7. 启动期校验与故障降级（配置非法 → 用默认值 + 显式告警，绝不静默）；
 8. 收口项：`target_fingerprint` 执行期比对闭环；审计归档执行体（脚本或定时任务，二选一，见 Q-CFG-08）。
@@ -202,8 +202,9 @@
 #### 5.1.5 REQ-CFG-05 配置审计（P0）
 
 - 复用 `ai_operation_audit`，新增动作 `CONFIG_UPDATE`（`source=AI|WEB`、`target_type=AI_CONFIG`、`target_name=配置键或提示词版本号`、`before_value`/`after_value`/`changed_fields`）；
-  **更正（v1.1）**：`ai_operation_audit.target_id` 是 `BIGINT`，而配置键是字符串、提示词版本号也只是逻辑编号，
-  因此**不使用 `target_id`**：配置类用 `target_name=配置键` + `target_id=NULL`；提示词版本类用 `target_name=版本号`。
+  **更正（v1.1）**：`ai_operation_audit.target_id` 是 `BIGINT`，而配置键是字符串，
+  因此**配置类不使用 `target_id`**（`target_id=NULL` + `target_name=配置键`）；
+  **提示词版本类以实现为准**：版本号本身是整数，写 `target_id=versionNo` + `target_name=prompt.v{N}`（信息更全，且落在 BIGINT 语义内）。
   该目标类型与既有口径一致地归入 **ADMIN-only**（非管理员显式 403，而不是返回空列表）。
 - 密钥类配置项：只记录"是否发生变化"（沿用 `SensitiveFieldMasker` 的 `<changed>` 口径），**绝不记录值**；
 - 提示词变更：审计记录**版本号 + 内容哈希 + diff 摘要**（正文可能超 8KB，按既有截断规则处理）；
@@ -287,9 +288,9 @@
 | `model.base-url` | STRING | `https://api.deepseek.com` | — | 是 | 改错即全站不可用 |
 | `model.name` | STRING | `deepseek-chat` | — | 是 | 落库到 `ai_conversation.model` |
 | `model.temperature` | DECIMAL | `0.2` | 0 ~ 2 | 是 | 现状是 yml 字面量 |
-| `model.max-tokens` | INT | `2048` | 256 ~ 8192 | 是 | 现状未配置（框架默认） |
-| `model.timeout` | INT(ms) | 由 starter 默认 | 1s ~ 5min | 是 | 现状未配置 |
-| `model.max-retries` | INT | 由 starter 默认 | 0 ~ 5 | 否 | — |
+| `model.max-tokens` | INT | `2048` | 256 ~ 8192 | 是 | **本期未接线（改了不生效，页面已标注/置灰）**：默认 2048 会把"改造前不发送 max_tokens"变成"发送 2048"，属行为变化，故本期只展示 |
+| `model.timeout` | INT(ms) | 由 starter 默认 | 1s ~ 5min | 是 | **本期未接线**：属 `OpenAiChatOptions` 专有，通用 `ToolCallingChatOptions.Builder` 无 setter；只有显式设置时才生效 |
+| `model.max-retries` | INT | 由 starter 默认 | 0 ~ 5 | 否 | **本期未接线**（同上） |
 | `model.api-key-ref` | STRING | `DEEPSEEK_API_KEY` | — | 是 | **只存引用名，不存值** |
 | `tools.order.enabled` | BOOLEAN | `true` | — | 是 | 关掉后订单类工具全不注册 |
 | `tools.analysis.enabled` | BOOLEAN | `true` | — | 否 | — |
@@ -304,6 +305,11 @@
 | `budget.tool-result-bytes` | INT | `16384` | 4KB ~ 64KB | 否 | 现状 16 KB |
 | `knowledge.enabled` | BOOLEAN | `true` | — | 否 | 第三阶段开关 |
 | `prompt.active-version` | INT | **NULL**（未设置） | — | 是 | 指向 `ai_prompt_version`；**v1.1 更正**：NULL 时回落 jar 内 classpath 提示词，保证冷启动可用（不是"由真源首次导入"） |
+
+> **开发库现状备注（v1.1 登记，D7）**：`ai_config_item` 有 2 行历史遗留 `config_value=NULL`
+> （`model.name` / `tools.order.enabled`，version 160/161，来自早期的写入用例）。**NULL = 未显式配置**，
+> 运行期回落 catalog 默认值（启动日志"显式值 0 项"、接口 `overridden=false` 已实测），**无行为影响**；
+> 本期不做清理（避免手改共享开发库），留待例行数据整理。
 
 ### 6.3 接口清单
 
@@ -366,11 +372,11 @@
 | AC-CFG-03 | 提示词可回滚：回滚到上一版后，下一个请求使用旧版本内容，且产生一条审计 |
 | AC-CFG-04 | 关闭"写能力总开关"后，任何账号（含 ADMIN）的助手都不再注册 `propose*` 工具；重开后恢复；权限码本身未被修改 |
 | AC-CFG-05 | 每次配置变更可在审计页查到：谁、何时、哪一项、before → after；密钥类只显示"是否变化" |
-| AC-CFG-06 | 页面与助手的配置能力对齐：页面上能改的配置项，助手也能（经确认卡）；反之亦然，无单边能力 |
+| AC-CFG-06 | **能力对齐（v1.1 按 Q-CFG-07 收窄）**：页面是配置的**唯一写入渠道**；助手**没有**配置能力（不注册任何配置写工具、不存在 `ConfigProposalExecutor`）——即"AI ⊆ 页面"，满足能力对齐原则的下界；**不要求**"助手也能改配置" |
 | AC-CFG-07 | 非法配置（越界 / 类型错误 / 未知键）被拒绝并给出可读错误；DB 中已有非法值时启动回落默认 + ERROR 告警，助手仍可用 |
 | AC-CFG-08 | 配置缺省（空表）时，行为与改造前逐项一致（`temperature=0.2`、轮次 4、单轮 12、软超时 60s、历史 20） |
 | AC-CFG-09 | 每轮对话可回溯到所使用的 `promptVersion` 与配置版本 |
-| AC-CFG-10 | 提示词发布门禁：确定性黄金问题集全绿才允许发布；真机集缺失时页面明确标注"未跑" |
+| AC-CFG-10 | 提示词发布门禁：**确定性黄金问题集全绿才允许发布**（发布时强制重跑、不拿缓存放行）；**真机集缺失时页面明确标注"未跑"**（该标注是**信息性**的，不构成发布硬阻断——硬阻断以确定性集为准） |
 | AC-CFG-11 | （收口项）确认执行前做指纹比对：目标被改动则拒绝执行并置 `INVALIDATED`，给出可读原因 |
 | AC-CFG-12 | （收口项）审计归档有可执行体（定时任务或脚本），或在本文件与 `TASKS.md` 中显式登记为运维手工项并给出 SOP |
 
@@ -506,3 +512,32 @@
 | 编号 | 问题 | 证据 | 影响与建议 |
 |---|---|---|---|
 | RK-CFG-14 | `ai_operation_audit` 的**分区名与真实 `TO_DAYS` 边界存在一年偏差**：DDL 里 `p202601 VALUES LESS THAN (739648)`，而 `FROM_DAYS(739648)` = `2025-02-01`；`p202701`(=740013) 才是 `2026-02-01`。当前 1853 行数据全部落在 `p202709`（真实上界 `2026-10-01`） | `SELECT FROM_DAYS(739648), FROM_DAYS(740013);` → 2025-02-01 / 2026-02-01；`SELECT PARTITION_NAME, FROM_DAYS(PARTITION_DESCRIPTION) FROM information_schema.PARTITIONS …` | 不影响写入与查询（分区仍然生效），但"在线 24 个月"的实际窗口比命名所示**早一年**，且**按分区名归档会删错数据**。属 `schema.sql`（T4-01 范围），本阶段仅登记；修复需重建分区表并按真实日期重算边界 |
+
+---
+
+## 17. 真机 e2e 发现的缺陷与修复（2026-09-30，收尾补记）
+
+> 目的：把 AC-CFG-10 从"门禁命令可执行"提升到"**发布路径亲口调用过门禁**"。
+> 做法：临时实例（8088）上走 `建草稿 → 发布`，门禁用真实命令。**这次实测抓出两个真缺陷**（不是测试语义问题）。
+
+### 17.1 缺陷 A：分钟级门禁被挂在 HTTP 请求与数据库事务里
+
+| 场景 | 耗时 | 结果 |
+|---|---|---|
+| 同一命令独立执行（`node scripts/ai-golden-questions.mjs --suite=deterministic`） | **13.9 s** | `EvaluationDeterministicIT` 12/12 通过，退出码 0 |
+| 经发布接口同步触发（`POST /api/ai/config/prompts/publish`） | **> 180 s 未返回** | 客户端超时，服务端仍在跑嵌套 maven |
+
+**不确定性如实登记**：该次实测与 verifier 的并发 `mvn verify` 时间重叠（两个 maven 争抢 `guarantee-web/target` 与本地仓库），因此**无法区分**"并发竞争导致变慢"与"应用内同步执行本身更慢"；两种成因都指向同一结论——发布请求不应同步承载分钟级外部命令。
+**附带风险**：`publish` 当时是 `@Transactional` 的，门禁在事务内执行 → 单个发布请求会持有分钟级的数据库连接与行锁。
+
+**修复（已落地）**：
+1. **门禁评估移到事务外**：`publish` / `rollback` 不再标 `@Transactional`，改用 `TransactionTemplate` 只包住"归档旧版 → 发布 → 配置投影 → 审计"这一段短事务。语义不变：**没有新鲜 PASSED 就绝不进入切版本那一步**（NOT_RUN / FAILED 一律拒绝），不是"先切版本后补门禁"。
+2. `GET /api/ai/config/prompts` 不再顺手执行门禁（此前会让页面每次打开都卡到 axios 超时），只返回"最近一次结果 / 尚未检查"；门禁由「刷新门禁」与**发布**执行，发布仍是权威判定点。
+3. 前端给这两个请求单独放宽超时到 180 s（全局 30 s），并显示"正在运行确定性评测（约 15 秒，最长 3 分钟）"，消除"后端已成功、页面报失败"的错位。
+
+**无半成品**：超时后核验该草稿仍为 `DRAFT`、`prompt.active-version` 无投影行、无 `PUBLISHED`；随后人工清理，`ai_prompt_version` 与投影行计数均归 0。
+
+### 17.2 后续优化候选（不进本期 AC）
+
+- **门禁结果按 `versionNo + contentHash + TTL` 复用**：发布要求"该内容在 TTL 内有过 PASSED"，页面用「刷新门禁」产出它。语义仍是"没有新鲜通过就不放行"，但发布请求可立即返回。它引入新的状态与审计口径，收益有限，登记为候选。
+- 真机集（`--suite=live`）仍需 `DEEPSEEK_API_KEY`；本机无 Key，`live` 一律如实"未跑"（REQ-CFG-11 原有约定）。
