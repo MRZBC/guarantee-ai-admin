@@ -162,7 +162,7 @@ public class InsuranceTypeProposalTool extends BaseProposalTool {
             List<ProposalPreview.ChangeItem> changes = List.of(
                     ProposalPreview.ChangeItem.created("typeCode", "险种编码", request.typeCode()),
                     ProposalPreview.ChangeItem.created("typeName", "险种名称", request.typeName()),
-                    ProposalPreview.ChangeItem.created("category", "分类", request.category()),
+                    ProposalPreview.ChangeItem.created("category", "分类", categoryName(request.category())),
                     ProposalPreview.ChangeItem.created("baseRate", "基准费率",
                             percent(request.baseRate())),
                     ProposalPreview.ChangeItem.created("minAmount", "最小保额",
@@ -190,7 +190,8 @@ public class InsuranceTypeProposalTool extends BaseProposalTool {
 
             List<ProposalPreview.ChangeItem> changes = new ArrayList<>();
             addIfChanged(changes, "typeName", "险种名称", existing.getTypeName(), request.typeName());
-            addIfChanged(changes, "category", "分类", existing.getCategory(), request.category());
+            addIfChanged(changes, "category", "分类",
+                    categoryName(existing.getCategory()), categoryName(request.category()));
             // 费率必须同时给出小数与百分比，避免用户看错数量级
             if (request.baseRate() != null
                     && existing.getBaseRate().compareTo(request.baseRate()) != 0) {
@@ -292,5 +293,31 @@ public class InsuranceTypeProposalTool extends BaseProposalTool {
             return "未知";
         }
         return status == 1 ? "启用" : "停用";
+    }
+
+    /**
+     * 险种类别文案：确认卡上必须给中文。
+     *
+     * <p>{@code insurance_type.category} 落库是 code（{@code TENDER/PERFORMANCE/OTHER}），
+     * 而确认卡是**用户拍板的地方**——把 {@code TENDER} 直接摆出来，等于让用户批准一个
+     * 自己看不懂的取值（与同一张卡上的 {@link #statusName(Integer)} 同一口径：
+     * 状态显示「启用/停用」而不是 {@code 1/0}）。前端展示口径见
+     * {@code frontend/src/utils/insuranceDict.ts}。</p>
+     *
+     * <p>只翻译本工具允许写入的三个取值（见工具说明），其余原样回显——
+     * 既不吞掉陌生 code，也避免两个不同 code 映射到同一文案后
+     * {@code addIfChanged} 把一次真实变更报成"无变化"。code 为空返回 {@code null}，
+     * 表示"本次不改该字段"。</p>
+     */
+    private static String categoryName(String category) {
+        if (category == null || category.isBlank()) {
+            return null;
+        }
+        return switch (category.trim().toUpperCase()) {
+            case "TENDER" -> "投标担保";
+            case "PERFORMANCE" -> "履约担保";
+            case "OTHER" -> "其他";
+            default -> category;
+        };
     }
 }

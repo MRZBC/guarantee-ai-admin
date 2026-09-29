@@ -12,7 +12,11 @@ import { useUserStore } from '@/stores/user'
 import { confirmText } from '@/utils/confirmText'
 import { formatAmount, formatDateTime, formatPercent } from '@/utils/format'
 import {
-  dictLabel,
+  CATEGORY_FORM_OPTIONS,
+  INSURANCE_CATEGORY_LABELS,
+  insuranceCategoryLabel
+} from '@/utils/insuranceDict'
+import {
   isEnabled,
   statusLabel,
   statusParam,
@@ -46,20 +50,9 @@ const canDisable = computed(() => userStore.permissions.includes('system:insuran
 /** 无 system:insurance:delete 时不渲染删除入口（后端仍是安全边界，SYS-NF-04） */
 const canDelete = computed(() => userStore.permissions.includes('system:insurance:delete'))
 
-const categoryMap: Record<string, string> = {
-  TENDER: '投标担保',
-  PERFORMANCE: '履约担保',
-  BID: '投标担保',
-  CONTRACT: '合同履约',
-  QUALITY: '质量保证',
-  ADVANCE: '预付款担保',
-  OWNER: '业主支付',
-  OTHER: '其他'
-}
-
 function categoryLabel(row: InsuranceTypeItem): string {
-  if (row.categoryName) return row.categoryName
-  return dictLabel(categoryMap, row.category)
+  // 类别名优先走后端（可配），回退到共享字典；字典在 utils/insuranceDict.ts
+  return insuranceCategoryLabel(row.category, row.categoryName)
 }
 
 type CategoryValue = 'TENDER' | 'PERFORMANCE' | 'QUALITY' | 'ADVANCE' | 'OTHER'
@@ -362,7 +355,7 @@ onMounted(loadData)
             <el-form-item label="险种类别">
               <el-select v-model="query.category" placeholder="全部类别" clearable>
                 <el-option
-                  v-for="(label, value) in categoryMap"
+                  v-for="(label, value) in INSURANCE_CATEGORY_LABELS"
                   :key="value"
                   :label="label"
                   :value="value"
@@ -486,11 +479,13 @@ onMounted(loadData)
         </el-form-item>
         <el-form-item label="险种类别" prop="category">
           <el-select v-model="form.category" placeholder="请选择险种类别" style="width: 100%">
-            <el-option label="投标担保" value="TENDER" />
-            <el-option label="履约担保" value="PERFORMANCE" />
-            <el-option label="质量保证" value="QUALITY" />
-            <el-option label="预付款担保" value="ADVANCE" />
-            <el-option label="其他" value="OTHER" />
+            <!-- 可选项比筛选项窄（历史类别只能筛、不能新建），清单同样来自共享字典 -->
+            <el-option
+              v-for="opt in CATEGORY_FORM_OPTIONS"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="基础费率(%)" prop="baseRate">

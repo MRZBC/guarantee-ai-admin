@@ -7,6 +7,7 @@ import { listInsuranceTypeOptions, listOrgOptions } from '@/api/system'
 import RegionSelect from '@/components/RegionSelect.vue'
 import { MIN_KEYWORD_LEN, useRemoteSearch } from '@/composables/useRemoteSearch'
 import { formatAmount, formatDate, formatPercent } from '@/utils/format'
+import { insuranceCategoryLabel } from '@/utils/insuranceDict'
 import type { EnterpriseItem } from '@/types/enterprise'
 import type { OrderItem, OrderQuery, PerformanceOrderItem } from '@/types/order'
 import type { ProjectItem } from '@/types/project'
@@ -468,7 +469,7 @@ onMounted(() => {
             {{ detail.insuranceTypeName || '--' }}
           </el-descriptions-item>
           <el-descriptions-item label="险种类别">
-            {{ detail.insuranceTypeCategory || '--' }}
+            {{ insuranceCategoryLabel(detail.insuranceTypeCategory) }}
           </el-descriptions-item>
           <el-descriptions-item label="所属机构">{{ detail.orgName || '--' }}</el-descriptions-item>
           <el-descriptions-item label="区域">
@@ -495,14 +496,6 @@ onMounted(() => {
           </el-descriptions-item>
           <el-descriptions-item label="到期日期">
             {{ formatDate(detail.expireDate) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="项目ID">{{ detail.projectId ?? '--' }}</el-descriptions-item>
-          <el-descriptions-item label="企业ID">
-            {{ detail.enterpriseId ?? '--' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="机构ID">{{ detail.orgId ?? '--' }}</el-descriptions-item>
-          <el-descriptions-item label="险种ID">
-            {{ detail.insuranceTypeId ?? '--' }}
           </el-descriptions-item>
         </el-descriptions>
       </div>
