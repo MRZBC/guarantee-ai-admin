@@ -77,12 +77,24 @@
         </choose>
     </sql>
 
-    <!-- 趋势：月粒度 yyyy-MM，日粒度 yyyy-MM-dd，按时间升序 -->
+    <!--
+      趋势：日 yyyy-MM-dd / 月 yyyy-MM（默认）/ 年 yyyy，按时间升序。
+
+      ⚠️ 粒度分支**必须**走 c.dayGranularity() / c.yearGranularity()（内部先归一化），
+      不能直接比原始字段。原先写的是 `c.granularity == 'day'`，而前端发的是大写 'DAY'，
+      OGNL 比较字符串区分大小写 → 三个粒度全部落到 month 分支，
+      现场表现就是「按日 / 按月 / 按年」点哪个图都一样（都按月）。
+      这与 orderType 的口径一致：归一化集中在 DTO，Mapper 只调用归一化后的判断方法
+      （见 AnalysisCriteria.includeTender()）。
+    -->
     <select id="selectTrend" resultType="com.guarantee.analysis.vo.OrderTrendVO">
         SELECT
             <choose>
-                <when test="c.granularity == 'day'">
+                <when test="c.dayGranularity()">
                     DATE_FORMAT(apply_date, '%Y-%m-%d') AS period
+                </when>
+                <when test="c.yearGranularity()">
+                    DATE_FORMAT(apply_date, '%Y') AS period
                 </when>
                 <otherwise>
                     DATE_FORMAT(apply_date, '%Y-%m') AS period

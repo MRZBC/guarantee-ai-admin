@@ -1,0 +1,43 @@
+# guarantee-analysis 模块的集成测试配置（*IT，通过 mvn verify 执行）。
+#
+# 只保留数据源 + MyBatis；不引入 Redis / Spring AI，使本模块的 IT 可以在"只有 MySQL"
+# 的环境下独立跑。演示数据不由本模块生成（DataInitializer 属于 guarantee-web），因此约定为：
+#   1. pwsh scripts/reset-demo-data.ps1
+#   2. 启动一次后端（guarantee-web）让 DataInitializer 重新生成
+#   3. mvn -pl guarantee-analysis verify
+# 与 guarantee-system/src/test/resources/application.yml 同一约定。
+server:
+  port: 0
+
+spring:
+  application:
+    name: guarantee-analysis-it
+
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3307}/${DB_NAME:guarantee_ai_admin}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${DB_USER:guarantee}
+    password: ${DB_PASSWORD:guarantee@2026}
+    hikari:
+      maximum-pool-size: 5
+      pool-name: guarantee-analysis-it-pool
+
+# 刻意不配置 spring.sql.init：本模块的 IT 只读现状数据（建表由 guarantee-web 启动时完成），
+# 也就不需要 db/schema.sql 出现在本模块的 classpath 上。
+
+mybatis:
+  mapper-locations: classpath*:mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    default-statement-timeout: 30
+    jdbc-type-for-null: NULL
+
+# 与生产一致：开启逻辑删除查询过滤，保证 IT 验证的是真实查询路径
+guarantee:
+  logical-delete:
+    enabled: true
+
+logging:
+  level:
+    root: warn
+    com.guarantee: info

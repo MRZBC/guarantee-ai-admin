@@ -39,7 +39,7 @@ public class AnalysisController {
         return Result.ok(overviewService.overview());
     }
 
-    /** 订单趋势：granularity=month（yyyy-MM，默认）或 day（yyyy-MM-dd）。 */
+    /** 订单趋势：granularity=day（yyyy-MM-dd）/ month（yyyy-MM，默认）/ year（yyyy），大小写不敏感。 */
     @GetMapping("/order-trend")
     public Result<List<OrderTrendVO>> orderTrend(@Valid OrderTrendQuery query) {
         return Result.ok(orderAnalysisService.trend(query));

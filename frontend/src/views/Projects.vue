@@ -60,25 +60,29 @@ const enterpriseSearch = useRemoteSearch<EnterpriseItem>({
   emptyText: '无匹配企业'
 })
 
-const projectTypeMap: Record<string, string> = {
-  TENDER: '招标项目',
-  CONSTRUCTION: '建设工程',
-  GOVERNMENT: '政府采购',
-  SERVICE: '服务类',
-  GOODS: '货物类',
-  OTHER: '其他'
-}
+/**
+ * 项目类型取值：`project.project_type` 存的是**中文**（房建/市政/交通/水利/其他），
+ * 见 schema.sql 建表注释与 DataInitializer.PROJECT_TYPES。
+ *
+ * <p>后端 `ProjectMapper` 对该字段是**精确等值**匹配（`AND p.project_type = #{q.projectType}`），
+ * 所以下拉的 value 必须与库里一致。此前这里写的是 TENDER/CONSTRUCTION/GOVERNMENT 这套
+ * 自造英文枚举，既选不中任何数据（筛任意类型都是 0 条），列上也认不出来。</p>
+ */
+const projectTypeOptions = ['房建', '市政', '交通', '水利', '其他']
 
+/**
+ * 项目状态字典：`project.status` 是 VARCHAR(16) 枚举
+ * **BIDDING / AWARDED / BUILDING / FINISHED**（schema.sql 建表注释、ProjectVO、DataInitializer 三处一致）。
+ *
+ * <p>此前这里写的是一套自造的 DRAFT/PENDING/IN_PROGRESS/COMPLETED，与库里对不上；
+ * `labelOf()` 查不到就原样回显，页面上于是显示英文 `AWARDED` / `BIDDING`。
+ * 状态筛选下拉同源，一起被带错（选"已完成"这类值永远筛不到数据）。</p>
+ */
 const statusMap: Record<string, string> = {
-  DRAFT: '草稿',
-  PENDING: '待审核',
-  IN_PROGRESS: '进行中',
-  ONGOING: '进行中',
-  COMPLETED: '已完成',
-  FINISHED: '已完成',
-  CANCELLED: '已取消',
-  CANCELED: '已取消',
-  CLOSED: '已关闭'
+  BIDDING: '招标中',
+  AWARDED: '已中标',
+  BUILDING: '建设中',
+  FINISHED: '已完成'
 }
 
 function labelOf(map: Record<string, string>, value: string | null | undefined): string {
@@ -86,11 +90,18 @@ function labelOf(map: Record<string, string>, value: string | null | undefined):
   return map[value.toUpperCase()] ?? value
 }
 
-function statusTagType(status: string | null | undefined): 'success' | 'warning' | 'danger' | 'info' {
+/**
+ * 状态标签配色：在途状态给彩色（招标中=警告、已中标=主题、建设中=成功），
+ * 终态「已完成」用灰色归档；未知值同样退 info，不抛错（配色不参与判断口径）。
+ */
+function statusTagType(
+  status: string | null | undefined
+): 'primary' | 'success' | 'warning' | 'danger' | 'info' {
   const code = (status ?? '').toUpperCase()
-  if (['COMPLETED', 'FINISHED'].includes(code)) return 'success'
-  if (['IN_PROGRESS', 'ONGOING', 'PENDING', 'DRAFT'].includes(code)) return 'warning'
-  if (['CANCELLED', 'CANCELED', 'CLOSED'].includes(code)) return 'danger'
+  if (code === 'BIDDING') return 'warning'
+  if (code === 'AWARDED') return 'primary'
+  if (code === 'BUILDING') return 'success'
+  if (code === 'FINISHED') return 'info'
   return 'info'
 }
 
@@ -211,12 +222,8 @@ onMounted(loadData)
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
             <el-form-item label="项目类型">
               <el-select v-model="query.projectType" placeholder="全部类型" clearable>
-                <el-option
-                  v-for="(label, value) in projectTypeMap"
-                  :key="value"
-                  :label="label"
-                  :value="value"
-                />
+                <!-- value 直接就是库里的中文取值：后端是等值匹配，不接受编码转换 -->
+                <el-option v-for="type in projectTypeOptions" :key="type" :label="type" :value="type" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -282,7 +289,7 @@ onMounted(loadData)
           <template #default="{ row }">{{ formatAmount(row.projectAmount) }}</template>
         </el-table-column>
         <el-table-column prop="projectType" label="项目类型" width="120" align="center">
-          <template #default="{ row }">{{ labelOf(projectTypeMap, row.projectType) }}</template>
+          <template #default="{ row }">{{ row.projectType || '--' }}</template>
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
@@ -334,7 +341,7 @@ onMounted(loadData)
             {{ formatAmount(detail.projectAmount) }} 元
           </el-descriptions-item>
           <el-descriptions-item label="项目类型">
-            {{ labelOf(projectTypeMap, detail.projectType) }}
+            {{ detail.projectType || '--' }}
           </el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="statusTagType(detail.status)" size="small">
