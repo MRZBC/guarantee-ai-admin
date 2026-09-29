@@ -131,6 +131,29 @@ class DataMetricsTest {
     }
 
     @Test
+    @DisplayName("趋势序列（points 只有 period、没有 name）也要渲染：否则逐月数字仍只能靠模型转述")
+    void rendersTrendSeries() {
+        String json = """
+                {"orderType":"TENDER","granularity":"month","startDate":"2026-01-01","endDate":"2026-06-30",
+                 "points":[
+                   {"period":"2026-01","orderCount":100,"guaranteeAmount":1234.5,"premiumAmount":12.34},
+                   {"period":"2026-02","orderCount":120,"guaranteeAmount":2234.5,"premiumAmount":22.34}],
+                 "meta":{"truncated":false,"dataSource":"订单趋势 · 险种：投标保函 · 粒度：按月"}}""";
+
+        String block = DataMetrics.blockOf(parse(json)).orElseThrow();
+
+        assertThat(block)
+                .as("表头用「周期」而不是「名称」，且口径作为块标题")
+                .contains("订单趋势 · 险种：投标保函 · 粒度：按月")
+                .contains("| 周期 | 订单量 | 担保金额（元） | 保费（元） |")
+                .contains("| 2026-01 | 100 | 1234.50 | 12.34 |")
+                .contains("| 2026-02 | 120 | 2234.50 | 22.34 |");
+        assertThat(block)
+                .as("趋势点里的数字不得被当成本轮顶层标量（否则会与汇总值混排）")
+                .doesNotContain("- 订单量：");
+    }
+
+    @Test
     @DisplayName("无可渲染内容 / 非对象：返回空")
     void emptyWhenNothingToRender() {
         assertThat(DataMetrics.blockOf(parse("{}"))).isEmpty();

@@ -43,6 +43,8 @@ const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').replace('
  * expect.refusal       是否属于"应当如实拒绝/说明"类
  * expect.maxToolCalls  工具调用次数上限（超出=又退回蛮力枚举）
  * expect.maxRounds     工具轮次上限（轮次 = 被 reset 分隔的调用批次）
+ * expect.mustCall      必须真的调用过这些工具（**正向**断言：新工具落地后，"模型是否真的用了它"
+ *                      不能只看正文措辞——不看这个，模型继续用旧工具蛮力枚举也照样"看起来对"）
  */
 const QUESTIONS = [
   // ---- 三维度对比（含交叉维度）----
@@ -62,26 +64,48 @@ const QUESTIONS = [
     id: 'GQ-03',
     category: '交叉维度（M2.1 新增能力）',
     question: '浙江省 2026 年第二季度各险种的订单量分别是多少？和第一季度比结构有什么变化？',
-    expect: { contains: ['浙江', '险种'], maxToolCalls: 8, maxRounds: 3 }
+    expect: {
+      contains: ['浙江', '险种'],
+      mustCall: ['queryOrderDistribution'],
+      maxToolCalls: 8,
+      maxRounds: 3
+    }
   },
   {
     id: 'GQ-04',
     category: '交叉维度（M2.1 新增能力）',
     question: '江苏省 2026 年第二季度各承保机构的订单量排名如何？',
-    expect: { contains: ['江苏', '机构'], maxToolCalls: 6, maxRounds: 3 }
+    expect: {
+      contains: ['江苏', '机构'],
+      mustCall: ['queryOrderDistribution'],
+      maxToolCalls: 6,
+      maxRounds: 3
+    }
   },
   // ---- 趋势 ----
   {
     id: 'GQ-05',
     category: '趋势（M2.1 新增能力）',
     question: '2026 年投标订单的保费按月走势如何？哪个月拐点最明显？',
-    expect: { contains: ['月'], maxToolCalls: 6, maxRounds: 3 }
+    expect: {
+      contains: ['月'],
+      // 按月趋势必须出现形如 2026-01 的周期（否则"趋势"是模型自己编的叙述）
+      matches: [/\d{4}-\d{2}/],
+      mustCall: ['queryOrderTrend'],
+      maxToolCalls: 6,
+      maxRounds: 3
+    }
   },
   {
     id: 'GQ-06',
     category: '趋势（M2.1 新增能力）',
     question: '2026 年各季度投标订单量按季度汇总的趋势是怎样的？',
-    expect: { contains: ['季度'], maxToolCalls: 6, maxRounds: 3 }
+    expect: {
+      contains: ['季度'],
+      mustCall: ['queryOrderTrend'],
+      maxToolCalls: 6,
+      maxRounds: 3
+    }
   },
   // ---- 单维度/汇总 ----
   {
@@ -321,6 +345,11 @@ function judge(item, result) {
   if (item.expect.refusal) {
     const refused = /(不支持|无法|不能|没有.*(权限|工具|数据)|查不到|做不到|建议)/.test(result.text)
     if (!refused) reasons.push('越界/缺能力问题没有如实说明（疑似硬答）')
+  }
+  for (const name of item.expect.mustCall ?? []) {
+    if (!result.toolCalls.some((call) => call.name === name && call.status === 'SUCCESS')) {
+      reasons.push(`没有成功调用必需的工具 ${name}（说明模型没走新能力，可能又退回旧工具蛮力枚举）`)
+    }
   }
   if (item.expect.maxToolCalls != null && result.toolCalls.length > item.expect.maxToolCalls) {
     reasons.push(`工具调用 ${result.toolCalls.length} 次，超过上限 ${item.expect.maxToolCalls}（疑似又退回蛮力枚举）`)

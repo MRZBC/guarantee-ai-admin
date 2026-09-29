@@ -21,10 +21,10 @@ import java.util.Optional;
  * 因为"这个字段该用什么中文名、什么单位"是无从推断的——猜错比不显示更糟
  * （例如把费率当成金额）。新增工具若带了新指标，在这里登记一行即可。</p>
  *
- * <p><b>只取顶层标量 + 一张维度明细表</b>：标量取顶层字段，因此不会把"列表里每条明细的
+ * <p><b>只取顶层标量 + 一张维度明细表（或趋势序列）</b>：标量取顶层字段，因此不会把"列表里每条明细的
  * 订单量"与"汇总的订单量"混在一起（同名不同义的两个数字同时出现会让用户更糊涂）；
- * 明细表只认形状明确的数组（元素是对象、含 {@code name} 与至少一个已知数值列），
- * 且最多渲染 {@link #MAX_ROWS} 行。</p>
+ * 明细表只认形状明确的数组（元素是对象、含 {@code name}（维度明细）或 {@code period}（趋势序列）、
+ * 且至少含一个已知数值列），且最多渲染 {@link #MAX_ROWS} 行。</p>
  *
  * <p><b>金额用两位小数</b>：JSON 反序列化后浮点可能是 {@code Double}（可能带二进制误差）
  * 或 {@code BigDecimal}（精确）。两者都按 {@code HALF_UP} 保留两位，量级远小于
@@ -60,6 +60,8 @@ public final class DataMetrics {
     private static final List<Column> ITEM_COLUMNS = List.of(
             new Column("rank", "排名", null, false),
             new Column("name", null, "名称", false),
+            // 趋势序列（queryOrderTrend 的 points）：元素没有 name/rank，只有 period
+            new Column("period", "周期", null, false),
             new Column("orderCount", "订单量", null, false),
             new Column("guaranteeAmount", "担保金额（元）", null, true),
             new Column("premiumAmount", "保费（元）", null, true),
@@ -129,8 +131,11 @@ public final class DataMetrics {
     }
 
     /**
-     * 明细表：只认"元素是对象、含 {@code name} 与至少一个已知数值列"的顶层数组，
-     * 取第一个匹配的数组（工具返回值里这样的数组最多一个）。
+     * 明细表：只认"元素是对象、含名称类键（{@code name} 或趋势的 {@code period}）
+     * 与至少一个已知数值列"的顶层数组，取第一个匹配的数组。
+     *
+     * <p>趋势序列（{@code queryOrderTrend} 的 {@code points}）没有 {@code name}、只有 {@code period}，
+     * 但同样需要服务端数值背书——否则"逐月保费"这串数字仍然只能靠模型转述。</p>
      */
     private static Optional<String> renderTable(Map<?, ?> map) {
         for (Object value : map.values()) {
@@ -149,11 +154,11 @@ public final class DataMetrics {
     }
 
     private static boolean hasUsableColumns(Map<?, ?> item) {
-        if (!item.containsKey("name")) {
+        if (!item.containsKey("name") && !item.containsKey("period")) {
             return false;
         }
         return ITEM_COLUMNS.stream()
-                .filter(column -> !"name".equals(column.key()))
+                .filter(column -> !"name".equals(column.key()) && !"period".equals(column.key()))
                 .anyMatch(column -> item.containsKey(column.key()));
     }
 
