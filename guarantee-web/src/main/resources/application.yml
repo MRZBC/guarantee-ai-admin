@@ -138,8 +138,29 @@ guarantee:
     seed: 20260920
 
   # ---------------------------------------------------------------------
+  # 业务知识层（RAG → 业务知识，REQ-RAG-02/03 与 REQ §6.4）
+  #   真源：guarantee-ai/src/main/resources/knowledge/<domain>/*.md（随 jar 发布）
+  #   运行期：启动时幂等导入 ai_knowledge_item；检索走 queryBusinessKnowledge 工具
+  #
+  #   enabled            false 时不注册检索工具（模型看不到它）：用于降级演练与故障应急。
+  #                      数字类问答完全不受影响；知识层缺失时由模型如实说明，绝不编造。
+  #   import-on-startup  false 时启动不导入真源（运维手工控制；不影响已有条目检索）。
+  #   max-items          单次检索条数硬上限；与需求里的上限 5 取更小者。
+  #   max-bytes          单次检索结果字节上限（默认 6KB，独立于工具结果 16KB 上限）。
+  #   embedding.enabled  M3.5 向量检索预留，默认关闭（Q-RAG-01 拍板先走关键词/标签）。
+  # ---------------------------------------------------------------------
+  ai:
+    knowledge:
+      enabled: true
+      import-on-startup: true
+      max-items: 5
+      max-bytes: 6144
+      embedding:
+        enabled: false
+
+  # ---------------------------------------------------------------------
   # 逻辑删除（设计文档 §5.2 / 任务书 §4.1 的"开关"）
-  #   true （默认）：LogicalDeleteInnerInterceptor 为 18 张受管表注入 is_deleted = 0
+  #   true （默认）：LogicalDeleteInnerInterceptor 为受管表注入 is_deleted = 0
   #   false        ：关闭拦截器。**仅用于故障应急**——关闭后已删除数据会重新出现在
   #                  默认查询结果里（鉴权路径的显式过滤不依赖本开关，因此不会提权）。
   # ---------------------------------------------------------------------

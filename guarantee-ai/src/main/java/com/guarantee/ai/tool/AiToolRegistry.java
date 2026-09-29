@@ -1,6 +1,9 @@
 package com.guarantee.ai.tool;
 
+import com.guarantee.ai.knowledge.KnowledgeProperties;
 import com.guarantee.common.security.Permissions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
@@ -27,6 +30,12 @@ import java.util.List;
  * <p>第二道是工具内部与 Service 层的 {@code @PreAuthorize} / 数据范围校验（T-04）。
  * 两道都要有，缺一不可。</p>
  *
+ * <p><b>知识检索工具的例外</b>（REQ-RAG-03/07）：{@code queryBusinessKnowledge} 登录即可用，
+ * **不做权限裁剪**——它的可见性由 {@code KnowledgeService} 按每条的 {@code permission_code}
+ * 在服务端过滤。它单独成组是为了支持降级开关：
+ * {@code guarantee.ai.knowledge.enabled=false} 时**不入注册集**（而不是注册后执行报错），
+ * 模型看不到工具，数字类回答完全不受影响。</p>
+ *
  * <p><b>装饰链顺序</b>（自内向外）：</p>
  * <pre>
  *   业务 Tool → SanitizingToolCallback（自由文本压成单行，防间接提示注入）
@@ -37,12 +46,25 @@ import java.util.List;
 @Component
 public class AiToolRegistry {
 
+    private static final Logger log = LoggerFactory.getLogger(AiToolRegistry.class);
+
     /** 一个工具的注册描述：实例 + 需要的权限码（空表示登录即可）。 */
     private record ToolDescriptor(Object tool, String... requiredPermissions) {
     }
 
     private final List<ToolDescriptor> readTools = new ArrayList<>();
     private final List<ToolDescriptor> writeTools = new ArrayList<>();
+
+    /**
+     * 知识检索工具（独立成组）。
+     *
+     * <p>它不参与权限裁剪（登录即可用），但要参与**降级开关**：关闭知识层时
+     * 整个组不注册。放在 readTools 里就无法单独摘除，因此单列。</p>
+     */
+    private final List<ToolDescriptor> knowledgeTools = new ArrayList<>();
+
+    /** 知识层开关（{@code guarantee.ai.knowledge.enabled}，REQ §6.4）。 */
+    private final boolean knowledgeEnabled;
 
     private final AiToolCallRecorder recorder;
     private final ObjectMapper objectMapper;
@@ -63,10 +85,16 @@ public class AiToolRegistry {
                           com.guarantee.ai.tool.write.UserProposalTool userProposalTool,
                           com.guarantee.ai.tool.write.RoleProposalTool roleProposalTool,
                           com.guarantee.ai.tool.write.InsuranceTypeProposalTool insuranceTypeProposalTool,
+                          QueryBusinessKnowledgeTool queryBusinessKnowledgeTool,
                           AiToolCallRecorder recorder,
-                          ObjectMapper objectMapper) {
+                          ObjectMapper objectMapper,
+                          KnowledgeProperties knowledgeProperties) {
         this.recorder = recorder;
         this.objectMapper = objectMapper;
+        this.knowledgeEnabled = knowledgeProperties.isEnabled();
+        if (!knowledgeEnabled) {
+            log.warn("guarantee.ai.knowledge.enabled=false：知识检索工具不注册（数字类问答不受影响）");
+        }
 
         // ---------------- READ 工具 ----------------
         // 业务域：沿用既有行为（SYS-NF-09 要求 queryOrderSummary 行为不变）
@@ -93,6 +121,10 @@ public class AiToolRegistry {
         // 从而消除"正文引用一个库里不存在的提案编号"这类编造（SYS-Q-06b）。
         // 与 queryMyToolCalls 同权限码，不新增权限码、不改权限矩阵。
         readTools.add(new ToolDescriptor(myProposalsQueryTool, Permissions.AI_SYSTEM_QUERY));
+
+        // ---------------- 知识检索工具（登录即可，服务端按 permission_code 裁剪） ----------------
+        // 描述里写明"定义/口径/概念/制度类用它；数字必须用业务工具"（REQ-RAG-06 的边界规则）
+        knowledgeTools.add(new ToolDescriptor(queryBusinessKnowledgeTool));
 
         // ---------------- WRITE 工具（只产出提案，绝不落库，SYS-W-08） ----------------
         // 除各自的域权限外，统一要求 ai:system:write 能力开关（5.5.2 的"与"关系）
@@ -124,6 +156,7 @@ public class AiToolRegistry {
     public ToolCallback[] callbacks(List<String> permissions) {
         List<ToolCallback> result = new ArrayList<>();
         result.addAll(select(readTools, permissions, ToolKind.READ));
+        result.addAll(knowledgeCallbacks(permissions));
         result.addAll(select(writeTools, permissions, ToolKind.WRITE));
         return result.toArray(ToolCallback[]::new);
     }
@@ -145,7 +178,21 @@ public class AiToolRegistry {
      * 从 {@code ToolContext} 取权限。</p>
      */
     public ToolCallback[] readToolCallbacks() {
-        return select(readTools, List.of(), ToolKind.READ).toArray(ToolCallback[]::new);
+        List<ToolCallback> result = new ArrayList<>(select(readTools, List.of(), ToolKind.READ));
+        result.addAll(knowledgeCallbacks(List.of()));
+        return result.toArray(ToolCallback[]::new);
+    }
+
+    /**
+     * 知识检索工具是否注册（{@code guarantee.ai.knowledge.enabled}）。
+     *
+     * <p>关闭时**不入注册集**：模型看不到这个工具，就不会尝试调用、不会拿到拒绝文案，
+     * 数字类问答完全不受影响（REQ-RAG-07 / AC-RAG-07）。</p>
+     */
+    private List<ToolCallback> knowledgeCallbacks(List<String> permissions) {
+        return knowledgeEnabled
+                ? select(knowledgeTools, permissions, ToolKind.READ)
+                : List.of();
     }
 
     /** 写工具是否可用（无 {@code ai:system:write} 时恒为空）。 */

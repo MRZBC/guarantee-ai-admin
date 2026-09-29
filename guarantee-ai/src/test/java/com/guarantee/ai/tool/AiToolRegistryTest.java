@@ -1,5 +1,7 @@
 package com.guarantee.ai.tool;
 
+import com.guarantee.ai.knowledge.KnowledgeProperties;
+import com.guarantee.ai.knowledge.KnowledgeService;
 import com.guarantee.ai.service.ProposalService;
 import com.guarantee.analysis.service.OrderAnalysisService;
 import com.guarantee.ai.tool.write.DepartmentProposalTool;import com.guarantee.ai.tool.write.InsuranceTypeProposalTool;
@@ -39,7 +41,12 @@ class AiToolRegistryTest {
 
     @BeforeEach
     void setUp() {
-        registry = new AiToolRegistry(
+        registry = buildRegistry(new KnowledgeProperties());
+    }
+
+    /** 构造注册表（知识层开关可注入，便于断言降级行为）。 */
+    private static AiToolRegistry buildRegistry(KnowledgeProperties knowledgeProperties) {
+        return new AiToolRegistry(
                 new OrderSummaryTool(mock(OrderStatisticsService.class)),
                 new OrderDistributionTool(mock(OrderAnalysisService.class)),
                 new OrderTrendTool(mock(OrderAnalysisService.class)),
@@ -64,8 +71,12 @@ class AiToolRegistryTest {
                         mock(RoleService.class)),
                 new InsuranceTypeProposalTool(mock(ProposalService.class), mock(AiDataScopeResolver.class),
                         mock(InsuranceTypeService.class)),
+                // 知识检索工具必须用**真实实例**：注册表靠反射读取 @Tool 注解，
+                // Mockito 生成的子类不会带上注解，mock 会让它静默注册不上（假绿）
+                new QueryBusinessKnowledgeTool(mock(KnowledgeService.class)),
                 mock(AiToolCallRecorder.class),
-                new tools.jackson.databind.ObjectMapper());
+                new tools.jackson.databind.ObjectMapper(),
+                knowledgeProperties);
     }
 
     /** ADMIN 的全部权限（与 PermissionCatalog 的矩阵一致）。 */
@@ -103,6 +114,8 @@ class AiToolRegistryTest {
                 "queryOrderSummary", "queryOrderDistribution", "queryOrderTrend", "queryOrg", "queryDepartment",
                 "queryUser", "queryRole", "queryInsuranceType", "queryOperationAudit",
                 "queryMyToolCalls", "queryMyProposals");
+        assertThat(names).as("知识检索工具登录即可用（可见性由 Service 按 permission_code 裁剪）")
+                .contains("queryBusinessKnowledge");
         assertThat(names).contains(
                 "proposeOrgChange", "proposeDepartmentChange", "proposeUserChange",
                 "proposeRoleChange", "proposeInsuranceTypeChange");
@@ -149,7 +162,25 @@ class AiToolRegistryTest {
         // Spring AI 通过反射枚举同一个类上的 @Tool 方法，**方法顺序不作保证**，
         // 断言固定顺序会产生"同样的代码这次过、下次挂"的假失败。
         assertThat(names).containsExactlyInAnyOrder(
-                "queryOrderSummary", "queryOrderDistribution", "queryOrderTrend", "getCurrentDate");
+                "queryOrderSummary", "queryOrderDistribution", "queryOrderTrend", "getCurrentDate",
+                "queryBusinessKnowledge");
+    }
+
+    @Test
+    @DisplayName("知识层降级：enabled=false 时 queryBusinessKnowledge 不入注册集，数字类工具不受影响（AC-RAG-07）")
+    void knowledgeToolIsNotRegisteredWhenDisabled() {
+        KnowledgeProperties disabled = new KnowledgeProperties();
+        disabled.setEnabled(false);
+        AiToolRegistry degraded = buildRegistry(disabled);
+
+        List<String> names = degraded.availableToolNames(ADMIN_PERMISSIONS);
+
+        assertThat(names).as("关掉知识层时模型根本看不到该工具（而不是注册后执行报错）")
+                .doesNotContain("queryBusinessKnowledge");
+        assertThat(names).as("数字类与系统域只读工具必须完全不受影响")
+                .contains("queryOrderSummary", "queryOrderDistribution", "queryOrderTrend",
+                        "queryOrg", "queryOperationAudit");
+        assertThat(degraded.writeToolCallbacks(ADMIN_PERMISSIONS)).as("写工具同样不受影响").hasSize(5);
     }
 
     @Test

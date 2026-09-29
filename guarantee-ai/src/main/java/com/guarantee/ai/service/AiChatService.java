@@ -328,6 +328,13 @@ public class AiChatService {
         TurnFacts turnFacts = new TurnFacts();
 
         /*
+          本轮知识检索事实（REQ-RAG-04）。与 turnFacts 分工：turnFacts 管"数字从哪来"（口径），
+          这里管"这段话的依据是哪一条知识"。收尾时服务端据此生成「知识来源：」行，
+          并把知识工具返回的 dataSource 从口径行里精确剔除——两类来源行必须分开展示。
+        */
+        KnowledgeClaimGuard.TurnKnowledge knowledgeTurn = new KnowledgeClaimGuard.TurnKnowledge();
+
+        /*
           本轮预算与成本（REQ-BA-06 / REQ-BA-11）：
           - budget：单轮工具调用数上限，超出不执行、只回灌可读说明；
           - cost：轮次 / 工具调用数 / 工具耗时 / token / 总耗时 / 是否触顶，收尾时汇总成一条日志。
@@ -337,7 +344,7 @@ public class AiChatService {
         TurnCost cost = new TurnCost(nanoClock);
 
         Map<String, Object> toolContext = buildToolContext(conversationId, userId, userText,
-                principalContext(), new ToolCallEventSink(sink), proposalSink, turnFacts);
+                principalContext(), new ToolCallEventSink(sink), proposalSink, turnFacts, knowledgeTurn);
 
         ToolCallingChatOptions options = buildToolCallingOptions(toolContext, budget);
 
@@ -378,7 +385,8 @@ public class AiChatService {
                   收尾跑完才关闭三个通道，merge 随之完成。
                 */
                 .concatWith(Flux.defer(() -> tailEvents(answer, lastPrompt, options, toolsExecuted,
-                        budget, cost, conversationId, userId, persisted, userText, turnFacts)))
+                        budget, cost, conversationId, userId, persisted, userText, turnFacts,
+                        knowledgeTurn)))
                 .doOnComplete(() -> {
                     sink.tryEmitComplete();
                     proposalSink.tryEmitComplete();
@@ -444,16 +452,17 @@ public class AiChatService {
                                                      ToolCallBudget budget, TurnCost cost,
                                                      Long conversationId, Long userId,
                                                      AtomicBoolean persisted,
-                                                     String userText, TurnFacts turnFacts) {
+                                                     String userText, TurnFacts turnFacts,
+                                                     KnowledgeClaimGuard.TurnKnowledge knowledgeTurn) {
         Prompt finalPrompt = promptRef.get();
         String produced = answer.toString();
         if (finalPrompt != null
                 && proposalClaimGuard.correctionFor(userId, conversationId, produced).isPresent()) {
             return repairFabricatedProposal(answer, finalPrompt, options, toolsExecuted, budget, cost,
-                    conversationId, userId, persisted, promptRef, userText, turnFacts);
+                    conversationId, userId, persisted, promptRef, userText, turnFacts, knowledgeTurn);
         }
         return finishTurn(answer, toolsExecuted, budget, cost, conversationId, userId, persisted,
-                userText, turnFacts);
+                userText, turnFacts, knowledgeTurn);
     }
 
     /**
@@ -475,7 +484,8 @@ public class AiChatService {
                                                                    Long conversationId, Long userId,
                                                                    AtomicBoolean persisted,
                                                                    AtomicReference<Prompt> promptRef,
-                                                                   String userText, TurnFacts turnFacts) {
+                                                                   String userText, TurnFacts turnFacts,
+                                                                   KnowledgeClaimGuard.TurnKnowledge knowledgeTurn) {
         log.warn("回复声称已生成提案但会话内无 PENDING 提案，自动重试一轮让模型调用写工具 conversationId={}",
                 conversationId);
         conversationService.audit(conversationId, userId, "CHAT", "检测到回复编造提案，自动重试一次");
@@ -499,7 +509,7 @@ public class AiChatService {
                         answer.append(repaired);
                     }
                     return finishTurn(answer, toolsExecuted, budget, cost, conversationId,
-                            userId, persisted, userText, turnFacts);
+                            userId, persisted, userText, turnFacts, knowledgeTurn);
                 }));
     }
 
@@ -510,11 +520,16 @@ public class AiChatService {
      * <ol>
      *   <li><b>剥离模型自写的口径行</b>（{@link DataSourceClaimGuard#stripDataSourceLines}）——
      *       照抄与编造在文本上无法区分，因此模型写的口径行一律不生效；</li>
+     *   <li><b>剥离模型自写的知识来源行</b>（{@link KnowledgeClaimGuard#stripSourceLines}）——
+     *       同一道理：知识来源行是"这段话依据哪一条知识"的唯一凭据，只能由服务端产出；</li>
      *   <li><b>提案编号白名单</b>（{@link ProposalNumberGuard}）——正文里的编号必须来自本轮
      *       工具真实返回，或用户自己打出来的串；其余一律移除并留下系统提示；</li>
-     *   <li><b>追加服务端口径页脚</b>（{@link DataSourceClaimGuard#footer}）——口径的唯一出口；</li>
+     *   <li><b>追加服务端口径页脚</b>（{@link DataSourceClaimGuard#footer}）——口径的唯一出口；
+     *       知识工具返回的 dataSource 会先被精确剔除，避免与知识来源行混排；</li>
      *   <li><b>追加服务端数据摘要</b>（{@link DataMetrics}）——已登记指标的权威数值，数值溯源出口；</li>
-     *   <li>追加兜底纠正（编造提案 / 零工具却有口径行 / 零工具却有业务数字 / 空回答）。</li>
+     *   <li><b>追加服务端知识来源行</b>（{@link KnowledgeClaimGuard#footer}）——本轮真实命中的
+     *       条目号 + 标题 + 版本，单独成行；未命中不追加；</li>
+     *   <li>追加兜底纠正（编造提案 / 零工具却有口径行 / 零工具却有业务数字 / 零检索却有来源行 / 空回答）。</li>
      * </ol>
      *
      * <p><b>为什么"改写过"就要 reset 重发</b>：正文是流式下发的，前端此时已经显示了被移除的
@@ -531,7 +546,8 @@ public class AiChatService {
                                                      ToolCallBudget budget, TurnCost cost,
                                                      Long conversationId, Long userId,
                                                      AtomicBoolean persisted,
-                                                     String userText, TurnFacts turnFacts) {
+                                                     String userText, TurnFacts turnFacts,
+                                                     KnowledgeClaimGuard.TurnKnowledge knowledgeTurn) {
         String produced = answer.toString();
         List<String> corrections = new ArrayList<>(3);
         boolean proposalClaimFlagged = false;
@@ -563,10 +579,15 @@ public class AiChatService {
             if (!dataSourceClaimFlagged) {
                 numberClaimGuard.correctionFor(produced, toolsExecuted.get()).ifPresent(corrections::add);
             }
+            // ②-c 本轮零知识检索却出现「知识来源：」行（REQ-RAG-04：无检索就不得有来源行）。
+            //     同样必须在剥离之前判定，否则证据已经被自己删掉。
+            KnowledgeClaimGuard.correctionFor(produced, knowledgeTurn.retrieved())
+                    .ifPresent(corrections::add);
         }
 
-        // 服务端接管事实：先剥离模型自写的口径行，再按白名单校验提案编号
-        String sanitized = DataSourceClaimGuard.stripDataSourceLines(produced);
+        // 服务端接管事实：先剥离模型自写的口径行与知识来源行，再按白名单校验提案编号
+        String sanitized = KnowledgeClaimGuard.stripSourceLines(
+                DataSourceClaimGuard.stripDataSourceLines(produced));
         boolean rewritten = !sanitized.equals(produced);
         ProposalNumberGuard.Result numberCheck = ProposalNumberGuard.sanitize(sanitized,
                 ProposalNumberGuard.trusted(userText, turnFacts.proposalNumbers()));
@@ -600,8 +621,18 @@ public class AiChatService {
         */
         StringBuilder tail = new StringBuilder();
         if (!sanitized.isBlank()) {
-            tail.append(DataSourceClaimGuard.footer(turnFacts.dataSources()));
+            /*
+              知识工具返回的 dataSource 不能进「口径：」行——口径是"数字从哪来"，
+              知识是"这句话的依据是哪一条"。剔除规则见 KnowledgeClaimGuard
+              （按收集器记录的原值精确剔除，不做子串猜测）。
+            */
+            List<String> dataSources = KnowledgeClaimGuard.excludingKnowledgeDataSources(
+                    turnFacts.dataSources(), knowledgeTurn);
+            tail.append(DataSourceClaimGuard.footer(dataSources));
             tail.append(DataMetrics.renderAll(turnFacts.metricBlocks()));
+            // 「知识来源：」单独成行，与口径行 / 数据摘要分开（REQ-RAG-04-5）；
+            // 只有本轮**真的检索到条目**才追加（未收录不追加任何来源行，AC-RAG-03）
+            tail.append(KnowledgeClaimGuard.footer(knowledgeTurn.sourceFragments()));
         }
         tail.append(String.join("", corrections));
 
@@ -1031,7 +1062,8 @@ public class AiChatService {
                                                         CurrentUser.Principal principal,
                                                         ToolCallEventSink eventSink,
                                                         Sinks.Many<ChatStreamEvents.Proposal> proposalSink,
-                                                        TurnFacts turnFacts) {
+                                                        TurnFacts turnFacts,
+                                                        KnowledgeClaimGuard.TurnKnowledge knowledgeTurn) {
         Map<String, Object> context = new HashMap<>();
         putIfNotNull(context, AiToolContextKeys.CONVERSATION_ID, conversationId);
         putIfNotNull(context, AiToolContextKeys.USER_ID, userId);
@@ -1041,6 +1073,8 @@ public class AiChatService {
         context.put(AiToolContextKeys.PROPOSAL_SINK, proposalSink);
         // 本轮工具事实收集器：与收尾的服务端口径/编号校验共享同一实例
         context.put(AiToolContextKeys.TURN_FACTS, turnFacts);
+        // 本轮知识检索事实收集器：知识工具写入，收尾生成「知识来源：」行（REQ-RAG-04）
+        context.put(KnowledgeClaimGuard.CONTEXT_KEY, knowledgeTurn);
         if (principal != null) {
             putIfNotNull(context, AiToolContextKeys.USERNAME, principal.username());
             putIfNotNull(context, AiToolContextKeys.REAL_NAME, principal.realName());
