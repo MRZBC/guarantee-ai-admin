@@ -135,6 +135,17 @@ const routes: RouteRecordRaw[] = [
         name: 'SystemAiRuntime',
         component: () => import('@/views/system/AiRuntime.vue'),
         meta: { title: 'AI 运行', parentTitle: '系统配置', permission: 'system:audit:view' }
+      },
+      {
+        /*
+          AI 配置（第四阶段 REQ-CFG-08/10，T4-04）。
+          权限 `ai:config:view`：ADMIN 默认拥有、其余角色默认无；
+          写操作另有 `ai:config:update`（危险权限），由服务端 @PreAuthorize 兜底，前端隐藏按钮不算数。
+        */
+        path: 'system/ai-config',
+        name: 'SystemAiConfig',
+        component: () => import('@/views/system/AiConfig.vue'),
+        meta: { title: 'AI 配置', parentTitle: '系统配置', permission: 'ai:config:view' }
       }
     ]
   },

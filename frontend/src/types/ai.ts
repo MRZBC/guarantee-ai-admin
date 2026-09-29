@@ -309,3 +309,113 @@ export interface AiMetricsToolsResponse {
   range: AiMetricsRange
   tools: AiToolCallStat[]
 }
+
+/* ---------------- AI 配置与提示词版本（第四阶段 REQ-CFG-01/02/05/08） ---------------- */
+
+/**
+ * 配置项分类：与后端 `AiConfigCategory` 同值域。
+ *
+ * `PROMPT` 是相对 REQ §6.1 列举（MODEL/SWITCH/BUDGET）的增量分类：
+ * `prompt.active-version` 既不是模型参数、也不是开关/预算，硬塞进前三类会让分组误导。
+ */
+export type AiConfigCategory = 'MODEL' | 'SWITCH' | 'BUDGET' | 'PROMPT' | string
+
+/** 值类型：与后端 `AiConfigType` 同值域。 */
+export type AiConfigValueType = 'STRING' | 'INT' | 'DECIMAL' | 'BOOLEAN' | 'ENUM' | string
+
+/**
+ * 单个配置项。
+ *
+ * <p>密钥类（`secretClass=true`）**永不返回密钥值**：`value` 是"环境变量引用名"，
+ * `configured` 表示该环境变量是否真的配置了；非密钥类 `configured` 为 null。</p>
+ */
+export interface AiConfigItemView {
+  key: string
+  /** 生效值；未设置且无默认值时为 null */
+  value: string | null
+  /** 目录默认值；null 表示未设置（沿用框架默认） */
+  defaultValue: string | null
+  /** 是否来自库中显式配置（false = 正在用默认值） */
+  overridden: boolean
+  valueType: AiConfigValueType
+  category: AiConfigCategory
+  /** 危险配置：页面二次确认 */
+  dangerous: boolean
+  secretClass: boolean
+  configured: boolean | null
+  minValue: number | null
+  maxValue: number | null
+  enumOptions: string[]
+  /** 影响面说明（后端目录里的原话，页面不自行改写） */
+  description: string
+}
+
+/** `GET /api/ai/config`：全部配置项 + 当前快照版本。 */
+export interface AiConfigView {
+  /** 配置快照版本（= ai_config_item.version 最大值；空表为 0） */
+  version: number
+  loadedAt: string
+  items: AiConfigItemView[]
+}
+
+/** `POST /api/ai/config/change` 的结果。 */
+export interface AiConfigChangeResult {
+  key: string
+  /** false = 值未变化（未写入、未审计） */
+  changed: boolean
+  value: string | null
+  version: number
+  message: string
+}
+
+/** 提示词版本状态：与后端 `AiPromptVersion` 同值域。 */
+export type PromptVersionStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED' | string
+
+/** 提示词版本（列表用，不含正文）。 */
+export interface PromptVersionView {
+  versionNo: number
+  status: PromptVersionStatus
+  note: string | null
+  contentHash: string | null
+  createdBy: string | null
+  createdAt: string | null
+  publishedBy: string | null
+  publishedAt: string | null
+  contentLength: number
+}
+
+/** 版本正文 + 缺失的保护标记（非空即不可发布，页面给强警告）。 */
+export interface PromptDetailView {
+  version: PromptVersionView
+  content: string
+  missingProtectedMarkers: string[]
+}
+
+/**
+ * 发布门禁结果。
+ *
+ * `ran=false` 就是**未跑**（脚本不存在 / `--suite` 未实现 / 执行失败 / 超时）——
+ * 页面必须如实显示"未跑"，并且**不允许发布**；绝不能把它显示成"通过"。
+ */
+export interface PromptGateView {
+  ran: boolean
+  passed: boolean
+  summary: string
+}
+
+/** `GET /api/ai/config/prompts`：版本历史 + 当前草稿 + 门禁结果。 */
+export interface PromptHistoryView {
+  versions: PromptVersionView[]
+  draft: PromptVersionView | null
+  gate: PromptGateView
+}
+
+/** 发布 / 回滚结果。 */
+export interface PromptPublishResult {
+  versionNo: number
+  status: PromptVersionStatus
+  contentHash: string | null
+  /** 是否经过门禁（回滚为 false：应急路径不重跑门禁） */
+  gated: boolean
+  message: string
+}

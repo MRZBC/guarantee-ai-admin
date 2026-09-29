@@ -1,5 +1,7 @@
 import { http } from './request'
 import type {
+  AiConfigChangeResult,
+  AiConfigView,
   AiMetricsOverviewResponse,
   AiMetricsRange,
   AiMetricsToolsResponse,
@@ -8,6 +10,10 @@ import type {
   ConversationItem,
   OperationAuditPage,
   OperationAuditQuery,
+  PromptDetailView,
+  PromptGateView,
+  PromptHistoryView,
+  PromptPublishResult,
   ProposalPayload,
   ToolCallItem
 } from '@/types/ai'
@@ -103,6 +109,63 @@ export function getAiMetricsTrend(days = 7) {
  */
 export function getAiMetricsTopTools(limit = 10, range: AiMetricsRange = '24h') {
   return http.get<AiMetricsToolsResponse>('/ai/metrics/tools/top', { params: { limit, range } })
+}
+
+/* ---------------- AI 配置（第四阶段 T4-04 / REQ-CFG-08） ---------------- */
+
+/**
+ * 全部配置项（含当前生效值 vs 目录默认值）。
+ *
+ * 权限 `ai:config:view`。密钥类只返回"引用名 + 是否已配置"，**密钥值永不经过本接口**。
+ */
+export function getAiConfig() {
+  return http.get<AiConfigView>('/ai/config')
+}
+
+/**
+ * 修改一个配置项（页面渠道：表单 + 二次确认 + 直接落库 + WEB 审计）。
+ *
+ * @param value 新值；传 `null` 表示"恢复默认值"（清空显式值）
+ *
+ * 边界由**服务端**校验（类型/范围/枚举），越界会返回可读错误；值未变化时后端返回
+ * `changed=false`（不写入、不审计），页面据此如实提示而不是谎报"已保存"。
+ */
+export function changeAiConfig(key: string, value: string | null) {
+  return http.post<AiConfigChangeResult>('/ai/config/change', { key, value })
+}
+
+/** 提示词版本历史 + 当前草稿 + 门禁结果（权限 `ai:config:view`）。 */
+export function listPromptVersions() {
+  return http.get<PromptHistoryView>('/ai/config/prompts')
+}
+
+/** 单版本正文 + 缺失的保护标记。 */
+export function getPromptVersion(versionNo: number) {
+  return http.get<PromptDetailView>(`/ai/config/prompts/${versionNo}`)
+}
+
+/** 单独查门禁结果（发布前先刷一次，避免"点了发布才知道未跑"）。 */
+export function getPromptGate() {
+  return http.get<PromptGateView>('/ai/config/prompts/gate')
+}
+
+/** 保存草稿（已有草稿则原地更新；已发布版本不可改）。 */
+export function savePromptDraft(content: string, note?: string | null) {
+  return http.post<PromptDetailView>('/ai/config/prompts/draft', { content, note: note ?? null })
+}
+
+/**
+ * 发布草稿（权限 `ai:config:update`）。
+ *
+ * 服务端**必须先过保护标记校验与确定性门禁**；门禁未跑/未全绿都会拒绝发布并返回可读原因。
+ */
+export function publishPrompt(versionNo: number) {
+  return http.post<PromptPublishResult>('/ai/config/prompts/publish', { versionNo })
+}
+
+/** 回滚到历史版本（应急路径，不重跑门禁；产生审计）。 */
+export function rollbackPrompt(versionNo: number) {
+  return http.post<PromptPublishResult>('/ai/config/prompts/rollback', { versionNo })
 }
 
 export { streamChat, ChatStreamError, API_BASE_URL } from '@/utils/chatStream'

@@ -160,10 +160,14 @@ public class AiConfigController {
     // ==================================================================
 
     /**
-     * 版本历史 + 当前草稿 + 当前门禁结果。
+     * 版本历史 + 当前草稿 + 门禁结果。
      *
-     * <p>门禁结果**必须如实返回**：{@code ran=false} 就是"未跑"（脚本不存在 / {@code --suite}
-     * 尚未实现 / 执行失败），页面据此显示"未跑"，而不是把它显示成"通过"。</p>
+     * <p><b>门禁读的是"最近一次"</b>（可为 null = 尚未检查）：门禁命令要跑完整套确定性黄金
+     * 问题集（分钟级），列表接口顺手跑一次会让页面每次打开都卡住并超时（CDP 走查实测）。
+     * 真正的执行在「刷新门禁」（{@code GET /prompts/gate}）与**发布**时（发布是权威判定点）。</p>
+     *
+     * <p>返回必须如实：{@code ran=false} 是"未跑"，null 是"尚未检查"，
+     * 页面据此禁止发布，绝不能显示成"通过"（AC-CFG-10）。</p>
      */
     @GetMapping("/prompts")
     @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_VIEW + "')")
@@ -173,7 +177,7 @@ public class AiConfigController {
                 .toList();
         return Result.ok(new PromptHistoryView(versions,
                 toPromptView(promptVersionService.draft()),
-                toGateView(promptVersionService.evaluateGate())));
+                gateOf(promptVersionService.lastGateResult())));
     }
 
     /** 单个版本正文 + 缺失的保护标记（编辑页据此给出强警告）。 */
@@ -348,6 +352,15 @@ public class AiConfigController {
 
     private static GateView toGateView(PromptVersionService.GateResult result) {
         return new GateView(result.ran(), result.passed(), result.summary());
+    }
+
+    /** 未检查过时给一条明确的"尚未检查"，而不是伪造成"未跑（执行过但没跑起来）"。 */
+    private static GateView gateOf(PromptVersionService.GateResult result) {
+        if (result == null) {
+            return new GateView(false, false,
+                    "尚未检查：点击「刷新门禁」运行确定性黄金问题集（可能需要数分钟）");
+        }
+        return toGateView(result);
     }
 
     private AiConfigItemView toView(AiConfigDefinition def, AiConfigSnapshot snapshot) {

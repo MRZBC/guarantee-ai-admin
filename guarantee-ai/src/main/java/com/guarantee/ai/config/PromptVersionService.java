@@ -78,6 +78,20 @@ public class PromptVersionService {
     private final WebAuditor webAuditor;
     private final PromptGate gate;
 
+    /**
+     * 最近一次门禁结果（进程内缓存）。
+     *
+     * <p><b>为什么需要它</b>：门禁命令要跑一整套确定性黄金问题集（分钟级）。如果"读版本历史"
+     * 这种列表接口也顺手跑一次门禁，页面每次打开都会卡住并超时（CDP 走查实测就是这个表现）。
+     * 因此约定：</p>
+     * <ul>
+     *   <li>{@link #lastGateResult()} 只返回**最近一次**结果（可为 null = 尚未检查），不执行命令；</li>
+     *   <li>{@link #evaluateGate()} 显式执行（页面「刷新门禁」按钮）；</li>
+     *   <li>发布时**必跑**一次——发布是权威判定点，不能拿缓存放行。</li>
+     * </ul>
+     */
+    private volatile GateResult lastGateResult;
+
     /** 生产构造器：门禁用命令行实现。 */
     @Autowired
     public PromptVersionService(AiPromptVersionMapper mapper,
@@ -154,9 +168,21 @@ public class PromptVersionService {
         return PROTECTED_MARKERS.stream().filter(marker -> !content.contains(marker)).toList();
     }
 
-    /** 当前门禁结果（页面用它显示"通过 / 失败 / 未跑"，不隐藏失败）。 */
+    /**
+     * 显式执行门禁（页面按钮 / 发布路径）。
+     *
+     * <p>结果记入 {@link #lastGateResult()}，供"版本历史"这类列表接口**免费**读取，
+     * 避免每次打开页面都重跑一遍分钟级评测。</p>
+     */
     public GateResult evaluateGate() {
-        return gate.evaluate();
+        GateResult result = gate.evaluate();
+        this.lastGateResult = result;
+        return result;
+    }
+
+    /** 最近一次门禁结果；从未检查过时返回 null（页面显示"未检查"，且不允许发布）。 */
+    public GateResult lastGateResult() {
+        return lastGateResult;
     }
 
     // ==================================================================
@@ -215,7 +241,7 @@ public class PromptVersionService {
         }
         requireProtectedMarkers(version.getContent());
 
-        GateResult result = gate.evaluate();
+        GateResult result = evaluateGate();
         if (!result.passed()) {
             throw BizException.badRequest(result.ran()
                     ? "发布门禁未通过：" + result.summary()

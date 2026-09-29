@@ -98,6 +98,13 @@ const menuGroupDefinitions: MenuGroup[] = [
         title: 'AI 运行',
         icon: 'DataLine',
         permission: 'system:audit:view'
+      },
+      // AI 配置（T4-04）：改模型/提示词/能力开关；读权限 ai:config:view（写操作另有 ai:config:update）
+      {
+        path: '/system/ai-config',
+        title: 'AI 配置',
+        icon: 'Tools',
+        permission: 'ai:config:view'
       }
     ]
   }
