@@ -83,6 +83,40 @@ const promptPointer = computed(() =>
   (config.value?.items ?? []).find((item) => item.category === 'PROMPT') ?? null
 )
 
+/**
+ * 本期**未接线**的配置项（D3）：页面可编辑、但运行期不读取 —— 明确标注并置灰。
+ *
+ * <p>真源是"运行期是否消费这些键"：目前 `AiChatService` / `BoundedToolCallback` 只消费
+ * model 的 base-url / name / temperature 与全部 budget、tools、prompt 键；
+ * `model.max-tokens` / `model.timeout` / `model.max-retries` 只存在于目录里。
+ * 页面仍然展示它们（运维需要知道预留了什么），但**不允许编辑**，避免"改了以为生效"。
+ * 将来接线后请同步删除这个清单与页面标注。</p>
+ */
+const NOT_WIRED_KEYS = new Set(['model.max-tokens', 'model.timeout', 'model.max-retries'])
+
+function isNotWired(item: AiConfigItemView): boolean {
+  return NOT_WIRED_KEYS.has(item.key)
+}
+
+const notWiredItems = computed(() => modelItems.value.filter(isNotWired))
+
+/* 真机集（--suite=live）：只标注、不阻断发布；没有证据就是"未跑"（AC-CFG-10 子句②）。 */
+const liveGate = computed(() => gate.value?.live ?? null)
+
+const liveLabel = computed(() => {
+  const status = liveGate.value?.status
+  if (status === 'PASSED') return '通过'
+  if (status === 'FAILED') return '未通过'
+  return '未跑'
+})
+
+const liveTag = computed<'success' | 'danger' | 'info'>(() => {
+  const status = liveGate.value?.status
+  if (status === 'PASSED') return 'success'
+  if (status === 'FAILED') return 'danger'
+  return 'info'
+})
+
 function displayValue(item: AiConfigItemView): string {
   if (item.secretClass) return item.value ?? '（未指定引用名）'
   if (item.value !== null && item.value !== undefined && item.value !== '') return item.value
@@ -225,10 +259,10 @@ const publishHint = computed(() => {
   if (!draftDetail.value) return '还没有草稿：请先保存草稿'
   if (draftDirty.value) return '草稿有未保存的修改：请先保存草稿'
   if (missingMarkers.value.length > 0) return `草稿缺少受保护段落：${missingMarkers.value.join('；')}`
-  if (!gate.value) return '尚未检查发布门禁：请先点击「刷新门禁」（确定性黄金问题集，可能需要数分钟）'
+  if (!gate.value) return '尚未检查发布门禁：请先点击「刷新门禁」（确定性评测约 15 秒、最长 3 分钟）'
   if (!gate.value.ran) {
     return gate.value.summary.startsWith('尚未检查')
-      ? '尚未检查发布门禁：请先点击「刷新门禁」（确定性黄金问题集，可能需要数分钟）'
+      ? '尚未检查发布门禁：请先点击「刷新门禁」（确定性评测约 15 秒、最长 3 分钟）'
       : `发布门禁未跑（${gate.value.summary}）：确定性黄金问题集必须先全绿`
   }
   if (!gate.value.passed) return `发布门禁未通过：${gate.value.summary}`
@@ -290,7 +324,7 @@ const gateLoading = ref(false)
 
 async function refreshGate(): Promise<void> {
   gateLoading.value = true
-  ElMessage.info('正在运行确定性黄金问题集（可能需要数分钟）…')
+  ElMessage.info('正在运行确定性评测（约 15 秒，最长 3 分钟）…')
   try {
     gate.value = await getPromptGate()
     ElMessage.info(`门禁：${gateLabel.value}（${gate.value.summary}）`)
@@ -454,8 +488,28 @@ onMounted(async () => {
       <el-tabs v-model="activeTab" class="ai-config__tabs">
         <!-- ============ 模型 ============ -->
         <el-tab-pane label="模型" name="model">
+          <el-alert
+            v-if="notWiredItems.length > 0"
+            type="warning"
+            show-icon
+            :closable="false"
+            class="mb-8"
+            title="以下配置项本期未接线：仅展示，改了不生效（预留）"
+            :description="notWiredItems.map((item) => item.key).join('、') + '——运行期仍沿用框架默认/改造前行为；接线后此处标注会移除。'"
+          />
           <el-table :data="modelItems" v-loading="configLoading" stripe>
-            <el-table-column prop="key" label="配置项" min-width="180" />
+            <el-table-column prop="key" label="配置项" min-width="200">
+              <template #default="{ row }">
+                <span>{{ row.key }}</span>
+                <el-tooltip
+                  v-if="isNotWired(row)"
+                  content="本期未接线：运行期不读取该键，改了不生效（预留）。"
+                  placement="top"
+                >
+                  <el-tag size="small" type="warning" class="ml-4">本期未接线</el-tag>
+                </el-tooltip>
+              </template>
+            </el-table-column>
             <el-table-column label="当前生效值" min-width="180">
               <template #default="{ row }">
                 <span>{{ displayValue(row) }}</span>
@@ -476,12 +530,19 @@ onMounted(async () => {
                 <span class="ai-config__desc">{{ row.description }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="160" fixed="right">
+            <el-table-column label="操作" width="170" fixed="right">
               <template #default="{ row }">
-                <el-button v-if="canUpdate" link type="primary" @click="openEdit(row)">修改</el-button>
-                <el-button v-if="canUpdate && row.overridden" link type="warning" @click="resetItem(row)">
-                  恢复默认
-                </el-button>
+                <template v-if="isNotWired(row)">
+                  <el-tooltip content="本期未接线：运行期不读取该键，故不允许编辑（预留）。" placement="top">
+                    <span class="ai-config__desc">未接线</span>
+                  </el-tooltip>
+                </template>
+                <template v-else>
+                  <el-button v-if="canUpdate" link type="primary" @click="openEdit(row)">修改</el-button>
+                  <el-button v-if="canUpdate && row.overridden" link type="warning" @click="resetItem(row)">
+                    恢复默认
+                  </el-button>
+                </template>
               </template>
             </el-table-column>
           </el-table>
@@ -525,6 +586,19 @@ onMounted(async () => {
               <el-button link type="primary" class="ml-8" :loading="gateLoading" @click="refreshGate">
                 刷新门禁
               </el-button>
+            </div>
+            <!--
+              真机集（--suite=live）：AC-CFG-10 子句②要求"缺失时页面明确标注未跑"。
+              它**只做标注、不阻断发布**——发布门禁以确定性集为准（REQ-CFG-11 的两级门禁口径）。
+            -->
+            <div>
+              <span>真机集（--suite=live）：</span>
+              <el-tag :type="liveTag">{{ liveLabel }}</el-tag>
+              <el-tooltip :content="liveGate?.reason ?? '未配置 DEEPSEEK_API_KEY 或未跑（--suite=live）'" placement="top">
+                <span class="ai-config__desc ml-8">
+                  {{ liveGate?.reason ?? '未配置 DEEPSEEK_API_KEY 或未跑（--suite=live）' }}
+                </span>
+              </el-tooltip>
             </div>
           </div>
 

@@ -9,18 +9,26 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 /**
  * 提示词版本机（REQ-CFG-02 / REQ-CFG-11 / docs REQ §5.1.2、§5.1.11）。
@@ -43,6 +51,14 @@ import java.util.concurrent.TimeUnit;
  *       页面明确显示"未跑"。</li>
  * </ul>
  * 回滚**不过门禁**：它是"回到一个曾经通过门禁的版本"的应急路径，此时再要求评测可用会挡住止损。
+ *
+ * <p><b>事务边界（e2e 实测倒逼出来的）</b>：门禁是分钟级的外部命令，必须在事务**外**评估；
+ * 只有"归档旧版 → 发布 → 投影 → 审计"进短事务。否则一个发布请求会持有一个分钟级的
+ * 数据库连接与行锁（真机实测：并发构建下发布请求 >180s 未返回）。</p>
+ *
+ * <p><b>后续优化候选（本期不做）</b>：把门禁结果按 {@code versionNo + contentHash + TTL}
+ * 缓存，发布时要求"该内容在 TTL 内有过 PASSED"——仍是"没有新鲜通过就不放行"，
+ * 但发布请求可以立刻返回。它引入新的状态与审计口径，收益有限，登记为候选而非本期交付。</p>
  */
 @Service
 public class PromptVersionService {
@@ -73,10 +89,24 @@ public class PromptVersionService {
     /** 审计的 target_name 前缀（提示词版本号）。 */
     public static final String TARGET_NAME_PREFIX = "prompt.v";
 
+    /** 真机集状态取值（AC-CFG-10 子句②）。 */
+    public static final String LIVE_NOT_RUN = "NOT_RUN";
+    public static final String LIVE_PASSED = "PASSED";
+    public static final String LIVE_FAILED = "FAILED";
+
     private final AiPromptVersionMapper mapper;
     private final AiConfigService configService;
     private final WebAuditor webAuditor;
     private final PromptGate gate;
+    /**
+     * 真机集（{@code --suite=live}）报告的读取器：只读文件系统，**不执行任何评测**。
+     *
+     * <p>之所以要它：AC-CFG-10 子句②要求"真机集缺失时页面明确标注未跑"。
+     * 真机集需要真实模型（{@code DEEPSEEK_API_KEY}），本机没有 → 页面必须显示"未跑"，
+     * 而**不能**因为没有 Key 就假装通过、也不能因为读不到报告而报错。</p>
+     */
+    private final ObjectMapper objectMapper;
+    private final Environment environment;
 
     /**
      * 最近一次门禁结果（进程内缓存）。
@@ -92,25 +122,43 @@ public class PromptVersionService {
      */
     private volatile GateResult lastGateResult;
 
+    /**
+     * 短事务边界：只包住"归档旧发布版 + 发布目标版 + 配置投影 + 审计"。
+     *
+     * <p>用 {@link TransactionTemplate} 而不是在 {@code publish} 上加 {@code @Transactional}：
+     * 门禁（分钟级）必须在事务**外**先跑完，再用这个模板开一个毫秒级事务完成切换。
+     * 这也是同一个类里"自我调用不会走代理"的正确解法。</p>
+     */
+    private final TransactionTemplate transactionTemplate;
+
     /** 生产构造器：门禁用命令行实现。 */
     @Autowired
     public PromptVersionService(AiPromptVersionMapper mapper,
                                 AiConfigService configService,
                                 WebAuditor webAuditor,
-                                Environment environment) {
+                                Environment environment,
+                                ObjectMapper objectMapper,
+                                PlatformTransactionManager transactionManager) {
         this(mapper, configService, webAuditor, new CommandPromptGate(
-                environment.getProperty("guarantee.ai.prompt.gate-command", GATE_COMMAND_DEFAULT)));
+                environment.getProperty("guarantee.ai.prompt.gate-command", GATE_COMMAND_DEFAULT)),
+                environment, objectMapper, transactionManager);
     }
 
     /** 测试构造器：注入可打桩的门禁，避免单测真的去起 Node。 */
     PromptVersionService(AiPromptVersionMapper mapper,
                          AiConfigService configService,
                          WebAuditor webAuditor,
-                         PromptGate gate) {
+                         PromptGate gate,
+                         Environment environment,
+                         ObjectMapper objectMapper,
+                         PlatformTransactionManager transactionManager) {
         this.mapper = mapper;
         this.configService = configService;
         this.webAuditor = webAuditor;
         this.gate = gate;
+        this.environment = environment;
+        this.objectMapper = objectMapper;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     // ==================================================================
@@ -186,6 +234,90 @@ public class PromptVersionService {
     }
 
     // ==================================================================
+    // 真机集（--suite=live）状态：只读报告，绝不执行、绝不伪造（AC-CFG-10 子句②）
+    // ==================================================================
+
+    /**
+     * 真机集状态：读最近一份 {@code reports/eval-live-*.json}，**不执行任何评测**。
+     *
+     * <p>为什么是"读报告"而不是"跑一次"：真机集需要真实模型（{@code DEEPSEEK_API_KEY}）
+     * 与真实后端，一次跑几分钟且要花钱；它在本阶段只是**标注**维度，不是发布门禁
+     * （发布门禁仍是确定性集）。</p>
+     *
+     * <p><b>绝不伪造</b>：报告不存在、未跑、解析失败、缺 Key —— 一律 {@code NOT_RUN} 并给出原因；
+     * 只有报告里 {@code failed=0 且 notRun=0 且 total>0} 才算 {@code PASSED}。</p>
+     */
+    public LiveGate liveGate() {
+        boolean keyConfigured = apiKeyConfigured();
+        String keyHint = keyConfigured ? "" : "未配置 DEEPSEEK_API_KEY；";
+        Path report = latestLiveReport();
+        if (report == null) {
+            return new LiveGate(LIVE_NOT_RUN, null,
+                    keyHint + "未跑：没有找到 reports/eval-live-*.json（请执行 --suite=live 生成）", null);
+        }
+        String fileName = report.getFileName().toString();
+        try {
+            JsonNode root = objectMapper.readTree(report.toFile());
+            JsonNode totals = root.path("totals");
+            int total = totals.path("total").asInt(0);
+            int passed = totals.path("passed").asInt(0);
+            int failed = totals.path("failed").asInt(0);
+            int notRun = totals.path("notRun").asInt(0);
+            String at = root.path("generatedAt").asText(null);
+            String detail = root.path("status").path("live").asText("");
+
+            if (failed > 0) {
+                return new LiveGate(LIVE_FAILED, at,
+                        "最近一次真机评测有 " + failed + " 条失败（" + fileName + "）", fileName);
+            }
+            if (notRun > 0 || total == 0) {
+                return new LiveGate(LIVE_NOT_RUN, at,
+                        keyHint + "未跑：" + (detail.isBlank() ? "最近一次报告显示未跑" : detail)
+                                + "（" + fileName + "）", fileName);
+            }
+            return new LiveGate(LIVE_PASSED, at,
+                    "通过：" + passed + "/" + total + "（" + fileName + "）", fileName);
+        } catch (RuntimeException ex) {
+            // Jackson 3 的 JacksonException 是**非受检**异常；这里连解析失败也按"未跑"处理，绝不伪造通过
+            log.warn("读取真机集报告失败，按『未跑』处理（不伪造通过）：{}", ex.getMessage());
+            return new LiveGate(LIVE_NOT_RUN, null,
+                    keyHint + "未跑：报告无法解析（" + fileName + "）", fileName);
+        }
+    }
+
+    private boolean apiKeyConfigured() {
+        if (environment == null) {
+            return false;
+        }
+        String value = environment.getProperty("DEEPSEEK_API_KEY");
+        return value != null && !value.isBlank() && !"not-configured".equals(value);
+    }
+
+    /** 最新一份 {@code eval-live-*.json}；找不到返回 null（工作目录与模块目录都试一次）。 */
+    private Path latestLiveReport() {
+        String configured = environment == null
+                ? "reports" : environment.getProperty("guarantee.ai.eval.report-dir", "reports");
+        Path base = Path.of(configured);
+        if (!Files.isDirectory(base)) {
+            base = Path.of("..", configured);
+        }
+        if (!Files.isDirectory(base)) {
+            return null;
+        }
+        try (Stream<Path> files = Files.list(base)) {
+            return files.filter(path -> {
+                        String name = path.getFileName().toString();
+                        return name.startsWith("eval-live-") && name.endsWith(".json");
+                    })
+                    .max(Comparator.comparingLong(path -> path.toFile().lastModified()))
+                    .orElse(null);
+        } catch (IOException ex) {
+            log.warn("扫描真机集报告目录失败：{}", ex.getMessage());
+            return null;
+        }
+    }
+
+    // ==================================================================
     // 草稿 / 发布 / 回滚
     // ==================================================================
 
@@ -229,10 +361,14 @@ public class PromptVersionService {
     /**
      * 发布草稿（REQ-CFG-02 / REQ-CFG-11）。
      *
-     * <p>顺序固定：**保护标记校验 → 门禁 → 归档旧版本 → 发布 → 审计**。
+     * <p>顺序固定：**保护标记校验 → 门禁（事务外）→ 短事务切版本 + 审计**。
      * 校验或门禁不通过时**不产生任何状态变化**。</p>
+     *
+     * <p><b>门禁必须跑在事务之外</b>：它要跑一整套确定性黄金问题集（嵌套 maven，实测独立 13.9s；
+     * 与其它构建并发时曾超过 180s）。若挂在 {@code @Transactional} 里，就会持有一个分钟级的
+     * 数据库连接与行锁——真机 e2e 实测撞到过这一点。因此这里是"先评估、再开短事务"，
+     * 而不是"先切版本、后补门禁"：**没有新鲜 PASSED 就绝不进入切版本那一步**。</p>
      */
-    @Transactional
     public AiPromptVersion publish(int versionNo, String operator) {
         AiPromptVersion version = requireVersion(versionNo);
         if (!AiPromptVersion.STATUS_DRAFT.equals(version.getStatus())) {
@@ -248,15 +384,15 @@ public class PromptVersionService {
                     : "发布门禁未跑：" + result.summary()
                             + "（确定性黄金问题集必须先全绿；不允许在门禁未跑时发布）");
         }
-        return switchPublished(version, operator, "PUBLISH");
+        return transactionTemplate.execute(status -> switchPublished(version, operator, "PUBLISH"));
     }
 
     /**
      * 回滚：把生效版本指回某个历史版本（REQ-CFG-02 / §5.1.6）。
      *
-     * <p>不修改历史版本内容，也不重跑门禁（应急止损路径）；全过程写审计。</p>
+     * <p>不修改历史版本内容，也不重跑门禁（应急止损路径）；全过程写审计。
+     * 切版本与审计仍在**同一个短事务**里。</p>
      */
-    @Transactional
     public AiPromptVersion rollback(int toVersionNo, String operator) {
         AiPromptVersion target = requireVersion(toVersionNo);
         if (AiPromptVersion.STATUS_DRAFT.equals(target.getStatus())) {
@@ -266,7 +402,7 @@ public class PromptVersionService {
             throw BizException.badRequest("版本 v" + toVersionNo + " 当前已是生效版本，无需回滚");
         }
         requireProtectedMarkers(target.getContent());
-        return switchPublished(target, operator, "ROLLBACK");
+        return transactionTemplate.execute(status -> switchPublished(target, operator, "ROLLBACK"));
     }
 
     // ==================================================================
@@ -356,6 +492,17 @@ public class PromptVersionService {
     @FunctionalInterface
     public interface PromptGate {
         GateResult evaluate();
+    }
+
+    /**
+     * 真机集（{@code --suite=live}）状态。
+     *
+     * @param status {@code NOT_RUN} / {@code PASSED} / {@code FAILED}
+     * @param at     报告生成时间（可能为 null：没有报告时）
+     * @param reason 可读原因（页面直接展示；"未跑"必须写清是因为缺 Key 还是没跑过）
+     * @param source 报告文件名（可能为 null）
+     */
+    public record LiveGate(String status, String at, String reason, String source) {
     }
 
     /**

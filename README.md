@@ -3,7 +3,13 @@
 第一阶段：**传统电子保函管理后台 + AI 基础能力**。
 模块化单体（Modular Monolith），一个 Spring 上下文聚合 7 个 Maven 模块，不引入微服务。
 
-本阶段**未实现**（刻意留到后续）：MCP、RAG、Vector DB、Agent Planner、Memory、AI 配置写入、多模型路由、LangChain4j、MQ。
+第一阶段（工程骨架 → 真实业务数据 → AI Chat → Tool Calling）与**第三 / 四 / 五阶段的 AI 能力**均已交付：
+
+- **第三阶段 · RAG → 业务知识**：18 条业务知识真源（Markdown）+ 幂等导入 + `queryBusinessKnowledge` 检索工具 + 服务端「知识来源」行（模型自写的会被剥离）
+- **第四阶段 · AI 配置化 + 确认 + 审计**：模型/提示词/能力开关可在「系统管理 → AI 配置」页调整（**不重新打包**，改动经 DB 配置快照在下一个请求生效）；提示词版本化（草稿/发布/回滚 + 发布门禁）；写操作提案与审计链路 + 指纹闭环 + 审计归档脚本
+- **第五阶段 · MCP → Evaluation → Observability**：业务 MCP（只读、默认关闭、Token 鉴权、限流配额）、自动评测（33 条黄金问题，确定性集纳入 `mvn verify`）、观测（`/actuator/prometheus` + `ai_turn_metric` + 「AI 运行」页）
+
+**仍未排期**（刻意不做）：多模型路由、Agent Planner、跨会话长期记忆、LangChain4j、MQ、Grafana 大屏、OTel 导出。
 
 ---
 
@@ -160,7 +166,7 @@ java -jar guarantee-web/target/guarantee-ai-admin.jar
 1. 执行 `guarantee-web/src/main/resources/db/schema.sql`（全部 `CREATE TABLE IF NOT EXISTS`，可重复执行）；
 2. 若 `sys_user` 为空，则由 `DataInitializer` 生成演示数据（**首次约 30–60 秒**）。
 
-后端地址：<http://localhost:8080>，健康检查：`GET /actuator/health`。
+后端地址：<http://localhost:8081>，健康检查：`GET /actuator/health`。
 
 ### 3.4 配置模型 Key
 
@@ -192,8 +198,8 @@ npm install
 npm run build          # 产出 frontend/dist
 ```
 
-然后浏览器打开 <http://localhost:8080/>（改过端口就用你自己的端口，例如 8081）。
-前端使用 hash 路由，所以 `http://localhost:8080/#/dashboard` 这类深链接也由后端同一个地址承载。
+然后浏览器打开 <http://localhost:8081/>（改过端口就用你自己的端口，由 `BACKEND_PORT` 对齐）。
+前端使用 hash 路由，所以 `http://localhost:8081/#/dashboard` 这类深链接也由后端同一个地址承载。
 
 > ⚠️ `frontend/dist` 不存在时首页返回 404（启动日志会给出提示），后端本身仍正常工作。
 
@@ -248,7 +254,7 @@ npm run dev            # http://localhost:5273
 3. **后端是否活着**：`http://localhost:<port>/actuator/health` 应返回 `{"status":"UP"}`。
    该地址不需要登录，最适合判断"服务起来了没"。
 4. **是不是只打开了 API**：业务接口都在 `/api/**`，直接访问
-   `http://localhost:8080/api/orders/tender` 只会得到 401/JSON —— 这是正常的，它不是一个网页。
+   `http://localhost:8081/api/orders/tender` 只会得到 401/JSON —— 这是正常的，它不是一个网页。
    想看到界面，请按 §3.5 的方式 A（后端承载 dist）或方式 B（Vite 5273）。
 5. **前端能开但没数据**：方式 B 下确认 Vite 的代理目标与后端端口一致（默认 8081，见 §3.5）。
 6. **`EACCES: permission denied` 绑不上端口**：该端口落在 Windows 保留段里了。
@@ -271,7 +277,7 @@ npm run dev            # http://localhost:5273
 
 ## 五、数据库
 
-16 张表，DDL 见 **`guarantee-web/src/main/resources/db/schema.sql`**。
+26 张表，DDL 见 **`guarantee-web/src/main/resources/db/schema.sql`**。
 
 | 域 | 表 |
 |---|---|
@@ -453,6 +459,39 @@ record TimeRange(LocalDate startDate, LocalDate endDate, String description)
 | `error` | `{"message":"..."}` |
 
 > 因为是 POST，浏览器 `EventSource` 不适用；前端用 `fetch` + `ReadableStream` 手工解析 SSE 帧（`frontend/src/utils/sse.ts`）。
+
+---
+
+## 八·五、AI 第三 / 四 / 五阶段能力（2026-09-30 交付）
+
+### 8.5.1 业务知识检索与溯源（第三阶段）
+
+- 真源：`guarantee-ai/src/main/resources/knowledge/**`（**18 条**，Markdown + YAML front-matter，编号 `KB-<DOMAIN>-NNNN`）
+- 启动时幂等导入 `ai_knowledge_item`（内容变化 → `version+1` 并写 `ai_knowledge_import_log`；真源消失 → `RETIRED`，不物理删除）
+- 工具 `queryBusinessKnowledge`（只读、登录可见；条目级 `permission_code` 在**服务端**裁剪）；
+  回答末尾的「知识来源：KB-…《…》vN」由**服务端**按本轮真实检索结果追加，模型自写的会被剥离
+- 迁移脚本：`guarantee-web/src/main/resources/db/migration/V7__ai_knowledge.sql`
+
+### 8.5.2 AI 配置化 + 人工确认 + 审计（第四阶段）
+
+- 页面：`系统管理 → AI 配置`（模型 / 提示词 / 能力开关 / 变更历史四页签）；接口 `/api/ai/config*`
+- 配置真源是 `AiConfigCatalog`（**20 项**）；运行期快照在 `ai_config_item`，**改配置不重新打包、下一个请求生效**
+- 提示词版本化：`ai_prompt_version`（DRAFT → PUBLISHED → ARCHIVED）+ 发布门禁
+  （`node scripts/ai-golden-questions.mjs --suite=deterministic` 退出码 0 才允许发布；缺 Key 的真机集如实标注"未跑"）
+- 审计：`CONFIG_UPDATE` / `AI_CONFIG`（before → after；密钥类只记 `<changed>`）；提案指纹闭环；
+  归档执行体 `scripts/archive-operation-audit.ps1`（默认 DRY-RUN）
+- **本期未接线**：`model.max-tokens` / `model.timeout` / `model.max-retries`（页面标注、改了不生效）
+
+### 8.5.3 MCP / Evaluation / Observability（第五阶段）
+
+- **业务 MCP**：网关 `tools/business-mcp`（Node + stdio，**13 个只读工具**）+
+  平台侧 `GET /api/ai/mcp/tools`、`POST /api/ai/mcp/tools/{name}`、`/api/system/mcp-tokens`（权限 `ai:mcp:read` / `ai:mcp:manage`）；
+  **默认关闭**（`guarantee.ai.mcp.enabled=false`，yml 级、需重启）；接入说明见 `docs/MCP-外部接入.md`
+- **评测**：`docs/TEST-助手黄金问题集.md`（**33 条**）+ `scripts/ai-golden-questions.mjs`
+  （`--suite=all|deterministic|live`、`--baseline=<file>`）；确定性集由 `EvaluationDeterministicIT` 承载并纳入 `mvn verify`
+- **观测**：`/actuator/prometheus`（免登录，仅内网/白名单）+ `ai_turn_metric`（每轮问答一行，含 trace_id）+
+  `系统管理 → AI 运行` 页
+- **单一事实源**：`node scripts/single-source-of-truth.mjs`（测试项数 / 评测条数 / 指标清单 / MCP 工具清单，文档不再手写数字）
 
 ---
 

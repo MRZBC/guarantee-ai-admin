@@ -177,7 +177,7 @@ public class AiConfigController {
                 .toList();
         return Result.ok(new PromptHistoryView(versions,
                 toPromptView(promptVersionService.draft()),
-                gateOf(promptVersionService.lastGateResult())));
+                gateOf(promptVersionService.lastGateResult(), promptVersionService.liveGate())));
     }
 
     /** 单个版本正文 + 缺失的保护标记（编辑页据此给出强警告）。 */
@@ -191,7 +191,8 @@ public class AiConfigController {
     @GetMapping("/prompts/gate")
     @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_VIEW + "')")
     public Result<GateView> promptGate() {
-        return Result.ok(toGateView(promptVersionService.evaluateGate()));
+        return Result.ok(toGateView(promptVersionService.evaluateGate(),
+                promptVersionService.liveGate()));
     }
 
     /** 保存草稿（已有草稿则原地更新；已发布版本不可改）。 */
@@ -308,8 +309,19 @@ public class AiConfigController {
                                     GateView gate) {
     }
 
-    /** 门禁结果：{@code ran=false} 就是"未跑"，页面必须如实显示而不是当成通过（AC-CFG-10）。 */
-    public record GateView(boolean ran, boolean passed, String summary) {
+    /**
+     * 门禁结果：确定性维度（发布门禁）+ 真机集维度（只标注、不阻断发布；AC-CFG-10 子句②）。
+     *
+     * @param ran    确定性集是否真的跑起来（false = 未跑/尚未检查）
+     * @param passed 确定性集是否通过（**发布门禁只看它**）
+     * @param live   真机集状态：读最近一份 {@code reports/eval-live-*.json}；缺 Key/无报告一律
+     *               {@code NOT_RUN}，页面显示"真机集：未跑（原因）"，不作为发布阻断条件
+     */
+    public record GateView(boolean ran, boolean passed, String summary, LiveGateView live) {
+    }
+
+    /** 真机集状态（`--suite=live`）：只读报告，绝不伪造。 */
+    public record LiveGateView(String status, String at, String reason, String source) {
     }
 
     /** 保存草稿请求。 */
@@ -350,17 +362,27 @@ public class AiConfigController {
                 PromptVersionService.missingProtectedMarkers(version.getContent()));
     }
 
-    private static GateView toGateView(PromptVersionService.GateResult result) {
-        return new GateView(result.ran(), result.passed(), result.summary());
+    private static GateView toGateView(PromptVersionService.GateResult result,
+                                        PromptVersionService.LiveGate live) {
+        return new GateView(result.ran(), result.passed(), result.summary(), toLiveView(live));
     }
 
     /** 未检查过时给一条明确的"尚未检查"，而不是伪造成"未跑（执行过但没跑起来）"。 */
-    private static GateView gateOf(PromptVersionService.GateResult result) {
+    private static GateView gateOf(PromptVersionService.GateResult result,
+                                   PromptVersionService.LiveGate live) {
         if (result == null) {
             return new GateView(false, false,
-                    "尚未检查：点击「刷新门禁」运行确定性黄金问题集（可能需要数分钟）");
+                    "尚未检查：点击「刷新门禁」运行确定性黄金问题集（约 15 秒，最长 3 分钟）",
+                    toLiveView(live));
         }
-        return toGateView(result);
+        return toGateView(result, live);
+    }
+
+    private static LiveGateView toLiveView(PromptVersionService.LiveGate live) {
+        if (live == null) {
+            return null;
+        }
+        return new LiveGateView(live.status(), live.at(), live.reason(), live.source());
     }
 
     private AiConfigItemView toView(AiConfigDefinition def, AiConfigSnapshot snapshot) {

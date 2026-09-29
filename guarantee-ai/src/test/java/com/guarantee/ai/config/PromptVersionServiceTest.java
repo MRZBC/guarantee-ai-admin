@@ -8,9 +8,14 @@ import com.guarantee.system.service.WebAuditor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
+import org.springframework.core.env.Environment;
 import org.springframework.core.io.ClassPathResource;
+import tools.jackson.databind.ObjectMapper;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -48,6 +53,7 @@ class PromptVersionServiceTest {
     private AiConfigService configService;
     private WebAuditor webAuditor;
     private PromptVersionService.PromptGate gate;
+    private Environment environment;
     private PromptVersionService service;
 
     /** 合法正文：包含全部受保护标记。 */
@@ -60,7 +66,44 @@ class PromptVersionServiceTest {
         configService = mock(AiConfigService.class);
         webAuditor = mock(WebAuditor.class);
         gate = mock(PromptVersionService.PromptGate.class);
-        service = new PromptVersionService(mapper, configService, webAuditor, gate);
+        environment = mock(Environment.class);
+        // 报告目录给显式默认值：Mockito 的 mock 不会回落到方法签名的 default 参数
+        when(environment.getProperty("guarantee.ai.eval.report-dir", "reports")).thenReturn("reports");
+        service = new PromptVersionService(mapper, configService, webAuditor, gate,
+                environment, new ObjectMapper(), noopTransactionManager());
+    }
+
+    /** 用指定报告目录重建服务（真机集状态测试用）。 */
+    private PromptVersionService serviceWithReportDir(String reportDir) {
+        Environment env = mock(Environment.class);
+        when(env.getProperty("guarantee.ai.eval.report-dir", "reports")).thenReturn(reportDir);
+        return new PromptVersionService(mapper, configService, webAuditor, gate,
+                env, new ObjectMapper(), noopTransactionManager());
+    }
+
+    /**
+     * 空事务管理器：{@code TransactionTemplate} 需要一个真实的 {@code PlatformTransactionManager}，
+     * 这里用最小实现让它"原样同步执行回调"——单测要验证的是"门禁先评估、切版本在短事务里"，
+     * 不需要真的数据库事务（那由集成测试覆盖）。
+     */
+    private static org.springframework.transaction.PlatformTransactionManager noopTransactionManager() {
+        return new org.springframework.transaction.PlatformTransactionManager() {
+            @Override
+            public org.springframework.transaction.TransactionStatus getTransaction(
+                    org.springframework.transaction.TransactionDefinition definition) {
+                return new org.springframework.transaction.support.SimpleTransactionStatus();
+            }
+
+            @Override
+            public void commit(org.springframework.transaction.TransactionStatus status) {
+                // no-op
+            }
+
+            @Override
+            public void rollback(org.springframework.transaction.TransactionStatus status) {
+                // no-op
+            }
+        };
     }
 
     private static AiPromptVersion version(int no, String status, String content) {
@@ -333,5 +376,53 @@ class PromptVersionServiceTest {
                 .isEqualTo(PromptVersionService.sha256(VALID_CONTENT));
         assertThat(after.getValue().toString()).as("审计不落正文全文").doesNotContain("正文……");
         assertThat(before.getValue()).containsEntry("status", "DRAFT");
+    }
+
+    // ==================================================================
+    // 真机集（--suite=live）状态：只读报告、绝不伪造（AC-CFG-10 子句②）
+    // ==================================================================
+
+    @Test
+    @DisplayName("真机集：报告目录里没有 eval-live-*.json → NOT_RUN，且原因写清『未跑』")
+    void liveGateIsNotRunWithoutReport(@TempDir Path emptyDir) {
+        PromptVersionService.LiveGate live = serviceWithReportDir(emptyDir.toString()).liveGate();
+
+        assertThat(live.status()).isEqualTo(PromptVersionService.LIVE_NOT_RUN);
+        assertThat(live.at()).isNull();
+        assertThat(live.reason()).contains("未跑");
+    }
+
+    @Test
+    @DisplayName("真机集：报告全绿 → PASSED；有失败 → FAILED；有未跑 → NOT_RUN（读报告事实，不猜）")
+    void liveGateReadsReportFacts(@TempDir Path dir) throws Exception {
+        writeLiveReport(dir, "eval-live-2026-09-01.json", 25, 25, 0, 0);
+        PromptVersionService.LiveGate passed = serviceWithReportDir(dir.toString()).liveGate();
+        assertThat(passed.status()).isEqualTo(PromptVersionService.LIVE_PASSED);
+        assertThat(passed.reason()).contains("25/25");
+
+        writeLiveReport(dir, "eval-live-2026-09-02.json", 25, 20, 5, 0);
+        PromptVersionService.LiveGate failed = serviceWithReportDir(dir.toString()).liveGate();
+        assertThat(failed.status()).isEqualTo(PromptVersionService.LIVE_FAILED);
+        assertThat(failed.reason()).contains("5 条失败");
+        assertThat(failed.source()).isEqualTo("eval-live-2026-09-02.json");
+
+        writeLiveReport(dir, "eval-live-2026-09-03.json", 25, 0, 0, 25);
+        PromptVersionService.LiveGate notRun = serviceWithReportDir(dir.toString()).liveGate();
+        assertThat(notRun.status()).isEqualTo(PromptVersionService.LIVE_NOT_RUN);
+        assertThat(notRun.reason()).contains("未跑");
+    }
+
+    /** 写一份最小可解析的真机集报告（字段与 ai-golden-questions.mjs 输出同构）。 */
+    private static void writeLiveReport(Path dir, String fileName, int total, int passed, int failed,
+                                        int notRun) throws Exception {
+        String json = """
+                {
+                  "generatedAt": "2026-09-30T00:00:00.000Z",
+                  "suite": "live",
+                  "status": { "live": %s },
+                  "totals": { "total": %d, "passed": %d, "failed": %d, "notRun": %d }
+                }
+                """.formatted(notRun > 0 ? "\"environment\"" : "\"ok\"", total, passed, failed, notRun);
+        Files.writeString(dir.resolve(fileName), json);
     }
 }

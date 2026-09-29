@@ -401,6 +401,21 @@ export interface PromptGateView {
   ran: boolean
   passed: boolean
   summary: string
+  /**
+   * 真机集（`--suite=live`）维度：**只标注、不阻断发布**（AC-CFG-10 子句②要求"缺失时标注未跑"）。
+   * 数据来自服务端读取最近一份 `reports/eval-live-*.json`；缺 Key / 无报告一律 `NOT_RUN`。
+   */
+  live?: PromptLiveGateView | null
+}
+
+/** 真机集状态：`NOT_RUN` / `PASSED` / `FAILED`；没有证据就只能是 `NOT_RUN`。 */
+export interface PromptLiveGateView {
+  status: 'NOT_RUN' | 'PASSED' | 'FAILED' | string
+  /** 报告生成时间；无报告时为 null */
+  at: string | null
+  reason: string
+  /** 报告文件名；无报告时为 null */
+  source: string | null
 }
 
 /** `GET /api/ai/config/prompts`：版本历史 + 当前草稿 + 门禁结果。 */
