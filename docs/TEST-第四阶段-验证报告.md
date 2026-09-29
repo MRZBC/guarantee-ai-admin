@@ -315,3 +315,46 @@
 | 日期 | 版本 | 说明 |
 |---|---|---|
 | 2026-09-30 | v1.0 | 首版：AC-CFG-01~12 逐条三态（**成立 10 / 不成立 2 / 无法验证 0**）、TEST-CFG-01~08 状态、对抗式检查、事实声明与"已登记偏差"核对、10 项缺陷/副作用、未跑项清单。验证快照 = HEAD `878d04a` + 工作区 04:10:50 状态（**不含** phase4 04:11–04:12 的门禁修复）；真机证据取自 8088 临时实例（我自起自停）与 MySQL 3307 只读查询；`--suite=live` 未跑（缺 `DEEPSEEK_API_KEY`）。 |
+
+---
+
+# 复验记录（v1.1，2026-09-30 04:34–04:47）—— D1 / D2 / D3 修复复核
+
+> 本节**追加**在原报告之后，**不修改**原报告任何内容。原报告 §0 声明的快照是「HEAD `878d04a` + 工作区 04:10:50」；本节针对 phase4 的修复提交 **`817d74c`**（04:34:18，phase4 已声明代码冻结）复验。
+
+| 项 | 内容 |
+|---|---|
+| 复验快照 | **HEAD `817d74c`**（工作区无其它在途改动） |
+| 复跑 | `mvn -B verify` → **BUILD SUCCESS**；`guarantee-web` IT **113 / 0 failures**；`PromptVersionServiceTest` **19/19**（原 17，新增 D1/D2 用例）、`AiConfigChangeAuditIT` **4/4**、`PromptVersionLifecycleIT` **2/2**、`EvaluationDeterministicIT` **12/12**、`AiConfigWiringIT` 3/3 |
+| 前端 | `npx vue-tsc --noEmit` **exit 0**；`npx vite build` **exit 0**（`✓ built in 5.83s`） |
+| 日志 | `.agent/verify/t5-mvn-verify.log`、`.agent/verify/t5-vue-tsc.log`、`.agent/verify/t5-vite-build.log` |
+
+### D1（门禁同步执行于 HTTP + 事务内）—— **已修复，复核成立**
+
+- **事务边界**：`publish`（`PromptVersionService.java:372-388`）与 `rollback`（`:396-406`）**均不再标 `@Transactional`**；门禁在 `evaluateGate()`（`:380`）先评估，**只有 PASSED 才**进入 `transactionTemplate.execute(...)`（`:387`/`:405`）；短事务只包"归档旧版 → 发布 → 投影 → 审计"（`:423+`；设计说明见 `:55-57` 与 `:125-132`）。NOT_RUN/FAILED 在切版本**之前**抛错（`:381-386`），因此"门禁未跑/未过就不可能有任何状态变更"。
+- **前端超时**：`frontend/src/api/ai.ts` 给 `publishPrompt` 与 `getPromptGate` **各自单独 180s**，并有运行态提示（`AiConfig.vue:293`）。
+- **测试**：`PromptVersionServiceTest` 17 → **19**（新增事务外门禁/短事务用例），我复跑 19/19 绿。
+- 残留（与 §17 一致，非缺陷）：真机发布仍是**同步**分钟级请求；"按 `versionNo+contentHash+TTL` 复用 PASSED"已登记为后续候选（`:59-61`）。
+
+### D2（真机集"未跑"标注）—— **已修复，复核成立**
+
+- **只读报告、绝不伪造**：`PromptVersionService.liveGate()`（`:250-286`）只读 `reports/eval-live-*.json`（`latestLiveReport()` `:297-318`，取最新一份）；报告不存在/解析失败/缺 Key 一律 `NOT_RUN`（`:254-257/273-277/280-285`），只有 `failed=0 且 notRun=0 且 total>0` 才 `PASSED`（`:278-279`）。本方法**没有任何执行评测的代码路径**。
+- **接口**：`GateView` 增加 `live`（`AiConfigController` 的 `GateView/LiveGateView` + `toLiveView`），`/prompts/gate` 与 `/prompts` 都回填。
+- **页面**：配置页新增"真机集（--suite=live）"一行 + 原因 tooltip（`AiConfig.vue:103-118`、`:591-599`），四态标签。
+- **不硬阻断发布**：`canPublish` 只要求 `gate.value?.passed === true`（确定性维度，`AiConfig.vue:218-220`）→ 与收窄后的 AC-CFG-10 一致。
+- **真机数据核对**：现存 `reports/eval-live-2026-09-30.json` 的 `totals{total=1,notRun=1,failed=0}` → `liveGate()` 必回 `NOT_RUN`（"未跑：1 条未跑（其中环境类 1）"+ 未配置 Key 提示），**不会**因"报告存在"而冒充通过。
+
+### D3（三个未接线项页面标注 + 不可编辑）—— **页面层已修复，复核成立；附一条残留**
+
+- 前端 `NOT_WIRED_KEYS = {model.max-tokens, model.timeout, model.max-retries}`（`AiConfig.vue:95-101`）；模型页顶部警告条列出这些键（`:491-499`），每行打"本期未接线"标签（`:504-510`），操作列**不渲染"修改/恢复默认"**、只显示"未接线"说明（`:533-546`）→ 页面上不可编辑。
+- **残留（低，新发现）**：判定只在前端；服务端 `AiConfigCatalog` 无 `wired` 元数据，`AiConfigService.update` 仍接受这三个键 → 直接 `POST /api/ai/config/change` 依然能写入（写了也不生效）。建议在目录加 `wired=false` 并在服务端拒绝，或至少登记为"UI-only 防护"。本轮**不**据此判 AC-CFG-01/06 不成立（页面口径已满足 Lead 要求）。
+
+### 复验新增发现（跨阶段，详见 `docs/TEST-第五阶段与全量回归-验证报告.md`）
+
+- **D11（中）**：`AI_TURN_COST` 结构化日志**字段错位**——实测 `capped=none capReason=CHAT source=ERROR outcome={}`：`capped/capReason/source/outcome` 四个字段被参数错位，且最后一个占位符**没有实参**（模板 13 个占位符、只传 12 个实参，`AiChatService.java:1608-1612`）。metric 行本身正确；`AiObservabilityIT` 只断言 metric 字段与 traceId，不断言日志文本 → 未被发现。
+- **D12（低）**：AC-CFG-09 的"每轮"在**失败轮**不成立——`recordConfigVersion`（`AiChatService.java:724`）只在成功收尾调用；失败路径（`onErrorResume`）只写 `ai_turn_metric`。我实测 conversation 1582：metric 行有 `outcome=ERROR` + traceId，但 `ai_conversation.prompt_version/config_version` 仍为 NULL。
+
+### 复验对原报告结论的影响
+
+- 原报告「不成立 2」中：**AC-CFG-10 消解**（D2 落地 + Lead 把 AC 收窄为"确定性门禁 + 真机集标注不阻断"，见第五阶段报告 §3.10 对照）；**AC-CFG-06 仍为"不成立（按字面）"**（已批准决策，待收窄 §2.1#5 表述）。
+- 其余 10 条 AC 的成立结论不受影响；D1 修复**未**改变任何其它 AC 的判定。
