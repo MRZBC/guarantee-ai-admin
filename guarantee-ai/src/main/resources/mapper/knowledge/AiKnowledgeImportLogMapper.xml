@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  知识导入留痕 Mapper（REQ-RAG-02）：只追加。
+  selectLatestImportedSourceFiles 供导入器判断"真源文件是否还存在"：
+  只统计带 source_file 的记录，因此手工写进库、没有留痕的条目不会被误停用。
+-->
+<mapper namespace="com.guarantee.ai.knowledge.mapper.AiKnowledgeImportLogMapper">
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO ai_knowledge_import_log
+            (knowledge_no, old_version, new_version, content_hash, action, source_file)
+        VALUES
+            (#{knowledgeNo}, #{oldVersion}, #{newVersion}, #{contentHash}, #{action}, #{sourceFile})
+    </insert>
+
+    <select id="selectLatestImportedSourceFiles"
+            resultType="com.guarantee.ai.knowledge.entity.AiKnowledgeImportLog">
+        SELECT l.knowledge_no, l.source_file
+          FROM ai_knowledge_import_log l
+          JOIN (SELECT knowledge_no, MAX(id) AS max_id
+                  FROM ai_knowledge_import_log
+                 WHERE source_file IS NOT NULL
+                 GROUP BY knowledge_no) m
+            ON m.knowledge_no = l.knowledge_no
+           AND m.max_id = l.id
+    </select>
+
+</mapper>

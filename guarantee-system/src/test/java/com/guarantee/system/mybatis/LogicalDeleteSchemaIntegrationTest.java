@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 /**
  * 逻辑删除的**数据库结构与唯一键**集成测试。
  *
- * <p>对应设计文档 §11：LD-T2（13 键 × 5 轮删建循环）、LD-T2a（唯一键定义）、
+ * <p>对应设计文档 §11：LD-T2（受管唯一键 × 5 轮删建循环）、LD-T2a（唯一键定义）、
  * LD-T8a（业务唯一性的真实边界）、LD-T17（deleted_by 三态）、LD-T18（列定义断言）、
  * LD-T19（一致性巡检）、LD-T20（直连 SQL 模板有效性）、LD-T21（secret 表不参与）、
  * LD-T22（库中不存在触发器/存储过程/函数）。</p>
@@ -42,11 +42,14 @@ class LogicalDeleteSchemaIntegrationTest {
 
     private static final String P = "__ldt";
 
-    private static final List<String> TABLES = List.of(
-            "sys_org", "sys_department", "sys_user", "sys_role", "sys_permission",
-            "sys_user_role", "sys_role_permission", "sys_region", "insurance_type", "enterprise",
-            "project", "tender_order", "performance_order", "ai_conversation", "ai_message",
-            "ai_tool_call", "ai_audit_log", "ai_operation_proposal", "ai_operation_audit");
+    /**
+     * 受管表清单**直接取自** {@link LogicalDeleteTables}，不在这里再抄一份。
+     *
+     * <p>之前是手写字符串列表，于是新增一张受管表要改两个地方（清单 + 测试），
+     * 漏改一处就会出现"库里加了列、巡检却没覆盖"的静默盲区。改成派生之后，
+     * 新增表的动作收敛为一次显式修改（{@code LogicalDeleteTables}）。</p>
+     */
+    private static final List<String> TABLES = List.copyOf(LogicalDeleteTables.MANAGED);
 
     private static final List<String[]> UNIQUE_KEYS = List.of(
             new String[]{"sys_user", "uk_sys_user_username", "username"},
@@ -61,7 +64,9 @@ class LogicalDeleteSchemaIntegrationTest {
             new String[]{"tender_order", "uk_tender_order_no", "order_no"},
             new String[]{"performance_order", "uk_perf_order_no", "order_no"},
             new String[]{"ai_conversation", "uk_ai_conv_no", "conversation_no"},
-            new String[]{"ai_operation_proposal", "uk_proposal_no", "proposal_no"});
+            new String[]{"ai_operation_proposal", "uk_proposal_no", "proposal_no"},
+            // 阶段三：知识条目的稳定编号同样必须走函数索引形态
+            new String[]{"ai_knowledge_item", "uk_ai_knowledge_no", "knowledge_no"});
 
     @Autowired
     private JdbcTemplate jdbc;
@@ -83,6 +88,7 @@ class LogicalDeleteSchemaIntegrationTest {
         jdbc.update("DELETE FROM performance_order WHERE order_no LIKE ?", P + "%");
         jdbc.update("DELETE FROM ai_conversation WHERE conversation_no LIKE ?", P + "%");
         jdbc.update("DELETE FROM ai_operation_proposal WHERE proposal_no LIKE ?", P + "%");
+        jdbc.update("DELETE FROM ai_knowledge_item WHERE knowledge_no LIKE ?", P + "%");
         jdbc.update("DELETE FROM sys_permission WHERE perm_code LIKE ?", P + "%");
     }
 
@@ -91,7 +97,7 @@ class LogicalDeleteSchemaIntegrationTest {
     // ==================================================================
 
     @Test
-    @DisplayName("LD-T18 19 张表的 deleted_at 必须是 DATETIME(6) 且 DEFAULT NULL")
+    @DisplayName("LD-T18 受管表的 deleted_at 必须是 DATETIME(6) 且无默认值")
     void deletedAtMustBeMicrosecondAndNullable() {
         for (String table : TABLES) {
             Map<String, Object> col = jdbc.queryForMap("""
@@ -109,7 +115,7 @@ class LogicalDeleteSchemaIntegrationTest {
     }
 
     @Test
-    @DisplayName("LD-T18 19 张表的 is_deleted / deleted_by 定义正确，且都有 is_deleted 索引")
+    @DisplayName("LD-T18 受管表的 is_deleted / deleted_by 定义正确，且都有 is_deleted 索引")
     void deletedFlagAndOperatorColumns() {
         for (String table : TABLES) {
             Map<String, Object> flag = jdbc.queryForMap("""
@@ -136,13 +142,14 @@ class LogicalDeleteSchemaIntegrationTest {
                 SELECT COUNT(DISTINCT TABLE_NAME) FROM information_schema.COLUMNS
                 WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'is_deleted'
                 """, Integer.class);
-        assertThat(count).as("受管表必须恰好 19 张（新增表需同步 LogicalDeleteTables）").isEqualTo(19);
+        assertThat(count).as("带 is_deleted 的表数必须等于受管清单大小（新增表需同步 LogicalDeleteTables）")
+                .isEqualTo(LogicalDeleteTables.MANAGED.size());
 
         Integer idx = jdbc.queryForObject("""
                 SELECT COUNT(DISTINCT TABLE_NAME) FROM information_schema.STATISTICS
                 WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME LIKE 'idx\\_%\\_deleted'
                 """, Integer.class);
-        assertThat(idx).as("每张受管表都要有 is_deleted 索引").isEqualTo(19);
+        assertThat(idx).as("每张受管表都要有 is_deleted 索引").isEqualTo(LogicalDeleteTables.MANAGED.size());
     }
 
     // ==================================================================
@@ -170,7 +177,7 @@ class LogicalDeleteSchemaIntegrationTest {
     // ==================================================================
 
     @Test
-    @DisplayName("LD-T2a 13 个唯一键都必须是 (业务键, IFNULL(deleted_at, 哨兵)) 的表达式形态")
+    @DisplayName("LD-T2a 受管唯一键都必须是 (业务键, IFNULL(deleted_at, 哨兵)) 的表达式形态")
     void uniqueKeysIncludeDeletedAt() {
         for (String[] key : UNIQUE_KEYS) {
             String table = key[0];
@@ -284,7 +291,7 @@ class LogicalDeleteSchemaIntegrationTest {
     // ==================================================================
 
     @Test
-    @DisplayName("LD-T19 一致性巡检：18 张表 (is_deleted = 1) <> (deleted_at IS NOT NULL) 必须全为 0 行")
+    @DisplayName("LD-T19 一致性巡检：受管表 (is_deleted = 1) <> (deleted_at IS NOT NULL) 必须全为 0 行")
     void consistencyScanIsClean() {
         StringBuilder union = new StringBuilder();
         for (int i = 0; i < TABLES.size(); i++) {
@@ -443,7 +450,7 @@ class LogicalDeleteSchemaIntegrationTest {
     // ==================================================================
 
     @Test
-    @DisplayName("LD-T2 13 个唯一键连续 5 轮\"删除→重建→再删除\"全部通过（微秒精度方案）")
+    @DisplayName("LD-T2 受管唯一键连续 5 轮\"删除→重建→再删除\"全部通过（微秒精度方案）")
     void fiveRoundDeleteRebuildCycleForAllKeys() {
         long hq = hqOrgId();
         long userId = jdbc.queryForObject("SELECT id FROM sys_user WHERE username = 'admin'", Long.class);
@@ -501,9 +508,14 @@ class LogicalDeleteSchemaIntegrationTest {
                         "INSERT INTO ai_operation_proposal (proposal_no, user_id, tool_name, action, target_type, "
                                 + "required_perms, status, expires_at) "
                                 + "VALUES (?, ?, 'tool', 'CREATE', 'ORG', 'system:org:create', 'PENDING', NOW() + INTERVAL 1 DAY)",
-                        List.of(userId)));
+                        List.of(userId)),
+                // 阶段三：知识编号的删建循环（keywords 只要求非空，这里给 5 个标签贴合真源格式）
+                new KeyCase("ai_knowledge_item", "knowledge_no", P + "_kb1",
+                        "INSERT INTO ai_knowledge_item (knowledge_no, domain, title, content, keywords) "
+                                + "VALUES (?, 'SYSTEM', '夹具知识', '夹具正文', '夹具甲,夹具乙,夹具丙,夹具丁,夹具戊')",
+                        List.of()));
 
-        assertThat(cases).as("必须逐个覆盖 13 个唯一键").hasSize(13);
+        assertThat(cases).as("必须逐个覆盖受管唯一键（与 UNIQUE_KEYS 同源同量）").hasSize(UNIQUE_KEYS.size());
 
         for (KeyCase c : cases) {
             for (int round = 1; round <= 5; round++) {

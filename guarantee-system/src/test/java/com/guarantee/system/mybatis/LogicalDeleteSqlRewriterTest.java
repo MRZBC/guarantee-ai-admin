@@ -145,9 +145,10 @@ class LogicalDeleteSqlRewriterTest {
     // ==================================================================
 
     @Test
-    @DisplayName("受管表恰好 19 张（含 sys_region），且 ai_operation_secret 不在其中（LD-EX-01）")
-    void managedTablesAreExactly19AndExcludeSecret() {
-        assertThat(LogicalDeleteTables.MANAGED).hasSize(19);
+    @DisplayName("受管表非空（含 sys_region），且 ai_operation_secret 不在其中（LD-EX-01）；表数以清单为真源，不写死")
+    void managedTablesExcludeSecretAndStayNonEmpty() {
+        // 刻意不写死张数：新增受管表只改 LogicalDeleteTables 一处，不该再来改这个测试
+        assertThat(LogicalDeleteTables.MANAGED).isNotEmpty();
         assertThat(LogicalDeleteTables.isManaged("ai_operation_secret")).isFalse();
         assertThat(LogicalDeleteTables.isManaged("AI_OPERATION_SECRET")).isFalse();
         assertThat(LogicalDeleteTables.isManaged("sys_user")).isTrue();

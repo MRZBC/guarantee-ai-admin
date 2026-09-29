@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  知识条目 Mapper（REQ-RAG-01/02/03）。
+  约定：SQL 只写"取什么"，打分/排序/权限裁剪都在 KnowledgeService（应用侧），
+  避免同一套过滤条件在 SQL 与 Java 两处分叉。
+  枚举列（domain / status）走 MyBatis 默认 EnumTypeHandler，库内存 NAME。
+-->
+<mapper namespace="com.guarantee.ai.knowledge.mapper.AiKnowledgeItemMapper">
+
+    <sql id="columns">
+        id, knowledge_no, domain, title, content, keywords, effective_from, effective_to,
+        version, status, permission_code, source_ref, is_deleted, deleted_at, deleted_by,
+        created_at, updated_at
+    </sql>
+
+    <!-- 导入器需要看到 DRAFT/RETIRED：状态迁移（发布、恢复、停用）都靠它判定 -->
+    <select id="selectAllActive" resultType="com.guarantee.ai.knowledge.entity.AiKnowledgeItem">
+        SELECT <include refid="columns"/>
+          FROM ai_knowledge_item
+         WHERE is_deleted = 0
+         ORDER BY knowledge_no
+    </select>
+
+    <select id="selectByKnowledgeNo" resultType="com.guarantee.ai.knowledge.entity.AiKnowledgeItem">
+        SELECT <include refid="columns"/>
+          FROM ai_knowledge_item
+         WHERE knowledge_no = #{knowledgeNo}
+           AND is_deleted = 0
+         LIMIT 1
+    </select>
+
+    <!-- 检索候选集：只取指定状态（检索恒传 PUBLISHED），域可选；生效期与权限在服务端裁剪 -->
+    <select id="selectSearchCandidates" resultType="com.guarantee.ai.knowledge.entity.AiKnowledgeItem">
+        SELECT <include refid="columns"/>
+          FROM ai_knowledge_item
+         WHERE is_deleted = 0
+           AND status = #{status}
+        <if test="domain != null and domain != ''">
+           AND domain = #{domain}
+        </if>
+         ORDER BY knowledge_no
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO ai_knowledge_item
+            (knowledge_no, domain, title, content, keywords, effective_from, effective_to,
+             version, status, permission_code, source_ref)
+        VALUES
+            (#{knowledgeNo}, #{domain}, #{title}, #{content}, #{keywords},
+             #{effectiveFrom}, #{effectiveTo}, #{version}, #{status}, #{permissionCode}, #{sourceRef})
+    </insert>
+
+    <update id="updateContent">
+        UPDATE ai_knowledge_item
+           SET domain          = #{domain},
+               title           = #{title},
+               content         = #{content},
+               keywords        = #{keywords},
+               effective_from  = #{effectiveFrom},
+               effective_to    = #{effectiveTo},
+               version         = #{version},
+               status          = #{status},
+               permission_code = #{permissionCode},
+               source_ref      = #{sourceRef},
+               updated_at      = CURRENT_TIMESTAMP(6)
+         WHERE knowledge_no = #{knowledgeNo}
+           AND is_deleted = 0
+    </update>
+
+    <update id="updateStatus">
+        UPDATE ai_knowledge_item
+           SET status     = #{status},
+               updated_at = CURRENT_TIMESTAMP(6)
+         WHERE knowledge_no = #{knowledgeNo}
+           AND is_deleted = 0
+    </update>
+
+</mapper>

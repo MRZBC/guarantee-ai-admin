@@ -538,4 +538,59 @@ CREATE TABLE IF NOT EXISTS ai_operation_secret (
     KEY idx_ai_secret_expires (expires_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '提案敏感参数加密暂存';
 
+-- ---------------------------------------------------------------------
+-- 三期：业务知识底座（RAG → 业务知识，REQ-RAG-01 / 02）
+--
+-- 真源在仓库：guarantee-ai/src/main/resources/knowledge/<domain>/<no>-<slug>.md
+-- （YAML front-matter，可评审、可 diff、可回滚）；本表是它在运行期的**投影**，
+-- 供检索、按权限裁剪与审计使用。启动时由 KnowledgeImporter 幂等导入：
+--   内容未变 → 不动；内容变化 → version+1 并写 ai_knowledge_import_log；
+--   真源文件消失 → 置 RETIRED（**不物理删除**），保留可追溯性。
+--
+-- 为什么没有向量列：本机 .m2 无任何 vector-store 构件（RK-RAG-01），
+-- 第一版按"结构化条目 + 关键词/标签"检索；向量化留接口不落库（Q-RAG-01 已拍板 B）。
+--
+-- status 只有 PUBLISHED 参与检索；permission_code 为空表示登录即可见
+-- （裁剪发生在 Service 层，不在提示词层）。
+-- 唯一键沿用逻辑删除的函数索引写法（见 V3 说明）：未删除行只有一个
+-- deleted_at=NULL → IFNULL 后是同一个哨兵值，因此同一编号只能有一条有效行。
+-- ---------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS ai_knowledge_item (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    knowledge_no    VARCHAR(32)  NOT NULL COMMENT '稳定编号 KB-<DOMAIN>-NNNN（人工固定，全生命周期不变）',
+    domain          VARCHAR(16)  NOT NULL COMMENT 'ORDER/SYSTEM/CONCEPT/POLICY',
+    title           VARCHAR(120) NOT NULL COMMENT '条目标题（中文，≤60 字；溯源行逐字使用）',
+    content         TEXT         NOT NULL COMMENT '条目正文（Markdown 纯文本，≤2KB）',
+    keywords        VARCHAR(512) NOT NULL DEFAULT '' COMMENT '检索标签，逗号分隔（5~15 个，主力命中面）',
+    effective_from  DATE         NULL COMMENT '生效起始日（NULL=不限）',
+    effective_to    DATE         NULL COMMENT '生效截止日（NULL=长期有效）',
+    version         INT          NOT NULL DEFAULT 1 COMMENT '内容版本号：内容变化即 +1，编号不变',
+    status          VARCHAR(16)  NOT NULL DEFAULT 'PUBLISHED' COMMENT 'DRAFT/PUBLISHED/RETIRED',
+    permission_code VARCHAR(64)  NULL COMMENT '可见所需权限码；NULL/空=登录即可见',
+    source_ref      VARCHAR(255) NULL COMMENT '来源说明（原文出处/对应代码类/文档章节）',
+    is_deleted      TINYINT      NOT NULL DEFAULT 0    COMMENT '逻辑删除 0正常 1已删除',
+    deleted_at      DATETIME(6)  NULL     COMMENT '删除时间（微秒精度，唯一键分量）；禁止默认值',
+    deleted_by      VARCHAR(64)  NOT NULL DEFAULT 'DB' COMMENT '删除人：应用写 sys_user.id，直连为 DB',
+    created_at      DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at      DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (id),
+    KEY idx_ai_knowledge_item_deleted (is_deleted),
+    UNIQUE KEY uk_ai_knowledge_no (knowledge_no, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
+    KEY idx_ai_knowledge_lookup (domain, status)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '业务知识条目（Markdown 真源的运行期投影）';
+
+CREATE TABLE IF NOT EXISTS ai_knowledge_import_log (
+    id           BIGINT       NOT NULL AUTO_INCREMENT,
+    knowledge_no VARCHAR(32)  NOT NULL COMMENT '条目编号',
+    old_version  INT          NULL COMMENT '变更前版本（首次导入为 NULL）',
+    new_version  INT          NOT NULL COMMENT '变更后版本',
+    content_hash CHAR(64)     NOT NULL COMMENT '变更后内容的 SHA-256（规范化后）',
+    action       VARCHAR(16)  NOT NULL COMMENT 'CREATED/UPDATED/RESTORED/RETIRED',
+    source_file  VARCHAR(255) NULL COMMENT '真源文件（classpath 相对路径）；RETIRED 时记录最后已知路径',
+    imported_at  DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '导入时间',
+    PRIMARY KEY (id),
+    KEY idx_ai_knowledge_log_no (knowledge_no, imported_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '知识真源导入留痕（只追加，不修改）';
+
 
