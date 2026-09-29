@@ -45,6 +45,7 @@ public class AiToolRegistry {
     private final AiToolCallRecorder recorder;
 
     public AiToolRegistry(OrderSummaryTool orderSummaryTool,
+                          OrderDistributionTool orderDistributionTool,
                           OrgQueryTool orgQueryTool,
                           DepartmentQueryTool departmentQueryTool,
                           UserQueryTool userQueryTool,
@@ -64,6 +65,11 @@ public class AiToolRegistry {
         // ---------------- READ 工具 ----------------
         // 业务域：沿用既有行为（SYS-NF-09 要求 queryOrderSummary 行为不变）
         readTools.add(new ToolDescriptor(orderSummaryTool));
+        // 维度分布（区域/机构/险种）。与 queryOrderSummary **同一域、同一权限口径**：
+        // 后者本来就对所有 ai:chat 用户开放订单汇总值，这里只是把同一批数据按维度切开。
+        // 页面侧对应的数据概览接口同样只要求登录（无 @PreAuthorize），因此不新增权限码、
+        // 不改权限矩阵——"要不要在系统域加权限"是既有未决项，不在这里单方面收紧。
+        readTools.add(new ToolDescriptor(orderDistributionTool));
         readTools.add(new ToolDescriptor(orgQueryTool, Permissions.ORG_VIEW));
         readTools.add(new ToolDescriptor(departmentQueryTool, Permissions.DEPT_VIEW));
         readTools.add(new ToolDescriptor(userQueryTool, Permissions.USER_VIEW));

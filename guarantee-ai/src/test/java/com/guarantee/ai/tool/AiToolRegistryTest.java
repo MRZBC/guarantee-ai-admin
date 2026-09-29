@@ -1,8 +1,8 @@
 package com.guarantee.ai.tool;
 
 import com.guarantee.ai.service.ProposalService;
-import com.guarantee.ai.tool.write.DepartmentProposalTool;
-import com.guarantee.ai.tool.write.InsuranceTypeProposalTool;
+import com.guarantee.analysis.service.OrderAnalysisService;
+import com.guarantee.ai.tool.write.DepartmentProposalTool;import com.guarantee.ai.tool.write.InsuranceTypeProposalTool;
 import com.guarantee.ai.tool.write.OrgProposalTool;
 import com.guarantee.ai.tool.write.RoleProposalTool;
 import com.guarantee.ai.tool.write.UserProposalTool;
@@ -41,6 +41,7 @@ class AiToolRegistryTest {
     void setUp() {
         registry = new AiToolRegistry(
                 new OrderSummaryTool(mock(OrderStatisticsService.class)),
+                new OrderDistributionTool(mock(OrderAnalysisService.class)),
                 new OrgQueryTool(mock(OrgService.class), mock(AiDataScopeResolver.class)),
                 // 部门不再挂机构：两个部门工具的构造器都不再需要 OrgService
                 new DepartmentQueryTool(mock(DepartmentService.class),
@@ -97,8 +98,9 @@ class AiToolRegistryTest {
         List<String> names = registry.availableToolNames(ADMIN_PERMISSIONS);
 
         assertThat(names).contains(
-                "queryOrderSummary", "queryOrg", "queryDepartment", "queryUser", "queryRole",
-                "queryInsuranceType", "queryOperationAudit", "queryMyToolCalls", "queryMyProposals");
+                "queryOrderSummary", "queryOrderDistribution", "queryOrg", "queryDepartment",
+                "queryUser", "queryRole", "queryInsuranceType", "queryOperationAudit",
+                "queryMyToolCalls", "queryMyProposals");
         assertThat(names).contains(
                 "proposeOrgChange", "proposeDepartmentChange", "proposeUserChange",
                 "proposeRoleChange", "proposeInsuranceTypeChange");
@@ -144,7 +146,8 @@ class AiToolRegistryTest {
         // 用 containsExactlyInAnyOrder 而不是 containsExactly：
         // Spring AI 通过反射枚举同一个类上的 @Tool 方法，**方法顺序不作保证**，
         // 断言固定顺序会产生"同样的代码这次过、下次挂"的假失败。
-        assertThat(names).containsExactlyInAnyOrder("queryOrderSummary", "getCurrentDate");
+        assertThat(names).containsExactlyInAnyOrder(
+                "queryOrderSummary", "queryOrderDistribution", "getCurrentDate");
     }
 
     @Test
