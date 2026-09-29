@@ -192,6 +192,15 @@ class AiToolChainIT {
                         + "ORDER BY id DESC LIMIT 1", String.class, conversationId);
         assertThat(assistantContent).contains(StubToolCallingChatModel.ANSWER_PART_1);
 
+        // 服务端产出的事实（口径 + 数据摘要）必须进落库正文：这两段不经过模型的手，
+        // 因此"数字从哪来"与"权威数值是多少"都不再依赖模型是否诚实（§7.9 决策十一）
+        assertThat(assistantContent)
+                .as("口径行由服务端生成（模型自写会被剥离）")
+                .contains("口径：订单统计")
+                .as("数值溯源：已登记指标的权威数值随回答一起落库")
+                .contains("数据摘要（服务端生成）")
+                .contains("- 订单量：" + expected.getOrderCount() + " 笔");
+
         List<AiToolCall> persisted = aiToolCallMapper.selectByConversationId(conversationId);
         assertThat(persisted).hasSize(1);
         AiToolCall entity = persisted.get(0);

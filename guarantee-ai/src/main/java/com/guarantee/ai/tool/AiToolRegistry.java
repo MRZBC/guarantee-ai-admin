@@ -6,6 +6,7 @@ import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -28,7 +29,8 @@ import java.util.List;
  *
  * <p><b>装饰链顺序</b>（自内向外）：</p>
  * <pre>
- *   业务 Tool → BoundedToolCallback（16KB 上限，SYS-Q-10）
+ *   业务 Tool → SanitizingToolCallback（自由文本压成单行，防间接提示注入）
+ *             → BoundedToolCallback（16KB 上限，SYS-Q-10）
  *             → RecordingToolCallback（落库 + SSE，arguments/result 先脱敏）
  * </pre>
  */
@@ -43,6 +45,7 @@ public class AiToolRegistry {
     private final List<ToolDescriptor> writeTools = new ArrayList<>();
 
     private final AiToolCallRecorder recorder;
+    private final ObjectMapper objectMapper;
 
     public AiToolRegistry(OrderSummaryTool orderSummaryTool,
                           OrderDistributionTool orderDistributionTool,
@@ -59,8 +62,10 @@ public class AiToolRegistry {
                           com.guarantee.ai.tool.write.UserProposalTool userProposalTool,
                           com.guarantee.ai.tool.write.RoleProposalTool roleProposalTool,
                           com.guarantee.ai.tool.write.InsuranceTypeProposalTool insuranceTypeProposalTool,
-                          AiToolCallRecorder recorder) {
+                          AiToolCallRecorder recorder,
+                          ObjectMapper objectMapper) {
         this.recorder = recorder;
+        this.objectMapper = objectMapper;
 
         // ---------------- READ 工具 ----------------
         // 业务域：沿用既有行为（SYS-NF-09 要求 queryOrderSummary 行为不变）
@@ -207,11 +212,15 @@ public class AiToolRegistry {
      * {@code queryOrderSummary} 与 {@code getCurrentDate} 两个 {@code @Tool} 方法，
      * 只取 {@code [0]} 会把 {@code getCurrentDate} 静默丢掉——而"相对时间必须先拿到
      * 基准日期"正是提示词第 6 条依赖的能力。</p>
+     *
+     * <p>装饰顺序（自内向外）：{@code Sanitizing}（压掉自由文本里的换行/控制字符，
+     * 间接提示注入的传输层处理）→ {@code Bounded}（16KB）→ {@code Recording}（脱敏落库 + SSE）。
+     * 规范化必须在截断之前：先保住合法 JSON，再谈字节上限。</p>
      */
     private List<ToolCallback> wrap(Object tool, ToolKind kind) {
         return java.util.Arrays.stream(ToolCallbacks.from(tool))
                 .map(cb -> (ToolCallback) new RecordingToolCallback(
-                        new BoundedToolCallback(cb), kind, recorder))
+                        new BoundedToolCallback(new SanitizingToolCallback(cb, objectMapper)), kind, recorder))
                 .toList();
     }
 

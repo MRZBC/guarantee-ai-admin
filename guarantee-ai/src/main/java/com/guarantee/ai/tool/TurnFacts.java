@@ -27,7 +27,8 @@ import java.util.Set;
  *   <li>任意层级上键名为 {@code dataSource} 的字符串值 → 口径；</li>
  *   <li>任意层级上键名为 {@code proposalNo} 的字符串值 → 真编号；</li>
  *   <li>任意字符串值里形如 {@link ProposalNoFormat} 的串 → 真编号（覆盖被包在
- *       summary / message 等自由文本里的情况）。</li>
+ *       summary / message 等自由文本里的情况）；</li>
+ *   <li>已登记的标量指标与维度明细 → 指标块（数值溯源的服务端出口，见 {@link DataMetrics}）。</li>
  * </ul>
  *
  * <p><b>提取失败一律降级为"没有事实"</b>：结果被 16KB 上限截断成非法 JSON、
@@ -37,18 +38,20 @@ import java.util.Set;
 public final class TurnFacts {
 
     /** 一次工具返回值的提取结果。 */
-    public record Facts(List<String> dataSources, Set<String> proposalNumbers) {
+    public record Facts(List<String> dataSources, Set<String> proposalNumbers, List<String> metricBlocks) {
 
-        static final Facts EMPTY = new Facts(List.of(), Set.of());
+        static final Facts EMPTY = new Facts(List.of(), Set.of(), List.of());
 
         public Facts {
             dataSources = List.copyOf(dataSources);
             proposalNumbers = Set.copyOf(proposalNumbers);
+            metricBlocks = List.copyOf(metricBlocks);
         }
     }
 
     private final List<String> dataSources = new ArrayList<>();
     private final Set<String> proposalNumbers = new LinkedHashSet<>();
+    private final List<String> metricBlocks = new ArrayList<>();
 
     /**
      * 从工具返回值的原始 JSON 文本里提取事实。
@@ -76,7 +79,9 @@ public final class TurnFacts {
         List<String> dataSources = new ArrayList<>();
         Set<String> proposalNumbers = new LinkedHashSet<>();
         walk(root, dataSources, proposalNumbers);
-        return new Facts(dataSources, proposalNumbers);
+        // 指标块（数值溯源的服务端出口）：只认已登记的字段，渲染规则见 DataMetrics
+        List<String> metricBlocks = DataMetrics.blockOf(root).map(List::of).orElseGet(List::of);
+        return new Facts(dataSources, proposalNumbers, metricBlocks);
     }
 
     private static void walk(Object node, List<String> dataSources, Set<String> proposalNumbers) {
@@ -113,6 +118,11 @@ public final class TurnFacts {
             }
         }
         proposalNumbers.addAll(facts.proposalNumbers());
+        for (String block : facts.metricBlocks()) {
+            if (block != null && !block.isBlank() && !metricBlocks.contains(block)) {
+                metricBlocks.add(block);
+            }
+        }
     }
 
     /** 本轮真实出现过的口径（按工具执行顺序去重）。 */
@@ -123,5 +133,10 @@ public final class TurnFacts {
     /** 本轮工具真实返回过的提案编号。 */
     public synchronized Set<String> proposalNumbers() {
         return Set.copyOf(proposalNumbers);
+    }
+
+    /** 本轮各工具返回值的指标块（已渲染，按工具执行顺序去重）。 */
+    public synchronized List<String> metricBlocks() {
+        return List.copyOf(metricBlocks);
     }
 }

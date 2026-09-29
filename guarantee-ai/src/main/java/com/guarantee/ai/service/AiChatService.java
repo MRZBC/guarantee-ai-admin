@@ -7,6 +7,7 @@ import com.guarantee.ai.time.TimeRange;
 import com.guarantee.ai.time.TimeSemanticParser;
 import com.guarantee.ai.tool.AiToolContextKeys;
 import com.guarantee.ai.tool.AiToolRegistry;
+import com.guarantee.ai.tool.DataMetrics;
 import com.guarantee.ai.tool.ToolCallEvent;
 import com.guarantee.ai.tool.ToolCallEventSink;
 import com.guarantee.ai.tool.TurnFacts;
@@ -164,6 +165,7 @@ public class AiChatService {
     private final ProposalEventPublisher proposalEventPublisher;
     private final ProposalClaimGuard proposalClaimGuard;
     private final DataSourceClaimGuard dataSourceClaimGuard;
+    private final NumberClaimGuard numberClaimGuard;
     private final ObjectMapper objectMapper;
     private final String modelName;
 
@@ -176,6 +178,7 @@ public class AiChatService {
                          ProposalEventPublisher proposalEventPublisher,
                          ProposalClaimGuard proposalClaimGuard,
                          DataSourceClaimGuard dataSourceClaimGuard,
+                         NumberClaimGuard numberClaimGuard,
                          ObjectMapper objectMapper,
                          @Value("${spring.ai.openai.chat.model:unknown}") String modelName) {
         this.chatModel = chatModel;
@@ -187,6 +190,7 @@ public class AiChatService {
         this.proposalEventPublisher = proposalEventPublisher;
         this.proposalClaimGuard = proposalClaimGuard;
         this.dataSourceClaimGuard = dataSourceClaimGuard;
+        this.numberClaimGuard = numberClaimGuard;
         this.objectMapper = objectMapper;
         this.modelName = modelName;
     }
@@ -403,7 +407,8 @@ public class AiChatService {
      *   <li><b>提案编号白名单</b>（{@link ProposalNumberGuard}）——正文里的编号必须来自本轮
      *       工具真实返回，或用户自己打出来的串；其余一律移除并留下系统提示；</li>
      *   <li><b>追加服务端口径页脚</b>（{@link DataSourceClaimGuard#footer}）——口径的唯一出口；</li>
-     *   <li>追加兜底纠正（编造提案 / 零工具却有口径行 / 空回答）。</li>
+     *   <li><b>追加服务端数据摘要</b>（{@link DataMetrics}）——已登记指标的权威数值，数值溯源出口；</li>
+     *   <li>追加兜底纠正（编造提案 / 零工具却有口径行 / 零工具却有业务数字 / 空回答）。</li>
      * </ol>
      *
      * <p><b>为什么"改写过"就要 reset 重发</b>：正文是流式下发的，前端此时已经显示了被移除的
@@ -424,6 +429,7 @@ public class AiChatService {
         String produced = answer.toString();
         List<String> corrections = new ArrayList<>(3);
         boolean proposalClaimFlagged = false;
+        boolean dataSourceClaimFlagged = false;
         if (produced.isBlank()) {
             /*
               ③ 空回答兜底：无论什么原因，都不能让用户对着空气泡。
@@ -440,8 +446,17 @@ public class AiChatService {
                     })
                     .orElse(false);
             // ② 本轮零工具调用却出现「口径：」行。必须在剥离之前判定，否则证据已经被自己删掉
-            dataSourceClaimGuard.correctionFor(produced, toolsExecuted.get())
-                    .ifPresent(corrections::add);
+            dataSourceClaimFlagged = dataSourceClaimGuard.correctionFor(produced, toolsExecuted.get())
+                    .map(text -> {
+                        corrections.add(text);
+                        return true;
+                    })
+                    .orElse(false);
+            // ②-b 本轮零工具调用却直接给出业务数字（不写口径行的形态）。
+            //     与 ② 说的是同一件事，已判过就不再补第二段系统提示。
+            if (!dataSourceClaimFlagged) {
+                numberClaimGuard.correctionFor(produced, toolsExecuted.get()).ifPresent(corrections::add);
+            }
         }
 
         // 服务端接管事实：先剥离模型自写的口径行，再按白名单校验提案编号
@@ -472,13 +487,15 @@ public class AiChatService {
         }
 
         /*
-          服务端口径页脚：只在本轮有真实工具返回值时追加。
+          服务端口径页脚 + 数据摘要：只在本轮有真实工具返回值时追加。
           正文为空（空回答兜底）时不追加——那段文案刻意不带口径行，带上反而像"有数据"。
-          做法与 {@link #emptyAnswerNotice} 的注释一致：没有对应的工具返回值，就不给口径。
+          摘要里的数值全部来自工具返回值、字段名与单位在 DataMetrics 里登记过，
+          因此"权威数字"不再经过模型的手（数值溯源的服务端出口）。
         */
         StringBuilder tail = new StringBuilder();
         if (!sanitized.isBlank()) {
             tail.append(DataSourceClaimGuard.footer(turnFacts.dataSources()));
+            tail.append(DataMetrics.renderAll(turnFacts.metricBlocks()));
         }
         tail.append(String.join("", corrections));
 

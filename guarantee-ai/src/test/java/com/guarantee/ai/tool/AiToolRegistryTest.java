@@ -63,7 +63,8 @@ class AiToolRegistryTest {
                         mock(RoleService.class)),
                 new InsuranceTypeProposalTool(mock(ProposalService.class), mock(AiDataScopeResolver.class),
                         mock(InsuranceTypeService.class)),
-                mock(AiToolCallRecorder.class));
+                mock(AiToolCallRecorder.class),
+                new tools.jackson.databind.ObjectMapper());
     }
 
     /** ADMIN 的全部权限（与 PermissionCatalog 的矩阵一致）。 */

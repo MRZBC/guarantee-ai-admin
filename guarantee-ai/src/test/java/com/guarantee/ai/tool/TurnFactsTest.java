@@ -143,5 +143,29 @@ class TurnFactsTest {
 
         assertThat(facts.dataSources()).isEmpty();
         assertThat(facts.proposalNumbers()).isEqualTo(Set.of());
+        assertThat(facts.metricBlocks()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("指标块随事实一起收集（数值溯源的服务端出口）")
+    void collectsMetricBlocks() {
+        TurnFacts facts = new TurnFacts();
+
+        facts.merge(TurnFacts.extract("""
+                {"orderCount":12,"guaranteeAmount":100.5,"dataSource":"订单统计 · 全量"}""", mapper));
+        facts.merge(TurnFacts.extract("""
+                {"orderCount":12,"guaranteeAmount":100.5,"dataSource":"订单统计 · 全量"}""", mapper));
+
+        assertThat(facts.metricBlocks())
+                .as("同一份数据只渲染一次")
+                .hasSize(1);
+        assertThat(facts.metricBlocks().get(0)).contains("- 订单量：12 笔");
+    }
+
+    @Test
+    @DisplayName("没有已登记指标的返回值不产生指标块")
+    void noMetricBlockWhenNothingRegistered() {
+        assertThat(TurnFacts.extract("""
+                {"meta":{"dataSource":"我的待确认提案"}}""", mapper).metricBlocks()).isEmpty();
     }
 }
