@@ -45,7 +45,7 @@ class TurnMetricServiceTest {
     @BeforeEach
     void setUp() {
         mapper = mock(AiTurnMetricMapper.class);
-        service = new TurnMetricService(mapper, FIXED_CLOCK);
+        service = TurnMetricService.withClock(mapper, FIXED_CLOCK);
     }
 
     private static AiTurnMetric sampleMetric() {

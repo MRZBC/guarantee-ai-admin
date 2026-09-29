@@ -45,16 +45,28 @@ public class TurnMetricService {
     public static final int MAX_TOP_LIMIT = 20;
 
     private final AiTurnMetricMapper mapper;
-    private final Clock clock;
+
+    /**
+     * 查询时间窗口用的时钟。
+     *
+     * <p><b>为什么是字段而不是构造器参数</b>：本类原先有两个构造器且都没标注，
+     * Spring 无法判断用哪个 → "找不到可用的实例化构造器" → 整机启动失败（已实测）。
+     * 而把 {@code Clock} 作为构造器参数同样不行——容器里**没有** {@code Clock} bean，
+     * 会换成另一个启动失败（NoSuchBeanDefinition）。
+     * 因此这里保持**唯一一个公开构造器**（Spring 单构造器无需任何注解，天然无歧义），
+     * 时钟做成包内可替换字段：单测用 {@link #withClock} 注入固定时钟。</p>
+     */
+    Clock clock = Clock.systemDefaultZone();
 
     public TurnMetricService(AiTurnMetricMapper mapper) {
-        this(mapper, Clock.systemDefaultZone());
+        this.mapper = mapper;
     }
 
-    /** 可注入时钟：让"近 24h / 7d"的时间窗口在单测里可判定。 */
-    public TurnMetricService(AiTurnMetricMapper mapper, Clock clock) {
-        this.mapper = mapper;
-        this.clock = clock == null ? Clock.systemDefaultZone() : clock;
+    /** 测试/嵌入用：指定时钟的实例（不参与 Spring 装配，避免引入并不存在的 Clock bean）。 */
+    static TurnMetricService withClock(AiTurnMetricMapper mapper, Clock clock) {
+        TurnMetricService service = new TurnMetricService(mapper);
+        service.clock = clock == null ? Clock.systemDefaultZone() : clock;
+        return service;
     }
 
     // ==================================================================

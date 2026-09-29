@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  MCP 凭据 Mapper（REQ-MCP-02）。
+  约定：
+    · 明文永不入库：只有 token_hash（SHA-256 十六进制）与 token_prefix（展示用）；
+    · 鉴权唯一入口是 selectByHash（走 uk_ai_mcp_token_hash 唯一索引）；
+    · 所有语句显式带 is_deleted = 0（与既有受管表 mapper 同款写法）；
+    · revoke 带 revoked_at IS NULL：重复撤销影响 0 行，可区分"撤销成功"与"本就已撤销"；
+    · touchLastUsed 只更新 last_used_at，绝不延长 expires_at（否则"最后使用"会变成续期开关）。
+-->
+<mapper namespace="com.guarantee.ai.mcp.mapper.McpTokenMapper">
+
+    <sql id="columns">
+        id, service_account_id, token_prefix, token_hash, permissions, expires_at, last_used_at,
+        revoked_at, revoked_by, created_by, created_at, is_deleted, deleted_at, deleted_by
+    </sql>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO ai_mcp_token
+            (service_account_id, token_prefix, token_hash, permissions, expires_at, created_by)
+        VALUES
+            (#{serviceAccountId}, #{tokenPrefix}, #{tokenHash}, #{permissions}, #{expiresAt}, #{createdBy})
+    </insert>
+
+    <select id="selectByHash" resultType="com.guarantee.ai.mcp.McpToken">
+        SELECT <include refid="columns"/>
+          FROM ai_mcp_token
+         WHERE token_hash = #{tokenHash}
+           AND is_deleted = 0
+         LIMIT 1
+    </select>
+
+    <select id="selectById" resultType="com.guarantee.ai.mcp.McpToken">
+        SELECT <include refid="columns"/>
+          FROM ai_mcp_token
+         WHERE id = #{id}
+           AND is_deleted = 0
+    </select>
+
+    <select id="selectAll" resultType="com.guarantee.ai.mcp.McpToken">
+        SELECT <include refid="columns"/>
+          FROM ai_mcp_token
+         WHERE is_deleted = 0
+         ORDER BY id DESC
+    </select>
+
+    <update id="revoke">
+        UPDATE ai_mcp_token
+           SET revoked_at = #{revokedAt},
+               revoked_by = #{revokedBy}
+         WHERE id = #{id}
+           AND revoked_at IS NULL
+           AND is_deleted = 0
+    </update>
+
+    <update id="revokeByServiceAccount">
+        UPDATE ai_mcp_token
+           SET revoked_at = #{revokedAt},
+               revoked_by = #{revokedBy}
+         WHERE service_account_id = #{serviceAccountId}
+           AND revoked_at IS NULL
+           AND is_deleted = 0
+    </update>
+
+    <update id="touchLastUsed">
+        UPDATE ai_mcp_token
+           SET last_used_at = #{lastUsedAt}
+         WHERE id = #{id}
+           AND is_deleted = 0
+    </update>
+
+</mapper>
