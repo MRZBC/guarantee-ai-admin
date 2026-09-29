@@ -262,6 +262,27 @@ class AiObservabilityIT {
         // 工具调用数为 0（根本没走到工具执行）
         assertThat(((Number) metric.get("rounds")).intValue()).isEqualTo(1);
         assertThat(((Number) metric.get("tool_calls")).intValue()).isZero();
+
+        /*
+          D4 / AC-CFG-09「每轮可追溯」在**失败轮**也必须成立：ai_conversation 的
+          prompt_version / config_version 是"最近一次回答所用的版本"，失败轮同样是一次回答尝试。
+          修复前只有成功收尾（finishTurn）才写这两列，失败轮永远为空 → 第一轮就失败时
+          这一列从头到尾都是 NULL，回溯链断在半路。
+          prompt_version 允许为 NULL（DB 无发布版 = 用 classpath 内置提示词，这本身是事实），
+          但 config_version 一定来自本轮快照，必须非空且 > 0。
+        */
+        Map<String, Object> versionTrace = jdbc.queryForMap(
+                "SELECT prompt_version, config_version FROM ai_conversation WHERE id = ?", conversationId);
+        assertThat(versionTrace.get("config_version"))
+                .as("失败轮必须回填 config_version（本轮快照的版本号）")
+                .isNotNull();
+        assertThat(((Number) versionTrace.get("config_version")).longValue()).isGreaterThan(0L);
+        Object promptVersion = versionTrace.get("prompt_version");
+        if (promptVersion != null) {
+            assertThat(((Number) promptVersion).intValue())
+                    .as("prompt_version 一旦有值就必须是正版本号（normalizePromptVersion 的口径）")
+                    .isGreaterThan(0);
+        }
     }
 
     // ==================================================================

@@ -487,6 +487,15 @@ public class AiChatService {
             conversationService.audit(conversationId, userId, "ERROR", safeMessage(ex));
             // 出错轮也必须留下成本日志与指标行（REQ-BA-11 / REQ-MCP-09：含失败）；logged 保证一轮只写一条
             finishTurnCost(null, conversationId, userId, config, cost, budget, AiTurnMetric.OUTCOME_ERROR);
+            /*
+              出错轮同样要记"这一轮用的是哪一版配置 + 哪一版提示词"（REQ-CFG-05 / AC-CFG-09）：
+              该列的语义是"**最近一次回答**的版本回溯"，失败轮也是一次回答尝试；只写成功轮会让
+              "最近一次回答"在失败后指向更早的那一轮（甚至一直空着，回调链断在半路）。
+              两者在出错路径上都拿得到：conversationId 来自 resolveOrCreate（第 356 行，失败前已就绪），
+              config 是本轮快照，cost.promptVersion() 由 bindTurn（第 403 行）在**错误发生之前**绑定。
+              与成功路径一致：写失败只告警，不影响错误事件本身。
+            */
+            recordConfigVersion(conversationId, config.version(), cost.promptVersion());
             return Flux.just(event("error", new ChatStreamEvents.Error(safeMessage(ex))));
         });
 
@@ -1608,7 +1617,7 @@ public class AiChatService {
             log.info("{} traceId={} conversationId={} rounds={} toolCalls={} toolCostMs={} inputTokens={} "
                             + "outputTokens={} totalCostMs={} capped={} capReason={} source={} outcome={}",
                     COST_LOG_TAG, traceId.get(), conversationId, modelRounds.get(), toolCalls, toolCostMs.get(),
-                    inputTokens.get(), outputTokens.get(), elapsedMs(), capReason.get(),
+                    inputTokens.get(), outputTokens.get(), elapsedMs(), capped(), capReason.get(),
                     AiTurnMetric.SOURCE_CHAT, outcome);
             return true;
         }

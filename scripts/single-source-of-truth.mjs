@@ -138,11 +138,20 @@ function collectReport(kind) {
       const file = path.join(dir, entry);
       const parsed = parseTestSuiteXml(file);
       if (!parsed) continue;
-      suites.push(parsed);
       const mtime = fs.statSync(file).mtimeMs;
+      suites.push({ ...parsed, kind, mtimeMs: mtime });
       if (mtime > newest) newest = mtime;
     }
   }
+  return {
+    kind,
+    reportDirs: dirs.map(rel),
+    suites: suites.sort((a, b) => a.suite.localeCompare(b.suite)),
+    newest,
+  };
+}
+
+function totalsOf(suites) {
   const totals = suites.reduce(
     (acc, s) => ({
       tests: acc.tests + s.tests,
@@ -153,11 +162,98 @@ function collectReport(kind) {
     }),
     { tests: 0, failures: 0, errors: 0, skipped: 0, timeSeconds: 0 },
   );
+  const newest = suites.reduce((max, s) => Math.max(max, s.mtimeMs ?? 0), 0);
+  return { ...totals, classes: suites.length, newnessMs: newest };
+}
+
+/**
+ * 一个测试类**应当**由哪个插件产出报告。
+ *
+ * <p>判据直接对齐 `pom.xml` 的配置，而不是"谁的文件更新"或"failsafe 优先"——后两者都会数错：</p>
+ * <ul>
+ *   <li>surefire：`<exclude>**\/*IT.java</exclude>` → **类名不以 `IT` 结尾**的测试（含
+ *       `*Test`、`*IntegrationTest`，后者的实例：`LogicalDeleteSchemaIntegrationTest`、
+ *       `DataScopeIntegrationTest`，它们确实跑在 `mvn test` 阶段）；</li>
+ *   <li>failsafe：`<include>**\/*IT.java</include>` → **类名以 `IT` 结尾**的测试。</li>
+ * </ul>
+ *
+ * <p>于是"同一类在两个目录都有 XML"只可能是以下两种**非本次构建的产物**：
+ * ① 目标目录残留了旧构建（surefire 不清理 `surefire-reports`，实测 `guarantee-web` 里
+ * 躺着 21 个 03:1x 的 `*IT` XML，直接相加会虚增 88）；
+ * ② 有人用 `-Dit.test=...` 把某个 `*IntegrationTest` 也塞进 failsafe 跑过一次。</p>
+ */
+function reportOwnerByClassName(suiteName) {
+  return /IT$/.test(suiteName) ? 'failsafe' : 'surefire';
+}
+
+function collectTests() {
+  const rawUnit = collectReport('surefire');
+  const rawIntegration = collectReport('failsafe');
+
+  // 归属归一：只保留"类名约定所指插件"的那份报告，另一份按残留丢弃（同类多份取 mtime 最新）。
+  const chosen = new Map();
+  const dropped = [];
+  for (const suite of [...rawUnit.suites, ...rawIntegration.suites]) {
+    const owner = reportOwnerByClassName(suite.suite);
+    if (suite.kind !== owner) {
+      dropped.push({
+        suite: suite.suite,
+        droppedKind: suite.kind,
+        keptKind: owner,
+        droppedFile: suite.file,
+        droppedTests: suite.tests,
+      });
+      continue;
+    }
+    const previous = chosen.get(suite.suite);
+    if (!previous || suite.mtimeMs >= previous.mtimeMs) {
+      if (previous) {
+        dropped.push({
+          suite: suite.suite,
+          droppedKind: previous.kind,
+          keptKind: suite.kind,
+          droppedFile: previous.file,
+          droppedTests: previous.tests,
+        });
+      }
+      chosen.set(suite.suite, suite);
+    }
+  }
+
+  const keptAll = [...chosen.values()];
+  const unitSuites = keptAll.filter((s) => s.kind === 'surefire');
+  const integrationSuites = keptAll.filter((s) => s.kind === 'failsafe');
+
+  const unit = { kind: 'surefire', reportDirs: rawUnit.reportDirs, suites: unitSuites, totals: totalsOf(unitSuites) };
+  const integration = {
+    kind: 'failsafe',
+    reportDirs: rawIntegration.reportDirs,
+    suites: integrationSuites,
+    totals: totalsOf(integrationSuites),
+  };
+
+  const newestReport = Math.max(unit.totals.newnessMs, integration.totals.newnessMs);
+  const newestSource = newestSourceMtime();
+  const hasReports = keptAll.length > 0;
   return {
-    kind,
-    reportDirs: dirs.map(rel),
-    suites: suites.sort((a, b) => a.suite.localeCompare(b.suite)),
-    totals: { ...totals, classes: suites.length, newnessMs: newest },
+    unit,
+    integration,
+    total: {
+      tests: unit.totals.tests + integration.totals.tests,
+      failures: unit.totals.failures + integration.totals.failures,
+      errors: unit.totals.errors + integration.totals.errors,
+      skipped: unit.totals.skipped + integration.totals.skipped,
+      classes: unit.totals.classes + integration.totals.classes,
+    },
+    dedup: {
+      droppedSuites: dropped.length,
+      droppedTests: dropped.reduce((sum, d) => sum + d.droppedTests, 0),
+      rule: '按类名归属去重：类名以 IT 结尾归 failsafe（surefire 排除 **/*IT.java），其余归 surefire（failsafe 只 include **/*IT.java）',
+      details: dropped.sort((a, b) => a.suite.localeCompare(b.suite)),
+    },
+    newestReportAt: newestReport > 0 ? new Date(newestReport).toISOString() : null,
+    newestSourceAt: newestSource > 0 ? new Date(newestSource).toISOString() : null,
+    stale: hasReports && newestReport > 0 && newestSource > newestReport,
   };
 }
 
@@ -179,28 +275,6 @@ function newestSourceMtime() {
     }
   }
   return newest;
-}
-
-function collectTests() {
-  const unit = collectReport('surefire');
-  const integration = collectReport('failsafe');
-  const newestReport = Math.max(unit.totals.newnessMs, integration.totals.newnessMs);
-  const newestSource = newestSourceMtime();
-  const hasReports = unit.totals.classes + integration.totals.classes > 0;
-  return {
-    unit,
-    integration,
-    total: {
-      tests: unit.totals.tests + integration.totals.tests,
-      failures: unit.totals.failures + integration.totals.failures,
-      errors: unit.totals.errors + integration.totals.errors,
-      skipped: unit.totals.skipped + integration.totals.skipped,
-      classes: unit.totals.classes + integration.totals.classes,
-    },
-    newestReportAt: newestReport > 0 ? new Date(newestReport).toISOString() : null,
-    newestSourceAt: newestSource > 0 ? new Date(newestSource).toISOString() : null,
-    stale: hasReports && newestReport > 0 && newestSource > newestReport,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -335,6 +409,9 @@ function renderMarkdown(data) {
   l.push(`- 源码最新改动：${fmtMs(data.tests.newestSourceAt)}`);
   l.push(
     `- 是否早于源码（stale）：**${data.tests.stale ? '是 —— 引用前必须先跑 mvn verify' : '否'}**`,
+  );
+  l.push(
+    `- 跨类别去重：${data.tests.dedup.rule}；本次丢弃 **${data.tests.dedup.droppedSuites}** 份陈旧 XML（涉及 ${data.tests.dedup.droppedTests} 个用例）`,
   );
   l.push('');
   l.push('## 2. 评测集条数');

@@ -56,6 +56,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -102,12 +103,18 @@ class AiChatServiceBudgetGuardTest {
     private ScriptedChatModel model;
     private RecordingTestTool tool;
     private AiChatService service;
+    /** 提示词版本提供者：用于 stub 本轮"实际生效"的提示词版本（版本回溯断言）。 */
+    private BusinessAssistantPrompt promptProvider;
+    /** 配置快照来源：D4 断言"回填的正是本轮快照的版本号"。 */
+    private AiConfigService configService;
+    /** 版本回溯写入的出口（D4：失败轮也必须回填 prompt_version/config_version）。 */
+    private com.guarantee.ai.mapper.AiConversationMapper conversationMapper;
 
     @BeforeEach
     void setUp() {
         CurrentUser.clear();
         conversationService = mock(AiConversationService.class);
-        BusinessAssistantPrompt promptProvider = mock(BusinessAssistantPrompt.class);
+        promptProvider = mock(BusinessAssistantPrompt.class);
         TimeSemanticParser timeSemanticParser = mock(TimeSemanticParser.class);
         AiToolRegistry toolRegistry = mock(AiToolRegistry.class);
         ProposalEventPublisher proposalEventPublisher = mock(ProposalEventPublisher.class);
@@ -145,8 +152,9 @@ class AiChatServiceBudgetGuardTest {
                 mock(ProposalClaimGuard.class),
                 mock(DataSourceClaimGuard.class),
                 mock(NumberClaimGuard.class),
-                new ObjectMapper(), defaultConfigService(),
-                mock(com.guarantee.ai.mapper.AiConversationMapper.class), "test-model", fakeNanos::get);
+                new ObjectMapper(), configService = defaultConfigService(),
+                conversationMapper = mock(com.guarantee.ai.mapper.AiConversationMapper.class),
+                "test-model", fakeNanos::get);
     }
 
     @AfterEach
@@ -187,8 +195,9 @@ class AiChatServiceBudgetGuardTest {
                     .contains("toolCostMs=")
                     .contains("inputTokens=")
                     .contains("outputTokens=")
-                    .contains("totalCostMs=")
-                    .contains("capped=none");
+                    .contains("totalCostMs=");
+            // D3：不仅"有这些键"，还要**逐键对齐**（模板 13 个占位符 ↔ 13 个实参）
+            assertCostLogTailAligned(costLine, "false", "none", "CHAT", "SUCCESS");
         } finally {
             detachCostAppender(logs);
         }
@@ -220,7 +229,7 @@ class AiChatServiceBudgetGuardTest {
             assertThat(events).as("不得把这条路径报成错误").noneMatch(e -> "error".equals(e.event()));
             assertThat(events).anyMatch(e -> "done".equals(e.event()));
 
-            assertThat(onlyCostLine(logs)).contains("capped=tool_limit");
+            assertCostLogTailAligned(onlyCostLine(logs), "true", "tool_limit", "CHAT", "CAPPED");
         } finally {
             detachCostAppender(logs);
         }
@@ -255,11 +264,73 @@ class AiChatServiceBudgetGuardTest {
             assertThat(costLine)
                     .contains("conversationId=" + CONVERSATION_ID)
                     .contains("rounds=3")
-                    .contains("toolCalls=1")
-                    .contains("capped=duration");
+                    .contains("toolCalls=1");
+            assertCostLogTailAligned(costLine, "true", "duration", "CHAT", "CAPPED");
         } finally {
             detachCostAppender(logs);
         }
+    }
+
+    // ==================================================================
+    // D3 / D4：成本日志字段对齐 + 失败轮版本回溯
+    // ==================================================================
+
+    @Test
+    @DisplayName("D3 失败路径：AI_TURN_COST 的 capped/capReason/source/outcome 四键逐键对齐（实参错位会被这条抓住）")
+    void failingTurnCostLogFieldsAreAligned() {
+        model.setFailure(new IllegalStateException("脚本化模型故障（D3 对齐用例）"));
+        ListAppender<ILoggingEvent> logs = attachCostAppender();
+        try {
+            List<ServerSentEvent<String>> events = chat();
+
+            assertThat(events).as("失败轮必须有 error 事件").anyMatch(e -> "error".equals(e.event()));
+
+            String costLine = onlyCostLine(logs);
+            // 修复前实测：capped=none capReason=CHAT source=ERROR outcome={}
+            //（模板 13 个占位符只传 12 个实参，从 capped 起整体错位）
+            assertCostLogTailAligned(costLine, "false", "none", "CHAT", "ERROR");
+            assertThat(costLine).as("错位形态：占位符没被填掉").doesNotContain("outcome={}");
+            assertThat(costLine)
+                    .as("错位形态：把 capReason 的值塞进了 capped")
+                    .doesNotContain("capped=none", "capped=rounds", "capped=duration", "capped=tool_limit");
+        } finally {
+            detachCostAppender(logs);
+        }
+    }
+
+    @Test
+    @DisplayName("D4 失败轮也回填 prompt_version/config_version（用本轮快照的版本号，不是上一轮的）")
+    void failingTurnBackfillsVersionTrace() {
+        model.setFailure(new IllegalStateException("脚本化模型故障（D4 版本回溯用例）"));
+        when(promptProvider.activeVersionNo()).thenReturn(5);
+
+        chat();
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<Long> configVersion = org.mockito.ArgumentCaptor.forClass(Long.class);
+        verify(conversationMapper).updateVersionTrace(eq(CONVERSATION_ID), eq(5), configVersion.capture());
+        assertThat(configVersion.getValue())
+                .as("config_version 必须是**本轮快照的版本号**（不是 null、也不是上一轮的值）")
+                .isNotNull()
+                .isEqualTo(configService.snapshot().version());
+    }
+
+    /**
+     * D3 的核心断言：AI_TURN_COST 尾部四键必须**逐键**取到正确值。
+     *
+     * <p>为什么不能用 {@code contains("capped=none")} 这类单键断言：历史缺陷正是"键在、值错位"——
+     * 模板 13 个占位符只传了 12 个实参，于是 {@code capped} 拿到了 capReason、{@code capReason}
+     * 拿到了 source、{@code source} 拿到了 outcome、{@code outcome} 拿到了没被替换的 {@code {}}。
+     * 单键 {@code contains} 全部照样通过（实测 {@code capped=duration} 就是这么过的），
+     * 只有"按键取值 + 校验相邻顺序"才能抓住。</p>
+     */
+    private static void assertCostLogTailAligned(String costLine, String capped, String capReason,
+                                                 String source, String outcome) {
+        assertThat(costLine)
+                .as("AI_TURN_COST 尾部四键必须按模板顺序逐键对齐：capped / capReason / source / outcome")
+                .containsPattern("capped=" + capped + " capReason=" + capReason
+                        + " source=" + source + " outcome=" + outcome);
+        assertThat(costLine).as("占位符必须全部被替换").doesNotContain("{}");
     }
 
     // ==================================================================
@@ -283,9 +354,15 @@ class AiChatServiceBudgetGuardTest {
         private volatile int toolCallsPerRound = 1;
         private volatile int maxToolRequestRounds = MAX_ROUNDS;
         private volatile long advanceNanosPerCall;
+        /** 置非空即模拟"模型流式失败"，用于错误路径（成本日志 outcome=ERROR 与版本回溯）。 */
+        private volatile RuntimeException failure;
 
         private ScriptedChatModel(AtomicLong clock) {
             this.clock = clock;
+        }
+
+        void setFailure(RuntimeException failure) {
+            this.failure = failure;
         }
 
         void setToolCallsPerRound(int count) {
@@ -328,6 +405,9 @@ class AiChatServiceBudgetGuardTest {
 
         @Override
         public Flux<ChatResponse> stream(Prompt prompt) {
+            if (failure != null) {
+                return Flux.error(failure);
+            }
             boolean hasTools = hasTools(prompt);
             boolean requestTools = false;
             if (hasTools) {
