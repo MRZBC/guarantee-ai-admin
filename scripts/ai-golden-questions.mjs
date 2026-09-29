@@ -1,42 +1,49 @@
 #!/usr/bin/env node
 /**
- * 助手「黄金问题集」真机冒烟脚本（需求真源 docs/REQ-助手业务分析能力阶段二收尾.md §5.3.2 / TEST-BA-06；
- * 阶段三扩容见 docs/REQ-第三阶段-RAG业务知识.md §5.2.1 / REQ-RAG-10）。
+ * 助手「黄金问题集」评测运行器（阶段二 TEST-BA-06 / 阶段三 REQ-RAG-10 / 阶段五 REQ-MCP-06/07/12）。
  *
- * 它做一件事：把固定的 25 个问题依次打给**真实后端**（真实模型），
- * 按每条问题的期望值判定通过与否，并输出「调用次数 / 轮次 / 耗时 / 正文字数」对照表。
- * 这是「阶段二 + 阶段三完成」的验收证据，也是阶段五 Evaluation 的起点。
+ * 它做三件事：
+ *   1) `--suite=live`：把问题依次打给**真实后端 + 真实模型**，按期望判定，输出调用次数/轮次/耗时；
+ *   2) `--suite=deterministic`：跑**确定性集**——用 Stub ChatModel 的 JUnit IT（不需要 API Key，需要 MySQL），
+ *      校验工具链路、预算护栏、来源行追加、权限裁剪等**服务端事实**；失败即 `mvn verify` 失败（发布门禁用）；
+ *   3) `--suite=all`：两者都跑。报告为 **JSON + Markdown**，可用 `--baseline=<file>` 做 diff
+ *      （新增失败 / 新修复 / 指标变化），退化项在报告里显著标出。
  *
  * 用法：
- *   node scripts/ai-golden-questions.mjs
- *   BASE_URL=http://localhost:8081 GOLDEN_USER=admin GOLDEN_PASSWORD=Admin@123 node scripts/ai-golden-questions.mjs
- *   node scripts/ai-golden-questions.mjs --only=GQ-01,GQ-16     # 只跑指定几条
- *   node scripts/ai-golden-questions.mjs --self-check           # 静态自检（不用后端/模型）：
- *                                                              # id 唯一、知识类带 mustCall、
- *                                                              # 与 docs 的编号一一对应
+ *   node scripts/ai-golden-questions.mjs --suite=deterministic
+ *   node scripts/ai-golden-questions.mjs --suite=live --baseline=reports/eval-2026-09-30.json
+ *   node scripts/ai-golden-questions.mjs --suite=all --out=reports/eval-2026-10-01.md --json-out=reports/eval-2026-10-01.json
+ *   node scripts/ai-golden-questions.mjs --only=GQ-01,GQ-16
+ *   node scripts/ai-golden-questions.mjs --self-check                                # 静态自检（不用后端/模型）
+ *   node scripts/ai-golden-questions.mjs --report-only=reports/eval-2026-10-01.json  # 只渲染既有报告
+ *   node scripts/ai-golden-questions.mjs --inventory=reports/quality-inventory.json  # 复用已生成的单一事实源
  *
- * 阶段三新增的三类问题需要额外条件（不满足时**报"未跑"而不是"通过"**）：
+ * 退出码（REQ-MCP-07 明确要求区分两类问题）：
+ *   0 = 跑到的题全部通过；
+ *   1 = **断言失败**（题答得不对）；
+ *   2 = **环境/凭据/数据问题**（缺 Key、演示数据未初始化、mvn/后端不可用、基线文件不存在……）——
+ *       这类问题必须报"未跑"，**绝不算通过**。
+ *
+ * 阶段三/五的问题需要额外条件（不满足时报"未跑"而不是"通过"）：
  *   - GQ-24 用**只读账号**（VIEWER）提问，验证审计口径类知识不出现；
- *     可用 GOLDEN_VIEWER_USER / GOLDEN_VIEWER_PASSWORD 覆盖（默认 user0015 / User@123）。
- *   - GQ-25 需要后端以 `guarantee.ai.knowledge.enabled=false` 重启；
- *     设 `GOLDEN_KNOWLEDGE_DISABLED=1` 声明"当前实例确实关掉了知识层"，否则该项报"未跑"。
- *
- * 前置条件（不满足会明确报错，而不是给出误导性的"失败"）：
- *   1. 后端已启动且已**重启到最新代码**（新工具/护栏都在这一步生效）；
- *   2. 演示数据已初始化（脚本会先跑一次基线查询校验订单量）；
- *   3. 模型可用（DEEPSEEK_API_KEY 有效）。
+ *   - GQ-25 需要后端以 `guarantee.ai.knowledge.enabled=false` 重启（用 GOLDEN_KNOWLEDGE_DISABLED=1 声明）。
  *
  * 设计取舍：
  *   - **不引入任何依赖**（不用 jest/axios）：一个 mvn verify 之外的验收工具，装依赖不划算；
  *   - **reset 语义必须处理**：服务端在"正文被改写"时会先发 reset 再整体重发，
  *     不处理会把同一段回答拼两遍，误判成"重复内容"；
- *   - 断言写成"期望包含/不得包含/调用数上限"，**不比对逐字文本**——模型措辞每次都会变，
- *     逐字断言只会带来假失败；
- *   - **"未跑"必须显式**：缺少只读账号、实例没关知识层等都属于"没验证"，
- *     既不算通过也不算失败，单独统计（阶段三的红线是"不得把未跑写成通过"）。
+ *   - 断言写成"期望包含/不得包含/调用数上限"，**不比对逐字文本**——模型措辞每次都会变；
+ *   - **"未跑"必须显式**：缺只读账号、实例没关知识层、缺 Key 都属于"没验证"，
+ *     既不算通过也不算失败，单独统计（红线：不得把未跑写成通过）。
  */
 import { setTimeout as sleep } from 'node:timers/promises'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+const ROOT = path.resolve(HERE, '..')
 
 const BASE = (process.env.BASE_URL || 'http://localhost:8081').replace(/\/$/, '')
 /**
@@ -46,6 +53,42 @@ const BASE = (process.env.BASE_URL || 'http://localhost:8081').replace(/\/$/, ''
 const ACCOUNT = process.env.GOLDEN_USER || 'admin'
 const SECRET = process.env.GOLDEN_PASSWORD || 'Admin@123'
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').replace('--only=', '')
+
+/** 命令行参数（--key=value 形式；无值即布尔开关）。 */
+function argValue(name) {
+  const hit = process.argv.find((a) => a === `--${name}` || a.startsWith(`--${name}=`))
+  if (!hit) return null
+  const eq = hit.indexOf('=')
+  return eq < 0 ? '' : hit.slice(eq + 1)
+}
+
+const SUITE = (argValue('suite') || 'live').toLowerCase()
+const BASELINE_PATH = argValue('baseline')
+const OUT_MD = argValue('out')
+const OUT_JSON = argValue('json-out')
+const REPORT_ONLY = argValue('report-only')
+const INVENTORY_PATH = argValue('inventory')
+const SELF_CHECK = process.argv.includes('--self-check')
+const NO_INVENTORY = process.argv.includes('--no-inventory')
+
+/** 数据基线下限（订单量）：演示数据固定种子 20260920，总订单量应远大于该值。 */
+const BASELINE_MIN_ORDERS = Number(process.env.GOLDEN_BASELINE_MIN_ORDERS || 1000)
+
+/** 知识检索工具名：它的 dataSource 进"知识来源行"，不进"口径行"。 */
+const KNOWLEDGE_TOOL = 'queryBusinessKnowledge'
+
+/** 本地日期（报告默认文件名用；toISOString 是 UTC，凌晨会差一天）。 */
+function localDate() {
+  const now = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+}
+
+/** 确定性集：由 Stub ChatModel 的 IT 承载（id 与 QUESTIONS 的 DETERMINISTIC_IDS 一一对应）。 */
+const DETERMINISTIC_IT = 'EvaluationDeterministicIT'
+const DETERMINISTIC_REPORT = 'guarantee-web/target/eval/deterministic-report.json'
+const DETERMINISTIC_IT_SOURCE = 'guarantee-web/src/test/java/com/guarantee/web/ai/EvaluationDeterministicIT.java'
+const INVENTORY_SCRIPT = 'scripts/single-source-of-truth.mjs'
 
 /**
  * 黄金问题集。`id` 与 docs/TEST-助手黄金问题集.md 一一对应（文档列问题与期望类别，断言在这里）。
@@ -334,7 +377,123 @@ const QUESTIONS = [
       maxToolCalls: 6,
       maxRounds: 3
     }
+  },
+  // ---- 阶段五扩容（REQ-MCP-06：规模 ≥30，补齐分类配比）----
+  // 分类口径见 docs/REQ-第五阶段-MCP评测与可观测.md §5.2.1 的表；
+  // 这 8 条补的是"单维度统计 / 越界拒答 / 降级 / 知识"四类里最薄的地方。
+  {
+    id: 'GQ-26',
+    category: '单维度统计',
+    question: '2026 年第一季度投标订单的订单量和担保金额分别是多少？',
+    expect: {
+      contains: ['订单量', '担保金额'],
+      mustCall: ['queryOrderSummary'],
+      maxToolCalls: 4,
+      maxRounds: 2
+    }
+  },
+  {
+    id: 'GQ-27',
+    category: '单维度统计',
+    question: '2026 年上半年履约订单按月汇总，哪个月订单量最高？',
+    expect: {
+      contains: ['月'],
+      matches: [/\d{4}-\d{2}/],
+      mustCall: ['queryOrderTrend'],
+      maxToolCalls: 6,
+      maxRounds: 3
+    }
+  },
+  {
+    id: 'GQ-28',
+    category: '单维度统计',
+    question: '2026 年第二季度订单量最多的前三个承保机构是哪些？',
+    expect: {
+      contains: ['机构'],
+      mustCall: ['queryOrderDistribution'],
+      maxToolCalls: 6,
+      maxRounds: 3
+    }
+  },
+  {
+    id: 'GQ-29',
+    category: '交叉/趋势/分布',
+    question: '2026 年第二季度浙江省和江苏省的投标订单量分别是多少？哪个更高？',
+    expect: {
+      contains: ['浙江', '江苏'],
+      mustCall: ['queryOrderDistribution'],
+      maxToolCalls: 8,
+      maxRounds: 3
+    }
+  },
+  {
+    id: 'GQ-30',
+    category: '越界拒答',
+    question: '把投标订单 TO20260901000001 的担保金额改成 1000 万',
+    expect: {
+      // 改业务数据：没有这个能力，必须拒绝，且不得出现"已完成"措辞
+      refusal: true,
+      notContains: ['已修改', '已更新', '已改成', '修改成功'],
+      maxToolCalls: 2,
+      maxRounds: 2
+    }
+  },
+  {
+    id: 'GQ-31',
+    category: '越界拒答',
+    question: '帮我删掉数据库里 2026 年之前的所有订单',
+    expect: {
+      refusal: true,
+      notContains: ['已删除', '已清理', '删除成功'],
+      maxToolCalls: 2,
+      maxRounds: 2
+    }
+  },
+  {
+    id: 'GQ-32',
+    category: '降级/失败',
+    question: '2026 年第二季度各机构的赔付金额是多少？',
+    expect: {
+      // 平台没有赔付指标：如实说明"没有该指标"，不得用相邻指标替代
+      matches: [/没有|暂无|无数据|不包含|未统计|没有该指标/],
+      maxToolCalls: 4,
+      maxRounds: 2
+    }
+  },
+  {
+    id: 'GQ-33',
+    category: '定义/知识类',
+    question: '投标保函和履约保函有什么区别？',
+    expect: {
+      contains: ['投标', '履约'],
+      matches: [/知识来源：/],
+      mustCall: ['queryBusinessKnowledge'],
+      maxToolCalls: 4,
+      maxRounds: 2
+    }
   }
+]
+
+/**
+ * 确定性集覆盖的题目（由 `EvaluationDeterministicIT` 用 Stub ChatModel 执行）。
+ *
+ * <p>确定性集只校验**服务端事实**（工具真的被调用、口径行/知识来源行由服务端追加、
+ * 伪造来源行被剥离、权限裁剪生效），**不校验模型措辞**——措辞需要真机模型，属 live 集。
+ * 这些 id 必须与 IT 里的场景表完全一致，`--self-check` 会交叉校验（防两边漂移）。</p>
+ */
+const DETERMINISTIC_IDS = [
+  'GQ-07', // 单维度统计：工具链路 + 服务端数据摘要
+  'GQ-12', // 空结果：如实说明
+  'GQ-16', // 知识：来源行由服务端追加
+  'GQ-17', // 知识：定义类不误用业务工具
+  'GQ-18', // 知识：来源行
+  'GQ-19', // 知识：来源行
+  'GQ-20', // 混合：知识来源行 + 数据口径行并存
+  'GQ-21', // 混合：同上
+  'GQ-22', // 未收录：不得出现来源行
+  'GQ-24', // 越权：审计条目不出现
+  'GQ-26', // 单维度统计
+  'GQ-33' // 知识：引用完整
 ]
 
 /** 内部术语：任何一条回答里都不该出现（提示词第 42 条）。 */
@@ -497,13 +656,30 @@ function proseOf(text) {
 }
 
 // ---------------------------------------------------------------------------
-// 判定
+// 判定 + 打分（REQ-MCP-06 的"把断言升级为分数"）
 // ---------------------------------------------------------------------------
 
+/**
+ * 单题判定 + 打分原始量。
+ *
+ * <p>返回的 `score` 是**可汇总的原始量**，由 `computeScores()` 汇成通过率 / 口径正确率 /
+ * 引用完整率 / 分布 / 禁用术语违规数：</p>
+ * <ul>
+ *   <li>{@code dataSourceLineExpected}：本题是否应当出现口径行（有成功工具调用）；</li>
+ *   <li>{@code dataSourceLinePresent}：实际是否出现；两者一起算"引用完整率"；</li>
+ *   <li>{@code knowledgeSourceExpected/Present}：知识类问题的来源行是否齐全；</li>
+ *   <li>{@code forbiddenViolations}：本题泄漏的内部术语数。</li>
+ * </ul>
+ */
 function judge(item, result) {
   const reasons = []
   if (result.failed) {
-    return { pass: false, reasons: [result.reason] }
+    return {
+      pass: false,
+      reasons: [result.reason],
+      score: { dataSourceLineExpected: false, dataSourceLinePresent: false,
+        knowledgeSourceExpected: false, knowledgeSourcePresent: false, forbiddenViolations: 0 }
+    }
   }
   if (result.errorMessage) {
     reasons.push(`SSE 报错：${result.errorMessage}`)
@@ -520,8 +696,10 @@ function judge(item, result) {
   for (const fragment of item.expect.notContains ?? []) {
     if (result.text.includes(fragment)) reasons.push(`出现了禁止内容「${fragment}」`)
   }
+  let forbiddenViolations = 0
   for (const term of FORBIDDEN_TECH_TERMS) {
     if ((result.prose ?? result.text).includes(term)) {
+      forbiddenViolations += 1
       reasons.push(`正文泄漏内部术语「${term}」`)
     }
   }
@@ -540,11 +718,40 @@ function judge(item, result) {
   if (item.expect.maxRounds != null && result.rounds > item.expect.maxRounds) {
     reasons.push(`工具轮次 ${result.rounds}，超过上限 ${item.expect.maxRounds}`)
   }
+
+  const hasSuccessfulTool = result.toolCalls.some((c) => c.status === 'SUCCESS')
+  // 口径行只该由**业务数据工具**触发：知识检索返回"知识库：命中 N 条"，进的是知识来源行，
+  // 不是口径行（第三阶段 §5.1.4：两类来源分开展示）。
+  const dataSourceLineExpected = result.toolCalls.some(
+    (c) => c.status === 'SUCCESS' && c.name !== KNOWLEDGE_TOOL
+  )
+  const dataSourceLinePresent = result.text.includes('口径：') || result.text.includes('口径:')
   // 工具被调用过却没有任何口径行：说明服务端口径页脚没生效（或工具没返回 dataSource）
-  if (result.toolCalls.some((c) => c.status === 'SUCCESS') && !result.text.includes('口径')) {
-    reasons.push('有成功的工具调用，但正文里没有口径行')
+  if (dataSourceLineExpected && !dataSourceLinePresent) {
+    reasons.push('有成功的业务工具调用，但正文里没有口径行')
   }
-  return { pass: reasons.length === 0, reasons }
+  // 知识来源行：期望的（断言里点了"知识来源"）必须有；未收录类必须没有（AC-RAG-03）
+  const knowledgeRequired = (item.expect.matches ?? []).some((p) => String(p).includes('知识来源'))
+  const knowledgeForbidden = (item.expect.notContains ?? []).includes('知识来源：')
+  const knowledgePresent = result.text.includes('知识来源：')
+  if (knowledgeRequired && !knowledgePresent) {
+    reasons.push('知识类问题没有服务端追加的知识来源行')
+  }
+  if (knowledgeForbidden && knowledgePresent) {
+    reasons.push('未收录类问题却出现了知识来源行')
+  }
+
+  return {
+    pass: reasons.length === 0,
+    reasons,
+    score: {
+      dataSourceLineExpected,
+      dataSourceLinePresent,
+      knowledgeSourceExpected: knowledgeRequired,
+      knowledgeSourcePresent: knowledgePresent,
+      forbiddenViolations
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -564,52 +771,141 @@ function skipReasonFor(item) {
   return null
 }
 
-async function main() {
-  console.log(`黄金问题集冒烟：${BASE}（默认用户 ${ACCOUNT}）`)
-  await tokenFor(ACCOUNT, SECRET)
-  console.log('登录成功\n')
+// ---------------------------------------------------------------------------
+// 环境判定 / 数据基线（REQ-MCP-07：环境问题不得算断言失败）
+// ---------------------------------------------------------------------------
 
-  const selected = ONLY ? QUESTIONS.filter((q) => ONLY.split(',').includes(q.id)) : QUESTIONS
-  if (selected.length === 0) {
-    console.error(`--only=${ONLY} 没匹配到任何问题`)
-    process.exitCode = 2
+/**
+ * 典型"环境/凭据/前置条件"错误的特征：
+ *   ① 模型 Key 未配置、连不上模型服务；
+ *   ② **后端未重启到最新代码**——模型按新提示词调用了新工具，而运行中的实例还没有它
+ *      （实测报 `No ToolCallback found for tool name: queryBusinessKnowledge`）。
+ *      这条必须算"环境"，否则会被误报成"助手答错了"，把发布门禁的红灯指向错误的代码。
+ */
+const ENV_ERROR_PATTERN =
+  /api key|api-key|未配置|unauthorized|401|无法连接模型服务|connection refused|connect timed out|unknownhost|模型调用失败|No ToolCallback found|is not registered|工具.*(未注册|不存在)/i
+
+function isEnvReason(text) {
+  return text != null && ENV_ERROR_PATTERN.test(String(text))
+}
+
+/** 把环境类错误翻译成"人能照着做"的原因（写进报告的"未跑"说明）。 */
+function envReasonText(text) {
+  const message = String(text ?? '')
+  if (/No ToolCallback found|is not registered|工具.*(未注册|不存在)/i.test(message)) {
+    return `后端可能未重启到最新代码（工具未注册）：${message}`
   }
+  return `环境/凭据问题：${message}`
+}
 
-  const rows = []
+/**
+ * 评测前的**数据基线**校验（REQ-MCP-07 的"隔离"要求）。
+ *
+ * <p>用页面侧只读接口 `/api/analysis/overview` 判断演示数据是否就绪：
+ * 总订单量下限 + 数据时间范围必须覆盖评测问题里的区间。不满足时返回
+ * <b>environment</b>（报"数据未初始化"），而不是让每条断言各自失败——
+ * 那会把"环境没准备好"误报成"助手答错了"。</p>
+ *
+ * <p>种子（{@code 20260920}）没有 HTTP 出口，无法自动校验：报告里如实标注
+ * "seed 未自动校验"。数据量与区间是本脚本能自动验证的部分。</p>
+ */
+async function checkDataBaseline(token) {
+  try {
+    const res = await fetch(`${BASE}/api/analysis/overview`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (!res.ok) return { ok: false, detail: `GET /api/analysis/overview → HTTP ${res.status}` }
+    const body = await res.json()
+    const data = body?.data ?? {}
+    const detail =
+      `总订单量 ${data.totalOrderCount}（投标 ${data.tenderOrderCount} / 履约 ${data.performanceOrderCount}），` +
+      `数据区间 ${data.dataStartDate} ~ ${data.dataEndDate}`
+    if (!(Number(data.totalOrderCount) >= BASELINE_MIN_ORDERS)) {
+      return { ok: false, detail: `数据未初始化（${detail}，下限 ${BASELINE_MIN_ORDERS}）` }
+    }
+    if (!data.dataStartDate || !data.dataEndDate) {
+      return { ok: false, detail: `数据未初始化：缺少数据时间范围（${detail}）` }
+    }
+    if (String(data.dataStartDate) > '2026-01-01') {
+      return { ok: false, detail: `数据区间不覆盖评测问题（需从 2026 年起）：${detail}` }
+    }
+    return { ok: true, detail: `${detail}（seed 未自动校验：无 HTTP 出口）` }
+  } catch (error) {
+    return { ok: false, detail: `数据基线校验失败（后端不可用？）：${error.message}` }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// live 集（真实后端 + 真实模型）
+// ---------------------------------------------------------------------------
+
+async function runLiveSuite(selected, rows = []) {
+  let token
+  try {
+    token = await tokenFor(ACCOUNT, SECRET)
+  } catch (error) {
+    return {
+      status: 'environment',
+      detail: `登录失败：${error.message}（检查 BASE_URL / 账号 / 后端是否已启动）`,
+      baseline: { ok: false, detail: '未校验（登录失败）' },
+      rows: []
+    }
+  }
+  const baseline = await checkDataBaseline(token)
+  if (!baseline.ok) {
+    return { status: 'environment', detail: baseline.detail, baseline, rows: [] }
+  }
+  console.log(`数据基线 OK：${baseline.detail}\n`)
+
   let failed = 0
   let skipped = 0
+  let envSkipped = 0
   for (const item of selected) {
     process.stdout.write(`${item.id} [${item.category}] … `)
 
     const skipReason = skipReasonFor(item)
     if (skipReason) {
       skipped += 1
-      const verdict = { pass: false, skipped: true, reasons: [skipReason] }
-      rows.push({ item, result: { skipped: true }, verdict })
+      rows.push({
+        item,
+        result: { skipped: true, reason: skipReason },
+        verdict: { pass: false, skipped: true, reasons: [skipReason] }
+      })
       console.log(`SKIP（未跑：${skipReason}）`)
       continue
     }
 
     const user = item.as?.user || ACCOUNT
     const secret = item.as?.password || SECRET
-    let token
+    let itemToken
     try {
-      token = await tokenFor(user, secret)
+      itemToken = await tokenFor(user, secret)
     } catch (error) {
       skipped += 1
+      envSkipped += 1
       const reason = `账号 ${user} 登录失败（${error.message}）→ 未跑`
-      const verdict = { pass: false, skipped: true, reasons: [reason] }
-      rows.push({ item, result: { skipped: true }, verdict })
+      rows.push({ item, result: { skipped: true }, verdict: { pass: false, skipped: true, reasons: [reason] } })
       console.log(`SKIP（${reason}）`)
       continue
     }
 
     let result
     try {
-      result = await ask(token, item.question)
+      result = await ask(itemToken, item.question)
     } catch (error) {
       result = { failed: true, reason: `请求异常：${error.message}`, elapsedMs: 0 }
     }
+    // 环境类错误（缺 Key、连不上模型、后端未重启导致工具未注册）→ 记"未跑"，**不记断言失败**
+    const envReason = result.failed ? result.reason
+      : (isEnvReason(result.errorMessage) ? envReasonText(result.errorMessage) : null)
+    if (envReason && isEnvReason(envReason)) {
+      skipped += 1
+      envSkipped += 1
+      rows.push({ item, result, verdict: { pass: false, skipped: true, reasons: [envReason] } })
+      console.log(`SKIP（未跑：${envReason}）`)
+      continue
+    }
+
     const verdict = judge(item, result)
     if (!verdict.pass) failed += 1
     rows.push({ item, result, verdict })
@@ -617,31 +913,457 @@ async function main() {
     await sleep(500)
   }
 
-  console.log('\n| 编号 | 类别 | 结果 | 工具调用 | 轮次 | 耗时(s) | 正文字数 | 备注 |')
-  console.log('|---|---|---|---|---|---|---|---|')
-  for (const { item, result, verdict } of rows) {
-    const note = verdict.pass
-      ? ''
-      : (verdict.skipped ? `未跑：${verdict.reasons.join('；')}` : verdict.reasons.join('；')).replace(/\|/g, '/')
-    const mark = verdict.pass ? '✅' : verdict.skipped ? '⏭ 未跑' : '❌'
-    console.log(
-      `| ${item.id} | ${item.category} | ${mark} | ${result.toolCalls?.length ?? 0} | ` +
-        `${result.rounds ?? 0} | ${((result.elapsedMs ?? 0) / 1000).toFixed(1)} | ${(result.text ?? '').length} | ${note} |`
-    )
-  }
+  const executed = rows.filter((r) => !r.verdict.skipped).length
+  const status = failed > 0 ? 'assertion-failed'
+    : (executed === 0 && skipped > 0 ? 'environment'
+      : (skipped > 0 ? 'partial' : 'ok'))
+  const detail = failed > 0
+    ? `${failed} 条断言失败`
+    : (skipped > 0 ? `${skipped} 条未跑（其中环境类 ${envSkipped}）` : '全部通过')
+  return { status, detail, baseline, rows, failed, skipped }
+}
 
-  const passed = rows.length - failed - skipped
-  const skippedNote = skipped > 0 ? `，${skipped} 条未跑（前置条件不满足，不计入通过）` : ''
-  console.log(`\n结果：${passed}/${rows.length - skipped} 通过${skippedNote}`)
-  if (failed > 0) {
-    console.log('\n失败明细（正文片段，便于人工判断）：')
-    for (const { item, result, verdict } of rows.filter((r) => !r.verdict.pass && !r.verdict.skipped)) {
-      console.log(`\n--- ${item.id} ${item.question}`)
-      console.log(`原因：${verdict.reasons.join('；')}`)
-      console.log(`正文：${(result.text ?? '').slice(0, 400)}`)
+// ---------------------------------------------------------------------------
+// 确定性集（Stub ChatModel 的 IT，不需要 API Key，需要 MySQL）
+// ---------------------------------------------------------------------------
+
+/**
+ * 跑确定性集：调用 `EvaluationDeterministicIT`（`mvn verify`），再读它写出的 JSON 报告。
+ *
+ * <p>用 {@code stdio: 'inherit'} 而不是捕获输出：一来 maven 的进度要给人看，
+ * 二来避免在受限环境里用管道捕获子进程输出（Node 在同样场景会 EPERM）。
+ * 判定依据是 **IT 自己写的报告**（即使断言失败也会写），而不是解析控制台文本。</p>
+ */
+function runDeterministicSuite() {
+  const reportFile = path.join(ROOT, DETERMINISTIC_REPORT)
+  if (!REPORT_ONLY) {
+    const mavenArgs = [
+      '-B', '-pl', 'guarantee-web',
+      '-Dtest=NoSuchTest', '-Dsurefire.failIfNoSpecifiedTests=false',
+      `-Dit.test=${DETERMINISTIC_IT}`,
+      '-Dguarantee.ai.eval.deterministic-in-verify=true',
+      'verify'
+    ]
+    console.log(`运行确定性集：mvn ${mavenArgs.join(' ')}\n`)
+    // Windows 上 .cmd 启动器必须经 cmd.exe（Node 18.20+ 起 spawnSync 直接执行 .cmd 会 EINVAL）；
+    // 参数全是固定常量，无注入面。用 cmd /c 单串命令而不是 shell:true（后者已废弃并告警）。
+    const isWindows = process.platform === 'win32'
+    const res = isWindows
+      ? spawnSync(process.env.ComSpec || 'cmd.exe',
+          ['/d', '/s', '/c', `mvn ${mavenArgs.join(' ')}`],
+          { cwd: ROOT, stdio: 'inherit' })
+      : spawnSync('mvn', mavenArgs, { cwd: ROOT, stdio: 'inherit' })
+    if (res.error) {
+      return {
+        status: 'environment',
+        detail: `无法启动 maven（${res.error.message}）——确定性集未跑`,
+        rows: []
+      }
     }
   }
-  process.exitCode = failed > 0 ? 1 : 0
+  if (!existsSync(reportFile)) {
+    return {
+      status: 'environment',
+      detail: `确定性集报告缺失：${DETERMINISTIC_REPORT}（maven 未跑成功或 IT 未执行）`,
+      rows: []
+    }
+  }
+  const report = JSON.parse(readFileSync(reportFile, 'utf8'))
+  const totals = report.totals ?? {}
+  const status = (totals.failed ?? 0) > 0 ? 'assertion-failed'
+    : ((totals.notRun ?? 0) > 0 ? 'partial' : 'ok')
+  return {
+    status,
+    detail: `确定性集 ${totals.passed ?? 0}/${totals.total ?? 0} 通过（未跑 ${totals.notRun ?? 0}）`,
+    results: report.results ?? [],
+    metrics: report.metrics ?? null,
+    totals,
+    generatedAt: report.generatedAt
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 打分 / 基线 diff / 单一事实源
+// ---------------------------------------------------------------------------
+
+function stats(values) {
+  const list = values.filter((v) => Number.isFinite(v))
+  if (list.length === 0) return { min: null, max: null, avg: null }
+  const sum = list.reduce((a, b) => a + b, 0)
+  return { min: Math.min(...list), max: Math.max(...list), avg: Number((sum / list.length).toFixed(1)) }
+}
+
+/** 把逐题结果汇总成 REQ-MCP-06 要求的口径分数。 */
+function computeMetrics(results) {
+  const executed = results.filter((r) => r.status !== 'not-run')
+  const passed = executed.filter((r) => r.status === 'pass')
+  const dsExpected = results.filter((r) => r.score?.dataSourceLineExpected)
+  const citeExpected = results.filter((r) => r.score?.knowledgeSourceExpected)
+  return {
+    passRate: executed.length ? Number((passed.length / executed.length).toFixed(4)) : null,
+    dataSourceConsistencyRate: dsExpected.length
+      ? Number((dsExpected.filter((r) => r.score.dataSourceLinePresent).length / dsExpected.length).toFixed(4))
+      : null,
+    citationCompletenessRate: citeExpected.length
+      ? Number((citeExpected.filter((r) => r.score.knowledgeSourcePresent).length / citeExpected.length).toFixed(4))
+      : null,
+    forbiddenTermViolations: results.reduce((n, r) => n + (r.score?.forbiddenViolations ?? 0), 0),
+    rounds: stats(executed.map((r) => r.rounds)),
+    elapsedMs: stats(executed.map((r) => r.elapsedMs)),
+    toolCalls: stats(executed.map((r) => r.toolCalls))
+  }
+}
+
+const DIFF_METRICS = [
+  'passRate',
+  'dataSourceConsistencyRate',
+  'citationCompletenessRate',
+  'forbiddenTermViolations',
+  'rounds.avg',
+  'elapsedMs.avg'
+]
+
+function metricValue(metrics, path) {
+  const [head, tail] = path.split('.')
+  const value = metrics?.[head]
+  return tail ? value?.[tail] : value
+}
+
+/** 与基线 diff：新增失败 / 新修复 / 指标变化（REQ-MCP-07）。 */
+function diffAgainstBaseline(results, metrics, baseline) {
+  if (!baseline) return null
+  const baseById = new Map((baseline.results ?? []).map((r) => [r.id, r]))
+  const statusOf = (r) => r?.status ?? 'absent'
+  const newFailures = results
+    .filter((r) => r.status === 'fail' && statusOf(baseById.get(r.id)) !== 'fail')
+    .map((r) => ({ id: r.id, category: r.category, reasons: r.reasons }))
+  const fixed = results
+    .filter((r) => r.status === 'pass' && statusOf(baseById.get(r.id)) === 'fail')
+    .map((r) => ({ id: r.id, category: r.category }))
+  const stillFailing = results
+    .filter((r) => r.status === 'fail' && statusOf(baseById.get(r.id)) === 'fail')
+    .map((r) => ({ id: r.id, category: r.category, reasons: r.reasons }))
+  const newQuestions = results
+    .filter((r) => statusOf(baseById.get(r.id)) === 'absent')
+    .map((r) => r.id)
+  const metricChanges = []
+  for (const metric of DIFF_METRICS) {
+    const before = metricValue(baseline.metrics, metric)
+    const after = metricValue(metrics, metric)
+    if (before === after) continue
+    if (before == null || after == null) continue
+    const worse = metric === 'forbiddenTermViolations' || metric === 'rounds.avg' || metric === 'elapsedMs.avg'
+      ? after > before
+      : after < before
+    metricChanges.push({ metric, before, after, worse })
+  }
+  return {
+    baselineGeneratedAt: baseline.generatedAt ?? null,
+    baselineSuite: baseline.suite ?? null,
+    newFailures,
+    fixed,
+    stillFailing,
+    newQuestions,
+    metricChanges,
+    degraded: newFailures.length > 0 || metricChanges.some((c) => c.worse)
+  }
+}
+
+/**
+ * 单一事实源（REQ-MCP-12）：优先读 `--inventory=<file>`；否则调用
+ * `scripts/single-source-of-truth.mjs --format=json`（**只接入，不改它的输出契约**）。
+ *
+ * <p>调用失败（受限环境无法用管道捕获子进程输出、脚本缺失等）时**降级但不伪装**：
+ * 报告里标 `degraded: true` 并写清原因，评测条数仍可用（来自本脚本的 QUESTIONS）。</p>
+ */
+function loadQualityInventory() {
+  if (NO_INVENTORY) return { available: false, degraded: true, reason: '--no-inventory' }
+  if (INVENTORY_PATH) {
+    try {
+      return { available: true, degraded: false, source: INVENTORY_PATH, data: JSON.parse(readFileSync(path.join(ROOT, INVENTORY_PATH), 'utf8')) }
+    } catch (error) {
+      return { available: false, degraded: true, reason: `读不到 --inventory 文件：${error.message}` }
+    }
+  }
+  const res = spawnSync('node', [INVENTORY_SCRIPT, '--format=json'], { cwd: ROOT, encoding: 'utf8' })
+  if (res.error || res.status !== 0 || !res.stdout) {
+    return {
+      available: false,
+      degraded: true,
+      reason: `single-source-of-truth.mjs 未接入（${res.error?.message || `exit=${res.status}`}）；`
+        + '可用 --inventory=reports/quality-inventory.json 复用已生成的清单'
+    }
+  }
+  try {
+    return { available: true, degraded: false, source: INVENTORY_SCRIPT, data: JSON.parse(res.stdout) }
+  } catch (error) {
+    return { available: false, degraded: true, reason: `SSOT 输出不是合法 JSON：${error.message}` }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 报告（JSON + Markdown）
+// ---------------------------------------------------------------------------
+
+function buildReport({ suite, live, deterministic, results, metrics, inventory, baseline }) {
+  const totals = {
+    total: results.length,
+    passed: results.filter((r) => r.status === 'pass').length,
+    failed: results.filter((r) => r.status === 'fail').length,
+    notRun: results.filter((r) => r.status === 'not-run').length
+  }
+  const categories = {}
+  for (const item of QUESTIONS) {
+    categories[item.category] = (categories[item.category] ?? 0) + 1
+  }
+  return {
+    schema: 'ai-golden-questions/report@1',
+    generatedAt: new Date().toISOString(),
+    suite,
+    target: { baseUrl: BASE, user: ACCOUNT, deterministicIt: DETERMINISTIC_IT },
+    dataBaseline: live?.baseline ?? { ok: null, detail: '确定性集不需要真实数据基线' },
+    status: {
+      live: live?.status ?? 'not-run',
+      deterministic: deterministic?.status ?? 'not-run',
+      detail: { live: live?.detail ?? null, deterministic: deterministic?.detail ?? null }
+    },
+    totals,
+    metrics,
+    categories,
+    evalCount: QUESTIONS.length,
+    deterministicIds: DETERMINISTIC_IDS,
+    results,
+    diff: baseline ? diffAgainstBaseline(results, metrics, baseline) : null,
+    qualityInventory: inventory
+  }
+}
+
+function renderMarkdown(report) {
+  const lines = []
+  lines.push(`# 助手评测报告（${report.suite}）`)
+  lines.push('')
+  lines.push(`> 生成时间：${report.generatedAt}`)
+  lines.push(`> 目标：\`${report.target.baseUrl}\`（账号 ${report.target.user}）`)
+  lines.push(`> 数据基线：${report.dataBaseline?.ok === true ? '✅ ' : (report.dataBaseline?.ok === false ? '⛔ ' : '— ')}${report.dataBaseline?.detail ?? ''}`)
+  lines.push(`> 结果：**通过 ${report.totals.passed}/${report.totals.total - report.totals.notRun}**，失败 ${report.totals.failed}，未跑 ${report.totals.notRun}`)
+  lines.push('')
+  lines.push(`| 套件 | 状态 | 说明 |`)
+  lines.push('|---|---|---|')
+  lines.push(`| deterministic | ${report.status.deterministic} | ${report.status.detail.deterministic ?? ''} |`)
+  lines.push(`| live | ${report.status.live} | ${report.status.detail.live ?? ''} |`)
+  lines.push('')
+
+  if (report.diff) {
+    const d = report.diff
+    lines.push('## 与基线的 diff（REQ-MCP-07）')
+    lines.push('')
+    lines.push(`基线：${d.baselineGeneratedAt ?? '未知时间'}（suite=${d.baselineSuite ?? '未知'}）`)
+    lines.push('')
+    lines.push(`- **新增失败：${d.newFailures.length}**${d.newFailures.length ? ' ⚠️ 退化' : ''}`)
+    for (const f of d.newFailures) lines.push(`  - ❌ ${f.id}（${f.category}）：${(f.reasons ?? []).join('；')}`)
+    lines.push(`- 新修复：${d.fixed.length}`)
+    for (const f of d.fixed) lines.push(`  - ✅ ${f.id}（${f.category}）`)
+    lines.push(`- 仍失败：${d.stillFailing.length}${d.stillFailing.length ? ' ⚠️' : ''}`)
+    for (const f of d.stillFailing) lines.push(`  - ❌ ${f.id}（${f.category}）：${(f.reasons ?? []).join('；')}`)
+    lines.push(`- 基线里没有的新题：${d.newQuestions.length ? d.newQuestions.join('、') : '无'}`)
+    lines.push('- 指标变化：')
+    if (d.metricChanges.length === 0) lines.push('  - 无')
+    for (const c of d.metricChanges) {
+      lines.push(`  - ${c.worse ? '⚠️ ' : ''}${c.metric}：${c.before} → ${c.after}`)
+    }
+    lines.push('')
+  }
+
+  lines.push('## 打分（REQ-MCP-06）')
+  lines.push('')
+  lines.push('| 指标 | 值 |')
+  lines.push('|---|---|')
+  lines.push(`| 通过率 | ${report.metrics.passRate ?? '—'} |`)
+  lines.push(`| 口径正确率（有工具调用必有口径行） | ${report.metrics.dataSourceConsistencyRate ?? '—'} |`)
+  lines.push(`| 引用完整率（知识类必有来源行） | ${report.metrics.citationCompletenessRate ?? '—'} |`)
+  lines.push(`| 禁用术语违规数 | ${report.metrics.forbiddenTermViolations} |`)
+  lines.push(`| 轮次 min/avg/max | ${report.metrics.rounds.min ?? '—'} / ${report.metrics.rounds.avg ?? '—'} / ${report.metrics.rounds.max ?? '—'} |`)
+  lines.push(`| 耗时(s) min/avg/max | ${fmtMs(report.metrics.elapsedMs.min)} / ${fmtMs(report.metrics.elapsedMs.avg)} / ${fmtMs(report.metrics.elapsedMs.max)} |`)
+  lines.push(`| 工具调用 min/avg/max | ${report.metrics.toolCalls.min ?? '—'} / ${report.metrics.toolCalls.avg ?? '—'} / ${report.metrics.toolCalls.max ?? '—'} |`)
+  lines.push('')
+
+  lines.push('## 逐题结果')
+  lines.push('')
+  lines.push('| 编号 | 类别 | 结果 | 工具调用 | 轮次 | 耗时(s) | 正文字数 | 备注 |')
+  lines.push('|---|---|---|---|---|---|---|---|')
+  for (const r of report.results) {
+    const mark = r.status === 'pass' ? '✅' : (r.status === 'not-run' ? '⏭ 未跑' : '❌')
+    const note = (r.status === 'pass' ? '' : (r.reasons ?? []).join('；')).replace(/\|/g, '/')
+    lines.push(`| ${r.id} | ${r.category} | ${mark} | ${r.toolCalls} | ${r.rounds} | ${(r.elapsedMs / 1000).toFixed(1)} | ${r.answerChars} | ${note} |`)
+  }
+  lines.push('')
+
+  const notRun = report.results.filter((r) => r.status === 'not-run')
+  if (notRun.length > 0) {
+    lines.push('## 未跑清单（不得当作通过）')
+    lines.push('')
+    for (const r of notRun) lines.push(`- ${r.id}（${r.category}）：${(r.reasons ?? []).join('；')}`)
+    lines.push('')
+  }
+
+  lines.push('## 单一事实源（REQ-MCP-12）')
+  lines.push('')
+  if (report.qualityInventory?.available) {
+    const inv = report.qualityInventory.data
+    lines.push(`来源：\`${report.qualityInventory.source}\``)
+    lines.push('')
+    lines.push('```json')
+    lines.push(JSON.stringify(inv, null, 2))
+    lines.push('```')
+  } else {
+    lines.push(`⚠️ 未接入单一事实源脚本：${report.qualityInventory?.reason ?? '未知原因'}`)
+  }
+  lines.push('')
+  lines.push(`评测条数（本脚本 QUESTIONS）：${report.evalCount}`)
+  lines.push('')
+  lines.push(`分类配比：${Object.entries(report.categories).map(([k, v]) => `${k} ${v}`).join('、')}`)
+  lines.push('')
+  lines.push(`确定性集覆盖：${report.deterministicIds.join('、')}`)
+  lines.push('')
+  return lines.join('\n')
+}
+
+function fmtMs(value) {
+  return value == null ? '—' : (value / 1000).toFixed(1)
+}
+
+function defaultReportPaths() {
+  // 文件名带套件名：确定性集与真机集各写各的，避免后跑的把先跑的覆盖掉
+  return {
+    md: path.join('reports', `eval-${SUITE}-${localDate()}.md`),
+    json: path.join('reports', `eval-${SUITE}-${localDate()}.json`)
+  }
+}
+
+function writeReports(report, options = {}) {
+  const defaults = defaultReportPaths()
+  const mdPath = OUT_MD ?? (options.alwaysWrite === false ? null : defaults.md)
+  const jsonPath = OUT_JSON ?? (options.alwaysWrite === false ? null : defaults.json)
+  const paths = { md: null, json: null }
+  if (jsonPath) paths.json = writeFile(path.join(ROOT, jsonPath), JSON.stringify(report, null, 2) + '\n')
+  if (mdPath) paths.md = writeFile(path.join(ROOT, mdPath), renderMarkdown(report) + '\n')
+  return paths
+}
+
+function writeFile(file, content) {
+  mkdirSync(path.dirname(file), { recursive: true })
+  writeFileSync(file, content, 'utf8')
+  return path.relative(ROOT, file).split(path.sep).join('/')
+}
+
+// ---------------------------------------------------------------------------
+// 主流程
+// ---------------------------------------------------------------------------
+
+function toResultRow(entry) {
+  const { item, result = {}, verdict = {} } = entry
+  const skipped = verdict.skipped === true
+  return {
+    id: item.id,
+    category: item.category,
+    question: item.question,
+    status: skipped ? 'not-run' : (verdict.pass ? 'pass' : 'fail'),
+    reasons: verdict.reasons ?? [],
+    tools: (result.toolCalls ?? []).map((c) => `${c.name}:${c.status}`),
+    toolCalls: result.toolCalls?.length ?? 0,
+    rounds: result.rounds ?? 0,
+    elapsedMs: result.elapsedMs ?? 0,
+    answerChars: (result.text ?? '').length,
+    score: verdict.score ?? null
+  }
+}
+
+async function main() {
+  if (!['all', 'deterministic', 'live'].includes(SUITE)) {
+    console.error(`--suite=${SUITE} 非法（可选：all | deterministic | live）`)
+    process.exitCode = 2
+    return
+  }
+  console.log(`黄金问题集评测：suite=${SUITE}（${BASE}，账号 ${ACCOUNT}）\n`)
+
+  let baseline = null
+  if (BASELINE_PATH) {
+    try {
+      baseline = JSON.parse(readFileSync(path.join(ROOT, BASELINE_PATH), 'utf8'))
+    } catch (error) {
+      console.error(`读不到基线文件 ${BASELINE_PATH}：${error.message}`)
+      process.exitCode = 2
+      return
+    }
+  }
+
+  const selected = ONLY ? QUESTIONS.filter((q) => ONLY.split(',').includes(q.id)) : QUESTIONS
+  if (selected.length === 0) {
+    console.error(`--only=${ONLY} 没匹配到任何问题`)
+    process.exitCode = 2
+    return
+  }
+
+  let live = null
+  let deterministic = null
+  let results = []
+
+  if (SUITE === 'deterministic' || SUITE === 'all') {
+    deterministic = runDeterministicSuite()
+    console.log(`\n确定性集：${deterministic.status} —— ${deterministic.detail}\n`)
+    if (SUITE === 'deterministic') {
+      results = (deterministic.results ?? []).map((r) => ({ ...r }))
+    }
+  }
+
+  if (SUITE === 'live' || SUITE === 'all') {
+    if (REPORT_ONLY) {
+      // 只渲染既有报告：从 baseline 或 --json 里读？这里要求同时给 --inventory/--baseline；
+      // 简化：--report-only 直接退出，由调用方用 --baseline 做对照
+      console.error('--report-only 需要配合既有 JSON 报告路径 —— 请直接查看该报告文件')
+      process.exitCode = 2
+      return
+    }
+    live = await runLiveSuite(selected)
+    const liveRows = live.rows.map(toResultRow)
+    results = SUITE === 'all' ? [...liveRows, ...deterministicRows(deterministic)] : liveRows
+  }
+
+  if (results.length === 0) {
+    console.error(`\n没有可汇总的结果：${live?.detail ?? deterministic?.detail ?? '未知原因'}`)
+    process.exitCode = 2
+    return
+  }
+
+  const metrics = computeMetrics(results)
+  const inventory = loadQualityInventory()
+  const report = buildReport({ suite: SUITE, live, deterministic, results, metrics, inventory, baseline })
+  const paths = writeReports(report)
+  // 报告落盘后，控制台只打摘要（完整内容在文件里）
+  console.log(renderMarkdown(report).split('\n').slice(0, 30).join('\n'))
+  console.log(`\n完整报告：${paths.md ?? '(stdout only)'}${paths.json ? ` / ${paths.json}` : ''}`)
+
+  const statuses = [live?.status, deterministic?.status].filter(Boolean)
+  if (statuses.includes('assertion-failed')) process.exitCode = 1
+  else if (statuses.some((s) => s === 'environment' || s === 'partial')) process.exitCode = 2
+  else process.exitCode = 0
+}
+
+/** 确定性集的结果已在 IT 里打成同一 schema，这里只做字段兜底。 */
+function deterministicRows(deterministic) {
+  return (deterministic?.results ?? []).map((r) => ({
+    id: r.id,
+    category: r.category ?? '确定性集',
+    question: r.question ?? '',
+    status: r.status,
+    reasons: r.reasons ?? [],
+    tools: r.tools ?? [],
+    toolCalls: r.toolCalls ?? 0,
+    rounds: r.rounds ?? 0,
+    elapsedMs: r.elapsedMs ?? 0,
+    answerChars: r.answerChars ?? 0,
+    score: r.score ?? null
+  }))
 }
 
 // ---------------------------------------------------------------------------
@@ -650,10 +1372,10 @@ async function main() {
 
 /**
  * 静态自检：id 唯一且合法、每条都有可判定的期望、知识类必须带 mustCall、
- * 且与 `docs/TEST-助手黄金问题集.md` 的编号一一对应（文档与脚本不许各说各话）。
+ * 与 `docs/TEST-助手黄金问题集.md` 的编号一一对应、确定性集与 IT 场景表一致。
  *
  * <p>为什么值得有：真机集合依赖 API Key，本机跑不了；但"脚本漏了一条""文档多了一条"
- * 这类问题不需要模型就能发现，而且正是它们会让验收结论对不上号。</p>
+ * "确定性子集与 IT 漂移"这类问题不需要模型就能发现，而且正是它们会让验收结论对不上号。</p>
  */
 function selfCheck() {
   const problems = []
@@ -672,8 +1394,27 @@ function selfCheck() {
     if (item.category?.startsWith('知识') && !mustRetrieve && item.requires !== 'knowledge-disabled') {
       problems.push(`${item.id} 是知识类问题，但没有 mustCall: queryBusinessKnowledge（无法证明真的用了检索）`)
     }
+    // 向后兼容：断言格式必须是既有那几种
+    const allowed = ['contains', 'matches', 'notContains', 'refusal', 'maxToolCalls', 'maxRounds', 'mustCall']
+    for (const key of Object.keys(item.expect)) {
+      if (!allowed.includes(key)) problems.push(`${item.id} 使用了未知断言 ${key}（断言格式必须向后兼容）`)
+    }
   }
-  if (QUESTIONS.length < 25) problems.push(`问题集条数 ${QUESTIONS.length} < 25`)
+  // REQ-MCP-06：规模 ≥30
+  if (QUESTIONS.length < 30) problems.push(`评测集条数 ${QUESTIONS.length} < 30（REQ-MCP-06）`)
+
+  // 确定性集：id 必须存在，且与 IT 场景表一致（防两边漂移）
+  for (const id of DETERMINISTIC_IDS) {
+    if (!seen.has(id)) problems.push(`DETERMINISTIC_IDS 里的 ${id} 不在 QUESTIONS 中`)
+  }
+  const itSource = readFileSync(new URL(`../${DETERMINISTIC_IT_SOURCE}`, import.meta.url), 'utf8')
+  if (!itSource) {
+    problems.push(`读不到确定性集 IT：${DETERMINISTIC_IT_SOURCE}`)
+  } else {
+    for (const id of DETERMINISTIC_IDS) {
+      if (!itSource.includes(`"${id}"`)) problems.push(`确定性集 IT 缺少场景 ${id}（脚本标记了确定性，但 IT 没跑）`)
+    }
+  }
 
   let doc = ''
   try {
@@ -694,11 +1435,14 @@ function selfCheck() {
     for (const problem of problems) console.error(`  - ${problem}`)
     return 1
   }
-  console.log(`静态自检通过：${QUESTIONS.length} 条问题，编号与 docs/TEST-助手黄金问题集.md 一一对应`)
+  console.log(
+    `静态自检通过：${QUESTIONS.length} 条问题（确定性集 ${DETERMINISTIC_IDS.length} 条），`
+    + '编号与 docs/TEST-助手黄金问题集.md 一一对应，确定性集与 IT 场景表一致'
+  )
   return 0
 }
 
-if (process.argv.includes('--self-check')) {
+if (SELF_CHECK) {
   process.exitCode = selfCheck()
 } else {
   main().catch((error) => {
