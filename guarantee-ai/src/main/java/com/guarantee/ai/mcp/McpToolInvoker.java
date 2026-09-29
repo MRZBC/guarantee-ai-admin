@@ -11,6 +11,7 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -51,11 +52,16 @@ public class McpToolInvoker {
     /**
      * 执行一次只读工具调用。
      *
+     * <p><b>顺序是有意的</b>：① 入口权限（{@code ai:mcp:read}）→ ② 只读白名单 → ③ 注册裁剪。
+     * 入口权限放在最前，是为了让"没有 MCP 入口权限的凭据"连"哪些工具存在"都问不出来
+     * （fail-closed 的外部面：不给任何可探测信息）。</p>
+     *
      * @param toolName      工具名（后端名，例如 {@code queryOrderSummary}）
      * @param argumentsJson 参数 JSON 对象文本（空/null 视为 {@code {}}）
      * @param principal     Token 校验后得到的主体（null 按"无权限"处理，fail-closed）
      */
     public McpToolInvocation invoke(String toolName, String argumentsJson, McpPrincipal principal) {
+        requireMcpRead(principal);
         String name = McpToolCatalog.requireReadOnlyTool(toolName);
         String normalizedArguments = normalizeArguments(name, argumentsJson);
         List<String> permissions = principal == null ? List.of() : principal.permissionsOrEmpty();
@@ -79,6 +85,80 @@ public class McpToolInvoker {
                 name, principal == null ? "anonymous" : principal.serviceAccountId(),
                 invocation.truncated(), invocation.dataSource() != null);
         return invocation;
+    }
+
+    // ==================================================================
+    // 工具清单（tools/list）
+    // ==================================================================
+
+    /**
+     * 当前服务账号**可见**的只读工具清单（REQ-MCP-01 / AC-MCP-01/03）。
+     *
+     * <p>两步裁剪，缺一不可：</p>
+     * <ol>
+     *   <li>入口权限 {@code ai:mcp:read}——没有它直接返回**空清单**（MCP 是外部面，
+     *       入口权限缺失时不是"少几个工具"，而是整个受控取数面拒绝服务）；</li>
+     *   <li>与 {@code tools/call} 完全相同的注册裁剪（{@code AiToolRegistry.callbacks(permissions)}）
+     *       + 只读白名单。**清单必须是"调用面的子集"**：清单里出现一个调不通的工具，
+     *       外部 Agent 会反复重试并把平台故障误判成"工具坏了"（AC-MCP-01 的一致性要求）。</li>
+     * </ol>
+     *
+     * <p>返回值里的 {@code inputSchema} 是 Spring AI {@code ToolDefinition} 的 JSON Schema
+     * **原文**，不重新序列化：与页面/助手看到的是同一份定义（避免第二份说明漂移）。</p>
+     */
+    public List<McpToolDefinition> listTools(McpPrincipal principal) {
+        if (!hasMcpRead(principal)) {
+            return List.of();
+        }
+        ToolCallback[] callbacks = toolRegistry.callbacks(principal.permissionsOrEmpty());
+        if (callbacks == null || callbacks.length == 0) {
+            return List.of();
+        }
+        List<McpToolDefinition> tools = new ArrayList<>(callbacks.length);
+        for (ToolCallback callback : callbacks) {
+            ToolDefinition definition = callback.getToolDefinition();
+            if (definition == null || definition.name() == null) {
+                continue;
+            }
+            String name = definition.name();
+            // 双保险：注册集里若混进写工具（例如未来 registry 调整），MCP 侧也不暴露
+            if (!McpToolCatalog.isReadOnlyTool(name)) {
+                log.warn("注册集里出现非业务 MCP 只读工具，已从清单剔除：{}", name);
+                continue;
+            }
+            tools.add(new McpToolDefinition(name, definition.description(), definition.inputSchema()));
+        }
+        log.info("MCP 工具清单：principal={} 可见={} 项",
+                principal == null ? "anonymous" : principal.serviceAccountId(), tools.size());
+        return List.copyOf(tools);
+    }
+
+    /**
+     * MCP 入口权限判定：服务账号是否持有 {@code ai:mcp:read}。
+     *
+     * <p>null 主体按"没有权限"处理（fail-closed）。</p>
+     */
+    public static boolean hasMcpRead(McpPrincipal principal) {
+        return principal != null && principal.permissionsOrEmpty().contains(McpToolCatalog.PERMISSION_MCP_READ);
+    }
+
+    /** 入口权限硬校验；缺失时给**可读**拒绝（不是 500，也不泄漏清单）。 */
+    private static void requireMcpRead(McpPrincipal principal) {
+        if (!hasMcpRead(principal)) {
+            throw new McpException(McpErrorCode.PERMISSION_REQUIRED,
+                    "服务账号缺少 " + McpToolCatalog.PERMISSION_MCP_READ
+                            + " 权限：业务 MCP 只对该权限的持有者开放（清单为空、调用一律拒绝）");
+        }
+    }
+
+    /**
+     * 一个可暴露给外部 Agent 的只读工具定义。
+     *
+     * @param name            后端工具名（如 {@code queryOrderSummary}）
+     * @param description     说明（直接复用既有 {@code @Tool} 描述）
+     * @param inputSchemaJson JSON Schema **原文**
+     */
+    public record McpToolDefinition(String name, String description, String inputSchemaJson) {
     }
 
     // ==================================================================

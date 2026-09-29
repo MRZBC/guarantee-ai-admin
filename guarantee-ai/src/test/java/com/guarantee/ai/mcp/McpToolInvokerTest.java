@@ -123,17 +123,16 @@ class McpToolInvokerTest {
     }
 
     @Test
-    @DisplayName("主体为 null 时 fail-closed：按空权限请求裁剪，工具照旧执行但只能拿到公开能力")
+    @DisplayName("主体为 null 时 fail-closed：入口权限缺失 → PERMISSION_REQUIRED，工具绝不执行")
     void nullPrincipalIsFailClosed() {
+        // 刻意不 stub 注册表：本用例要证明的是"根本没走到注册表"
         register(readToolCallbacks());
 
-        invoker.invoke("queryOrderSummary", "{}", null);
+        assertMcpError(() -> invoker.invoke("queryOrderSummary", "{}", null),
+                McpErrorCode.PERMISSION_REQUIRED);
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<String>> permissions = ArgumentCaptor.forClass(List.class);
-        verify(registry).callbacks(permissions.capture());
-        assertThat(permissions.getValue()).isEmpty();
-        assertThat(AiPermissionGuard.permissions(readTool.capturedContext)).isEmpty();
+        verifyNoInteractions(registry);
+        assertThat(readTool.capturedContext).as("工具绝不能被执行").isNull();
     }
 
     // ==================================================================

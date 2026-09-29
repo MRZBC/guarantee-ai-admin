@@ -53,6 +53,17 @@
             <artifactId>mybatis-spring-boot-starter</artifactId>
             <version>${mybatis-spring-boot.version}</version>
         </dependency>
+        <!--
+          业务 MCP 限流（T5-03 / REQ-MCP-03）：QPS 与每日配额都落在 Redis（固定窗口 + 当日 TTL）。
+          本模块此前没有任何 Redis 依赖（全模块 redis 0 命中）——限流必须在这里，
+          而不是挪到 guarantee-auth/web：MCP 的鉴权、限流、调用编排本来就同属一个模块，
+          拆开会让"先限流还是先鉴权"这种顺序问题跨模块隐式耦合。
+          整包应用早已通过 guarantee-auth 引入 spring-data-redis，此处不改变部署形态。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>

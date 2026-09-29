@@ -67,6 +67,20 @@ public final class Permissions {
      */
     public static final String AI_MCP_READ = "ai:mcp:read";
 
+    /**
+     * 管理 MCP 机器凭据（签发 / 列表 / 撤销，REQ-MCP-02 / AC-MCP-02）。
+     *
+     * <p><b>为什么不能复用 {@link #AI_CONFIG_UPDATE}</b>：两者是**两种风险面**。
+     * "能改 AI 配置"影响的是全站助手的回答口径；"能铸造机器凭据"是把平台的受控取数面
+     * 交到平台之外——后者等于**隐式提权**（持凭据者不受页面权限与登录闸门约束，
+     * 只受 Token 自带权限范围约束）。混用一个权限码，会让"只被授予看配置的人"
+     * 顺手拿到对外取数通道，事后无法从权限矩阵上分辨。因此单独立码。</p>
+     *
+     * <p>ADMIN 默认拥有，其余角色默认无；属**危险权限**，与 {@code ai:config:update}
+     * 同档，危险说明同步在 {@code PermissionTree.vue} 与角色管理文档 §4.3。</p>
+     */
+    public static final String AI_MCP_MANAGE = "ai:mcp:manage";
+
     // ---------------- 险种 ----------------
 
     public static final String INSURANCE_VIEW = "system:insurance:view";

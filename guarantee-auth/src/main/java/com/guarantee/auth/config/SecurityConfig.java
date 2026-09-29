@@ -89,6 +89,16 @@ public class SecurityConfig {
                         // 故意只放行这一个路径，不写 "/actuator/**"：其余端点（env/beans/heapdump 等）
                         // 仍必须鉴权。
                         .requestMatchers("/actuator/prometheus").permitAll()
+                        // 业务 MCP 协议面（T5-03 / REQ-MCP-05 / AC-MCP-06）：
+                        // 调用方是 Node 网关，带的是 **MCP Token（ai_mcp_token）**，不是平台 JWT。
+                        // JwtAuthenticationFilter 解析不了它会保持匿名（不抛异常），因此若不放行，
+                        // 请求会在 AuthenticationEntryPoint 处被拦成 401，永远到不了 McpController。
+                        //
+                        // 放行**不构成新的攻击面**：McpController 自己就是鉴权入口——
+                        // 缺失/无效/已撤销/过期的 Token 一律可读拒绝（401），
+                        // 且整组 Bean 由 guarantee.ai.mcp.enabled=true 才注册（默认 false → 路径不存在）。
+                        // 故意只放行这一个前缀：/api/system/mcp-tokens（页面面）仍必须 JWT + ai:mcp:manage。
+                        .requestMatchers("/api/ai/mcp/**").permitAll()
                         // 前端静态资源（管理后台首页）无需登录即可加载，登录由前端路由守卫处理
                         .requestMatchers("/", "/index.html", "/favicon.svg", "/assets/**").permitAll()
                         .anyRequest().authenticated())

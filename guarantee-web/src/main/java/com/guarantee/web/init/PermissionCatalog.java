@@ -81,6 +81,17 @@ public final class PermissionCatalog {
             // 其危险说明同步在 PermissionTree.vue 与 docs/REQ-角色管理与权限分配页面.md §4.3。
             {"ai:config:view", "AI 配置", "/system/ai-config"},
             {"ai:config:update", "AI 配置修改", null},
+            // 业务 MCP 只读取值（第五阶段 REQ-MCP-02）：ADMIN 默认拥有（ADMIN_PERMISSIONS 取全量），
+            // 其余角色默认无——它只应授予**服务账号**（sys_user.account_type=SERVICE），
+            // 人类角色拿到它没有意义（机器凭据与人类登录是两条独立通道）。
+            // 它是危险权限：拿到它等于拿到平台受控取数面的入口，危险说明同步在
+            // PermissionTree.vue 的 DANGER_REASONS 与 docs/REQ-角色管理与权限分配页面.md §4.3。
+            {"ai:mcp:read", "业务 MCP 只读取数", null},
+            // MCP 凭据管理（第五阶段 REQ-MCP-02）：签发 / 列表 / 撤销机器凭据。
+            // 与 ai:mcp:read **不是一回事**：read 决定"Token 能调什么工具"，
+            // manage 决定"谁能铸造 Token"。两者分开是因为"改配置"与"发机器凭据"
+            // 是两种风险面，复用同一个码等于隐式提权（见 Permissions.AI_MCP_MANAGE）。
+            {"ai:mcp:manage", "MCP 凭据管理", null},
     };
 
     /** 角色编码 / 角色名称 / 描述，数组下标 + 1 即角色 id（与初始化顺序一致）。 */

@@ -1,5 +1,7 @@
 package com.guarantee.ai.mcp;
 
+import com.guarantee.common.security.Permissions;
+
 import java.util.List;
 
 /**
@@ -14,10 +16,9 @@ import java.util.List;
  * 只有"名字在清单里才放行"才能保证新增写工具默认不会被外部 Agent 调用到
  * （第二道防线是 {@code AiToolRegistry} 的注册裁剪与工具内的 {@code AiPermissionGuard}）。</p>
  *
- * <p>注意：这里的 {@code PERMISSION_MCP_READ} 是**字符串字面量**，而不是引用
- * {@code Permissions.AI_MCP_READ}——新增权限码常量属于 T5-03（task-15）的写入范围
- * （{@code Permissions} / {@code PermissionCatalog} 都是共享热点文件）。task-15 落地后，
- * 本常量应改为引用 {@code Permissions.AI_MCP_READ}，测试会守住两边取值一致。</p>
+ * <p>注意：{@code PERMISSION_MCP_READ} 直接引用 {@code Permissions.AI_MCP_READ}
+ * （task-15 已把权限码常量落到 {@code guarantee-common}）：取值只有一处真源，
+ * 由 {@code McpToolCatalogTest} 与 {@code PermissionCatalog} 两侧交叉守住。</p>
  */
 public final class McpToolCatalog {
 
@@ -27,7 +28,7 @@ public final class McpToolCatalog {
      * <p>它属于**危险权限**：拿到它就等于拿到平台的受控取数面。仅授予服务账号，
      * 且要同步登记进危险权限清单（{@code PermissionTree.vue} 与角色管理文档）。</p>
      */
-    public static final String PERMISSION_MCP_READ = "ai:mcp:read";
+    public static final String PERMISSION_MCP_READ = Permissions.AI_MCP_READ;
 
     /** 13 个只读工具（与 {@code AiToolRegistry.readTools} 的方法名一一对应）。 */
     private static final List<String> READ_ONLY_TOOLS = List.of(

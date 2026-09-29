@@ -28,6 +28,27 @@ public enum McpErrorCode {
     /** 工具在契约上存在，但按当前权限快照未被注册（fail-closed：无权限 = 不可见）。 */
     TOOL_UNAVAILABLE(403),
 
+    /**
+     * 服务账号缺少 {@code ai:mcp:read}（MCP 入口权限）。
+     *
+     * <p>MCP 是**外部面**：入口权限缺失时不是"少几个工具"，而是整个受控取数面拒绝服务
+     * （清单为空 + 调用拒绝）。这与"聊天链路登录即可见 4 个公开只读工具"不是同一层
+     * —— 聊天有登录与页面上下文，MCP 只有一把机器凭据。</p>
+     */
+    PERMISSION_REQUIRED(403),
+
+    /** 服务账号不存在或已停用（Token 仍在有效期内，但归属账号已不能代表机器身份）。 */
+    ACCOUNT_DISABLED(403),
+
+    /** 超出每 Token 的 QPS 上限（Redis 固定窗口）。 */
+    RATE_LIMITED(429),
+
+    /** 超出每 Token 的每日调用配额。 */
+    DAILY_QUOTA_EXCEEDED(429),
+
+    /** 限流依赖（Redis）不可用：外部面 fail-closed，宁可拒绝也不放行。 */
+    LIMITER_UNAVAILABLE(503),
+
     /** 工具执行失败（业务异常，已翻译成可读信息）。 */
     TOOL_FAILED(500);
 

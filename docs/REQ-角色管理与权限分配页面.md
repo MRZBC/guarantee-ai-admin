@@ -296,7 +296,7 @@ GET /api/system/permissions
 
 ### 4.2 权限树分组（真实码值，按 `permCode` 前缀）
 
-`PermissionCatalog.PERMISSIONS` 共 **42** 项，实测分组如下（组名建议直接用「权限名」列的模块名）：
+`PermissionCatalog.PERMISSIONS` 共 **44** 项，实测分组如下（组名建议直接用「权限名」列的模块名）：
 
 | 组 | 权限码 |
 | --- | --- |
@@ -312,17 +312,17 @@ GET /api/system/permissions
 | 角色配置 | `system:role:view` / `:create` / `:update` / `:assign-permission` / `:disable` / `:delete` |
 | 权限与审计 | `system:permission:view`、`system:audit:view` |
 | 在线会话 | `system:session:view`、`system:session:kick` |
-| AI 助手 | `ai:chat`、`ai:system:query`、`ai:system:write`、`ai:debug:view`、`ai:config:view`、`ai:config:update` |
+| AI 助手 | `ai:chat`、`ai:system:query`、`ai:system:write`、`ai:debug:view`、`ai:config:view`、`ai:config:update`、`ai:mcp:read`、`ai:mcp:manage` |
 
 > **实测结论：只能用上表的前缀分组。** `sys_permission.parent_id` 由 `PermissionSyncInitializer` 恒定写入 **0**（其 INSERT 语句里 `parent_id` 是字面量 `0`），`perm_type` 也只是 `path != null ? "MENU" : "BUTTON"` 的粗分类——**两者都不具备树形语义**。因此分组来源唯一：`permCode` 模块前缀。
 >
 > **这带来一个额外收益**：分组节点成了**合成节点**（key 前缀 `group::`），不是真实权限码，于是"半选父节点是否要提交"这个分叉（§5.5 末、RK-03）**自动消失**——提交前按 `permCode` 白名单过滤即可。若将来改用真实父级权限码组树，必须重新审视这一点。
 >
-> **界面上的例外（2026-09-23 验收反馈）**：上表是**匹配口径**，不等于最终展示结构。**仅含单个权限的分组会被提升为顶层叶子**——`首页` / `数据概览` / `项目管理` / `企业管理` 四组各只有 1 项，保留分组只会得到同名两级。实际保持分组的只有 9 组：订单管理(2)、险种配置(5)、机构配置(5)、部门配置(5)、用户配置(5)、角色配置(6)、权限与审计(2)、在线会话(2)、AI 助手(6)。详见 §13.5。
+> **界面上的例外（2026-09-23 验收反馈）**：上表是**匹配口径**，不等于最终展示结构。**仅含单个权限的分组会被提升为顶层叶子**——`首页` / `数据概览` / `项目管理` / `企业管理` 四组各只有 1 项，保留分组只会得到同名两级。实际保持分组的只有 9 组：订单管理(2)、险种配置(5)、机构配置(5)、部门配置(5)、用户配置(5)、角色配置(6)、权限与审计(2)、在线会话(2)、AI 助手(8)。详见 §13.5。
 
 ### 4.3 危险权限清单（勾选时给出 warning）
 
-P-05 只列了 2 项，实测应扩到 6 项——判据是"**能改变他人权限或扩大自身权限面**"：
+P-05 只列了 2 项，实测应扩到 **8** 项——判据是"**能改变他人权限或扩大自身权限面**"：
 
 | 权限码 | 为什么危险 |
 | --- | --- |
@@ -332,6 +332,8 @@ P-05 只列了 2 项，实测应扩到 6 项——判据是"**能改变他人权
 | `system:session:kick` | 可强制他人下线 |
 | `ai:system:write` | 打开 AI 助手的全部写能力（提案通道），是 `propose*` 工具的总开关 |
 | `ai:config:update` | 可改全站 AI 助手的模型/温度/提示词与能力开关（含一键关闭写能力、改密钥引用名），影响所有用户（第四阶段 REQ-CFG-10） |
+| `ai:mcp:read` | 受控取数面的**机器入口**：持有它的 MCP Token 可从平台外部读取订单/机构/用户/审计等只读数据（数据范围仍由 `DataScopeService` 约束）。只应授予**服务账号**（`sys_user.account_type=SERVICE`），人类角色拿到它等于开了一条绕过页面审计习惯的外部取数通道（第五阶段 REQ-MCP-02 / AC-MCP-03） |
+| `ai:mcp:manage` | 可**签发/撤销 MCP 机器凭据**：等于把"铸造对外取数身份"的能力交出去。它与 `ai:mcp:read` 是两种风险面（read 管"Token 能调什么"，manage 管"谁能造 Token"），刻意不复用 `ai:config:update` —— 复用会让"只看配置"的人顺手拿到对外取数通道（第五阶段 REQ-MCP-02 / AC-MCP-02） |
 
 ---
 
@@ -537,6 +539,7 @@ P-05 只列了 2 项，实测应扩到 6 项——判据是"**能改变他人权
 | 2026-09-23 | v1.1 | 决策拍板 + 实施完成 | ① §0 记录决策结论（D1=A、D2=B、D3=A、D4=A、D5=A、D6=A）与 **ADMIN 硬不变式**（全权限、不可改/删/授权/停用，及支撑它的五道后端校验）；② §4.2 记录实测结论——`parent_id` 恒为 0，分组只能用 `permCode` 前缀，**并据此消除 RK-03**（分组节点为合成节点，半选父节点不再是分叉点）；③ §5.5 相应改为"已确认不需要提交半选父节点"；④ 新增 §13 实施记录。**代码已全部落地，`vue-tsc --noEmit` 与 `vite build` 均通过（见 §13）** |
 | 2026-09-23 | v1.2 | 首轮界面验收反馈 | ① 修复授权弹窗「取消/保存授权」按钮**贴在一起**——根因是本实现为挂 tooltip 用 `<span>` 包裹按钮，破坏了 Element Plus 的相邻兄弟 margin；两个弹窗 footer 统一改为 `.dialog-footer`（flex + gap + 抹除原生 margin）。② 权限树**移除英文权限码**展示（`permCode` 仍在节点数据中，作为 `node-key` 与提交过滤依据）。③ **单权限分组提升为顶层叶子**，消除 `▼ 数据概览 / ☑ 数据概览` 这类同名两级。三项均记入 §13.5，并沉淀两条通用约定（禁用按钮须同时接管间距；单子项分组应提升） |
 | 2026-09-30 | v1.3 | 第四阶段 AI 配置权限同步 | 新增权限码 `ai:config:view` / `ai:config:update`（ADMIN 默认拥有、其余角色默认无；初始化矩阵见 `PermissionCatalog`）。§4.2 项数 40 → **42**、AI 助手分组 4 → **6**；§4.3 危险权限 5 → **6**（`ai:config:update`：能改全站助手的模型/提示词/能力开关）。`PermissionTree.vue` 的 `DANGER_REASONS` 与本文档同步修改（两处定义必须一致） |
+| 2026-09-30 | v1.4 | 第五阶段业务 MCP 权限同步 | 新增权限码 `ai:mcp:read`（工具调用面）与 `ai:mcp:manage`（凭据管理面）：ADMIN 默认拥有、其余角色默认无；`ai:mcp:read` 只应授予 `sys_user.account_type=SERVICE` 的服务账号。§4.2 项数 42 → **44**、AI 助手分组 6 → **8**；§4.3 危险权限 6 → **8**（`ai:mcp:read`：受控取数面的机器入口；`ai:mcp:manage`：铸造机器凭据，与 `ai:config:update` 同档但**不复用**该码）。`PermissionTree.vue` 的 `DANGER_REASONS` 与本文档同步修改（两处定义必须一致） |
 
 ---
 

@@ -86,7 +86,9 @@ const DANGER_REASONS: Record<string, string> = {
   'system:audit:view': '可查看全站操作审计，含他人操作的字段级前后值',
   'system:session:kick': '可强制其他用户下线',
   'ai:system:write': '打开 AI 助手的全部写能力（提案通道），是 propose* 工具的总开关',
-  'ai:config:update': '可改全站 AI 助手的模型/温度/提示词与能力开关（含一键关闭写能力），影响所有用户的回答'
+  'ai:config:update': '可改全站 AI 助手的模型/温度/提示词与能力开关（含一键关闭写能力），影响所有用户的回答',
+  'ai:mcp:read': '受控取数面的机器入口：持有它的 MCP Token 可从平台外部读取订单/机构/用户/审计等只读数据（仍受数据范围约束），只应授予服务账号',
+  'ai:mcp:manage': '可签发/撤销 MCP 机器凭据：等于把"铸造对外取数身份"的能力交出去，凭据不受登录闸门与页面权限约束（只受 Token 自带权限范围约束）'
 }
 
 /** 分组节点 key 前缀：与真实权限码区分，便于提交前过滤。 */

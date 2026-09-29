@@ -3,6 +3,7 @@ package com.guarantee.ai.mcp;
 import com.guarantee.ai.mcp.mapper.McpTokenMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -53,20 +54,36 @@ public class McpTokenService {
     private static final char[] HEX = "0123456789abcdef".toCharArray();
 
     private final McpTokenMapper mapper;
+
+    /**
+     * 机器身份守卫（{@code account_type=SERVICE}）。
+     *
+     * <p>为 null 只出现在"服务层单测/嵌入"场景：那些用例只验凭据算法与状态机，
+     * 不装配用户表。生产装配（Spring）恒非 null，因此签发路径**不可能**绕过它。</p>
+     */
+    private final McpServiceAccountResolver accountResolver;
+
     private final SecureRandom random = new SecureRandom();
 
     /**
      * 鉴权与过期判断用的时钟。
      *
-     * <p><b>保持唯一公开构造器</b>（Spring 单构造器无需注解、天然无歧义）。
+     * <p><b>保持唯一公开构造器</b>（Spring 多构造器时必须显式标注使用哪一个）。
      * 把 {@code Clock} 做成构造器参数会引入一个容器里并不存在的 bean，
      * 从而把一个启动失败换成另一个（NoSuchBeanDefinition）——观测切片已实测踩过一次。
      * 单测用 {@link #withClock} 注入固定时钟。</p>
      */
     Clock clock = Clock.systemDefaultZone();
 
-    public McpTokenService(McpTokenMapper mapper) {
+    @Autowired
+    public McpTokenService(McpTokenMapper mapper, McpServiceAccountResolver accountResolver) {
         this.mapper = mapper;
+        this.accountResolver = accountResolver;
+    }
+
+    /** 测试/嵌入用：没有机器身份守卫（服务层单测不查用户表）。 */
+    McpTokenService(McpTokenMapper mapper) {
+        this(mapper, null);
     }
 
     /** 测试/嵌入用：指定时钟的实例（不参与 Spring 装配）。 */
@@ -95,6 +112,11 @@ public class McpTokenService {
                                LocalDateTime expiresAt, String createdBy) {
         if (serviceAccountId == null) {
             throw new McpException(McpErrorCode.INVALID_ARGUMENT, "必须指定服务账号（serviceAccountId）");
+        }
+        // 机器身份强校验（task-21 接口；REQ-MCP-02）：必须是存在、启用、account_type=SERVICE 的账号。
+        // 放在最前——先确认"这把凭据该不该存在"，再谈权限与有效期。
+        if (accountResolver != null) {
+            accountResolver.requireMachineIdentity(serviceAccountId);
         }
         String permissionText = normalizePermissions(permissions);
         if (permissionText.isEmpty()) {
