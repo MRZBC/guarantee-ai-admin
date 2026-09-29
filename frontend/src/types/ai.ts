@@ -225,3 +225,87 @@ export interface OperationAuditPage {
   total: number
   items: OperationAuditItem[]
 }
+
+/* ---------------- AI 运行可视化（REQ-MCP-11 / T5-04） ---------------- */
+
+/**
+ * 指标时间窗口：与后端 `TurnMetricService.resolveRange` 的取值域**同值域**。
+ *
+ * 后端对未知取值回落 `24h`（读接口不 500），但类型上仍只允许这三个，
+ * 免得页面上出现"传了个拼错的窗口、看到的是 24h 数据却以为在看 30d"。
+ */
+export type AiMetricsRange = '24h' | '7d' | '30d'
+
+/**
+ * 概览卡（`GET /api/ai/metrics/overview` 的 `overview` 字段）。
+ *
+ * 口径全部来自 `ai_turn_metric` 的聚合（一次问答一行）：
+ * - `turns` 问答数；`errorTurns` outcome=ERROR 数；`cappedTurns` capped=1 数；
+ * - `errorRate` / `cappedRate` 后端算好的比率（0~1），**不在前端二次计算**——
+ *   两处算比率就会出现"页面显示 12%、接口显示 12.3%"这类对不上的账；
+ * - `avgRounds` / `avgTotalCostMs` 平均值；`inputTokens`/`outputTokens` 是**模型真实 usage**
+ *   （不是 `ai_message.token_count` 的字数估算，两者口径不同，页面不混用）。
+ */
+export interface AiTurnMetricOverview {
+  turns: number
+  errorTurns: number
+  cappedTurns: number
+  errorRate: number
+  cappedRate: number
+  avgRounds: number
+  avgTotalCostMs: number
+  inputTokens: number
+  outputTokens: number
+}
+
+/**
+ * 提案状态计数（SYS-NF-08 的兑现面）。
+ *
+ * `status` 是 `ai_operation_proposal.status` 的原始枚举值（PENDING/CONFIRMED/...），
+ * 页面负责翻译成中文——后端不做展示层映射（同一份枚举已被别的页面使用）。
+ */
+export interface ProposalStatusStat {
+  status: string
+  statusCount: number
+}
+
+/** 概览响应：`range` 是后端**归一后**的窗口标签，页面按它显示"近 24 小时"。 */
+export interface AiMetricsOverviewResponse {
+  range: AiMetricsRange
+  overview: AiTurnMetricOverview
+  proposals: ProposalStatusStat[]
+}
+
+/** 单日趋势点（只包含库中真实存在的日期：没跑过的那天不会补 0）。 */
+export interface AiTurnMetricTrendPoint {
+  /** yyyy-MM-dd（后端 DATE(created_at)） */
+  statDate: string
+  turns: number
+  errorTurns: number
+  cappedTurns: number
+  avgRounds: number
+  avgTotalCostMs: number
+  inputTokens: number
+  outputTokens: number
+}
+
+/** 趋势响应：`days` 是后端归一后的天数（1~90，缺省 7）。 */
+export interface AiMetricsTrendResponse {
+  days: number
+  points: AiTurnMetricTrendPoint[]
+}
+
+/** 工具调用统计：p95 用最近秩法（样本少时等于最大值）。 */
+export interface AiToolCallStat {
+  toolName: string
+  calls: number
+  avgDurationMs: number
+  maxDurationMs: number
+  p95DurationMs: number
+}
+
+/** Top 工具响应：`range` 是后端归一后的窗口标签。 */
+export interface AiMetricsToolsResponse {
+  range: AiMetricsRange
+  tools: AiToolCallStat[]
+}

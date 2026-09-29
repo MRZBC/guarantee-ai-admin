@@ -91,6 +91,13 @@ const menuGroupDefinitions: MenuGroup[] = [
         title: '操作审计',
         icon: 'List',
         permission: 'system:audit:view'
+      },
+      // AI 运行（T5-04）：只读可视化；权限与操作审计同源（system:audit:view）
+      {
+        path: '/system/ai-runtime',
+        title: 'AI 运行',
+        icon: 'DataLine',
+        permission: 'system:audit:view'
       }
     ]
   }

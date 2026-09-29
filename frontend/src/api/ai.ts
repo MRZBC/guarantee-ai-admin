@@ -1,5 +1,9 @@
 import { http } from './request'
 import type {
+  AiMetricsOverviewResponse,
+  AiMetricsRange,
+  AiMetricsToolsResponse,
+  AiMetricsTrendResponse,
   ConversationDetail,
   ConversationItem,
   OperationAuditPage,
@@ -67,6 +71,38 @@ export function rejectProposal(id: number, reason?: string) {
  */
 export function pageOperationAudits(params: OperationAuditQuery) {
   return http.get<OperationAuditPage>('/ai/operation-audits', { params })
+}
+
+/* ---------------- AI 运行可视化（REQ-MCP-11 / T5-04） ---------------- */
+
+/**
+ * 概览卡 + 提案状态计数（同一时间窗口，给「AI 运行」页顶部）。
+ *
+ * <p>权限 `system:audit:view`（与操作审计页同一枚）。`range` 由后端归一：
+ * 缺省/非法 → `24h`，因此页面不需要自己兜底非法值，但**显示**要用响应里的 `range`
+ * （否则会出现"我点了 30 天、实际看的是 24 小时"的静默错配）。</p>
+ */
+export function getAiMetricsOverview(range: AiMetricsRange = '24h') {
+  return http.get<AiMetricsOverviewResponse>('/ai/metrics/overview', { params: { range } })
+}
+
+/**
+ * 按天趋势（只返回库中真实存在的日期，不补零）。
+ *
+ * @param days 1~90，缺省 7；后端归一，响应里的 `days` 才是实际取值
+ */
+export function getAiMetricsTrend(days = 7) {
+  return http.get<AiMetricsTrendResponse>('/ai/metrics/trend', { params: { days } })
+}
+
+/**
+ * Top 工具（调用次数 + 平均/最大/p95 耗时）。
+ *
+ * @param limit 1~20，缺省 10
+ * @param range 24h / 7d / 30d，缺省 24h
+ */
+export function getAiMetricsTopTools(limit = 10, range: AiMetricsRange = '24h') {
+  return http.get<AiMetricsToolsResponse>('/ai/metrics/tools/top', { params: { limit, range } })
 }
 
 export { streamChat, ChatStreamError, API_BASE_URL } from '@/utils/chatStream'

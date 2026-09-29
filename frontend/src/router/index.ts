@@ -124,6 +124,17 @@ const routes: RouteRecordRaw[] = [
         name: 'SystemOperationAudits',
         component: () => import('@/views/system/OperationAudits.vue'),
         meta: { title: '操作审计', parentTitle: '系统配置', permission: 'system:audit:view' }
+      },
+      {
+        /*
+          AI 运行（只读，REQ-MCP-11 / T5-04）。
+          权限与操作审计同一枚 `system:audit:view`：两者都是"看运行痕迹"的只读页，
+          当前权限矩阵下仅 ADMIN 持有；再拆一枚新权限只会增加配置面而无新的安全收益（REQ §5.3.4 的裁定）。
+        */
+        path: 'system/ai-runtime',
+        name: 'SystemAiRuntime',
+        component: () => import('@/views/system/AiRuntime.vue'),
+        meta: { title: 'AI 运行', parentTitle: '系统配置', permission: 'system:audit:view' }
       }
     ]
   },
