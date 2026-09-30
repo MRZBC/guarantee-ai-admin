@@ -1,5 +1,6 @@
 package com.guarantee.ai.service;
 
+import com.guarantee.ai.tool.ProposalNoFormat;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -115,72 +116,132 @@ class ProposalNumberGuardTest {
     }
 
     // ------------------------------------------------------------------
-    // 形态边界（T6-01 / D-B）：把"认什么、不认什么"钉住，防静默漂移
+    // R2：形态逃逸修掉之后的对照表（"修前 10/20 识别" → "修后 18/20"）+ 安全底线 + 反证
     // ------------------------------------------------------------------
 
     /**
-     * 形态对照表（实测输出见任务记录里的 `.agent/ProposalNoProbe` 复现）。
+     * 修后表：原先 20 种写法里只有 10 种被识别，另外 10 种**逃逸存活**。
      *
-     * <table>
-     *   <caption>当前 {@code \bOP\d{8,}\b} 的边界</caption>
-     *   <tr><th>输入</th><th>被识别/移除</th></tr>
-     *   <tr><td>{@code OP}+≥8 位数字（真实形态 18 位）</td><td>✅</td></tr>
-     *   <tr><td>中文/符号前缀或后缀（{@code 编号OP…}、{@code OP…号}、{@code #OP…}）</td><td>✅（词边界成立）</td></tr>
-     *   <tr><td>Markdown 装饰（{@code **OP…**}、{@code - OP…}、{@code > OP…}、{@code `OP…`}）</td><td>✅（token 级扫描，装饰不影响）</td></tr>
-     *   <tr><td>7 位及以下 / 小写或混合大小写 / 全角</td><td>❌ 不识别</td></tr>
-     *   <tr><td>分隔写法（{@code OP-2026…} / {@code OP 2026…}）/ 零宽字符</td><td>❌ 不识别</td></tr>
-     *   <tr><td>下划线前缀、字母后缀（{@code _OP…} / {@code OP…X}）/ 无 {@code OP} 前缀的裸数字</td><td>❌ 不识别</td></tr>
-     * </table>
-     *
-     * <p><b>这些 ❌ 是已知的、已登记的形态规避边界（第三阶段验证 §6「既有缺陷 B」，中低），
-     * 不是期望行为</b>：模型用非标准形态写一个编造的编号时，既不会移除也不会纠正。
-     * 之所以不在本任务里放宽，是因为"改宽"必须同时改归一化比对（提取侧与白名单比对侧都要归一），
-     * 否则模型**如实回显**真编号的小写/分段形态反而会被误删——那是另一类风险，需要单独设计。</p>
-     *
-     * <p>本用例的作用是"边界钉住"：将来若做归一化放宽，这一条会红，逼迫改动者同步更新
-     * 对照表与验证报告，而不是让它静默变成另一种行为。</p>
+     * <p>修法：{@link ProposalNoFormat#CANDIDATE_PATTERN} 宽口径扫描拿原文 span +
+     * {@link ProposalNoFormat#canonical} 归一化比对；删除仍用原文 span。</p>
      */
     @Test
-    @DisplayName("形态边界（已知登记项，非期望行为）：标准/带前缀后缀/带装饰可拦，非标准形态目前不拦")
-    void documentsKnownFormatBoundary() {
-        String canonical = "OP202609242359135602";
-
-        // 当前能拦下的形态（含 Markdown 装饰——装饰不是绕过点，形态才是）
-        Set<String> recognized = Set.of(
-                canonical,
+    @DisplayName("修后表：小写/全角/分隔符/零宽/词边界被破坏等 18 种形态都能识别并移除")
+    void escapedFormsAreCaughtAfterNormalization() {
+        String fake = FAKE_NO;
+        String tail = fake.substring(2);
+        Set<String> escapedForms = Set.of(
+                fake,
                 "OP12345678",
-                "编号" + canonical,
-                canonical + "号",
-                "#" + canonical,
-                "**" + canonical + "**",
-                "- " + canonical,
-                "> " + canonical,
-                "`" + canonical + "`");
-        for (String form : recognized) {
+                "编号" + fake,
+                fake + "号",
+                "#" + fake,
+                "**" + fake + "**",
+                "- " + fake,
+                "> " + fake,
+                "`" + fake + "`",
+                fake.toLowerCase(),                       // 小写
+                "Op" + tail,                              // 混合大小写
+                "ＯＰ" + tail,                             // 全角 OP
+                "ＯＰ" + "２０２６０９２４２３５９１３５６０２", // 全角 OP + 全角数字
+                "OP-" + tail,                             // 半角连字符
+                "OP " + tail,                             // 空格
+                "OP\u200b" + tail,                        // 零宽空格
+                "_" + fake,                               // 词边界被下划线破坏
+                fake + "X");                              // 词边界被字母破坏
+        for (String form : escapedForms) {
             ProposalNumberGuard.Result result = ProposalNumberGuard.sanitize("提案编号 " + form + " 已生成。", Set.of());
-            assertThat(result.removed())
-                    .as("应被识别并移除：%s", form).isNotEmpty();
-            assertThat(result.text())
-                    .as("移除后正文里不应再有任何编号 token：%s", form).doesNotContain("OP");
+            assertThat(result.removed()).as("应被识别并移除：%s", form).isNotEmpty();
+            assertThat(ProposalNoFormat.canonical(result.text()))
+                    .as("移除后不该再留下这个编号（按归一值检查）：%s", form)
+                    .doesNotContain("OP2026");
+        }
+    }
+
+    /** 刻意保留的两条边界（不是缺陷）：8 位下限、必须有 OP 前缀。 */
+    @Test
+    @DisplayName("刻意保留的边界：7 位及以下不算编号、裸数字不算、省略号形态不算、普通小数不被误判")
+    void deliberateBoundariesStay() {
+        assertThat(ProposalNumberGuard.sanitize("提案编号 OP1234567 已生成。", Set.of()).changed())
+                .as("既有决策：少于 8 位数字不算编号").isFalse();
+        assertThat(ProposalNumberGuard.sanitize("订单号 202609242359135602 已生成。", Set.of()).changed())
+                .as("没有 OP 前缀的裸数字不是提案编号").isFalse();
+        assertThat(ProposalNumberGuard.sanitize("提案编号 OP2026…258712 已生成。", Set.of()).changed())
+                .as("省略号是'省略中间'的写法，不等于任何编号").isFalse();
+        assertThat(ProposalNumberGuard.sanitize("比例约为 OP 3.14159265 的样子。", Set.of()).changed())
+                .as("小数点不作为分隔符：正文里的普通小数不该被拼成编号").isFalse();
+    }
+
+    /**
+     * 安全底线：模型**如实回显**的真编号，无论写成哪种逃逸形态，都不得被误删。
+     *
+     * <p>这正是"比对必须用归一值"的原因：如果拿逃逸原文去和真实编号做字符串比较，它会被判成编造。</p>
+     */
+    @Test
+    @DisplayName("安全底线：真编号的小写/分段/全角/零宽写法一律不误删（归一化比对才做得到）")
+    void faithfulEchoOfTrustedNumberIsNeverRemoved() {
+        Set<String> trusted = ProposalNumberGuard.trusted(null, Set.of(REAL_NO));
+        String tail = REAL_NO.substring(2);
+        Set<String> echoes = Set.of(
+                REAL_NO,
+                REAL_NO.toLowerCase(),
+                "OP-" + tail,
+                "OP " + tail,
+                "ＯＰ" + tail,
+                "OP\u200b" + tail);
+        for (String echo : echoes) {
+            ProposalNumberGuard.Result result =
+                    ProposalNumberGuard.sanitize("待确认提案：" + echo + "，15 分钟内有效。", trusted);
+            assertThat(result.changed()).as("如实回显的真编号不得被误删：%s", echo).isFalse();
+            assertThat(result.text()).as("原文必须保持不变：%s", echo).contains(echo);
         }
 
-        // 已知不拦的形态（登记项）：断言"目前确实拦不住"，以便将来放宽时这条会红
-        Set<String> notRecognized = Set.of(
-                "OP1234567",
-                "op202609242359135602",
-                "Op202609242359135602",
-                "\uFF2F\uFF30" + "202609242359135602",
-                "OP-202609242359135602",
-                "OP 202609242359135602",
-                "OP\u200b202609242359135602",
-                "_OP202609242359135602",
-                "OP202609242359135602X",
-                "202609242359135602");
-        for (String form : notRecognized) {
-            ProposalNumberGuard.Result result = ProposalNumberGuard.sanitize("提案编号 " + form + " 已生成。", Set.of());
-            assertThat(result.changed())
-                    .as("已知边界：当前识别不了这种形态（若已放宽，请同步更新对照表与验证报告）：%s", form)
-                    .isFalse();
-        }
+        // 用户自己贴的分段写法也要进可信集合（否则模型如实回显用户给的串会被误删）
+        assertThat(ProposalNumberGuard.trusted("帮我核对 op-" + tail + " 这个提案", null))
+                .contains(ProposalNoFormat.canonical(REAL_NO));
+    }
+
+    /**
+     * 反证：**归一化就是这次修复本身**——把归一化关掉，必须有断言变红。
+     *
+     * <p>第 ④ 条最直接：把"可信集合"传成**未归一化的原文**（= 模拟不做归一化的比对），
+     * 真编号的逃逸写法立刻被判成编造并被移除。若有人把 {@code canonical()} 从比对链路上摘掉，
+     * 这一条就会红。</p>
+     */
+    @Test
+    @DisplayName("反证：退回旧口径（严格正则 / 原文比对）时，漏判与误删都会发生")
+    void counterProofNormalizationIsTheFix() {
+        String echoed = "op-" + REAL_NO.substring(2);
+
+        // ① 旧严格正则在这个形态上扫不到任何东西 —— 这就是"形态逃逸"
+        assertThat(ProposalNoFormat.STRICT_PATTERN.matcher(echoed).find())
+                .as("反证①：旧口径扫不到逃逸形态（于是编造编号既不移除也不纠正）").isFalse();
+        // ② 新口径能扫到，且归一后与真实编号相等
+        assertThat(ProposalNoFormat.findAll(echoed)).as("新口径能扫到").isNotEmpty();
+        assertThat(ProposalNoFormat.canonical(echoed)).isEqualTo(REAL_NO);
+
+        // ③ 归一化在：真编号的逃逸写法被正确采信 → 不改写
+        Set<String> normalizedTrusted = ProposalNumberGuard.trusted(null, Set.of(REAL_NO));
+        assertThat(normalizedTrusted).contains(ProposalNoFormat.canonical(echoed));
+        assertThat(ProposalNumberGuard.sanitize("待确认提案：" + echoed + "。", normalizedTrusted).changed())
+                .as("反证③：归一化后不误删").isFalse();
+
+        // ④ 归一化"关掉"的等价物：直接做**原文字符串比较**时，同一个编号因为写法不同而不相等
+        //    → 真编号会被判成编造并移除。下面每条都是"摘掉 canonical() 就会变红"的绊线。
+        Set<String> rawOnly = Set.of(echoed);
+        assertThat(rawOnly).as("反证④-1：原文比较下两者不相等（旧口径必然误删如实回显）").doesNotContain(REAL_NO);
+        assertThat(ProposalNoFormat.canonical(echoed)).as("反证④-2：归一化后二者相等").isEqualTo(REAL_NO);
+
+        // ④-3：可信集合侧必须归一化 —— 用户贴的是分段写法时，集合里放的必须是归一值
+        //      （若把 canonical() 从 trusted() 摘掉，这里会得到原文，断言立刻红）
+        assertThat(ProposalNumberGuard.trusted("帮我核对 op-" + REAL_NO.substring(2), null))
+                .as("反证④-3：用户分段写法进入可信集合时已被归一化")
+                .containsExactly(REAL_NO);
+
+        // ④-4：比对侧必须归一化 —— 可信集合是归一值，正文写成分段形态，仍不得误删
+        //      （若把 canonical() 从 sanitize() 摘掉，原文 "op-…" 与 "OP…" 不相等 → 真编号被误删 → 红）
+        assertThat(ProposalNumberGuard.sanitize(echoed, Set.of(REAL_NO)).changed())
+                .as("反证④-4：正文分段写法 + 可信集合归一值 → 不得误删")
+                .isFalse();
     }
 }

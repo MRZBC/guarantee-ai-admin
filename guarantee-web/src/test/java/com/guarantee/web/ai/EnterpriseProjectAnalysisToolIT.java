@@ -15,11 +15,14 @@ import com.guarantee.analysis.vo.ProjectRankVO;
 import com.guarantee.web.GuaranteeAiAdminApplication;
 import org.apache.ibatis.mapping.MappedStatement;
 import org.apache.ibatis.session.SqlSessionFactory;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.transaction.TestTransaction;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -27,7 +30,6 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * 企业维度（REQ-BA-03）与项目维度（REQ-BA-04）打到真实数据库的验证（不需要 LLM API Key）。
@@ -38,8 +40,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  *       （两者共用同一套 SQL，这条断言防的是"工具偷偷另写一套 SQL"）；</li>
  *   <li><b>跨维度合计一致</b>：按企业/项目切开的订单量合计 = 同区间按地区切开的合计
  *       （过滤条件只作用在部分查询上，是"助手与页面对不上"的经典根源）；</li>
- *   <li><b>企业/项目名历史保留</b>：join 不带 is_deleted/status——用"已停用或已软删"的
- *       主数据做探针，验证它的名字仍然出现（没有这类演示数据时如实跳过，不假装通过）；</li>
+ *   <li><b>企业/项目名历史保留</b>：join 不带 is_deleted/status——先用 SQL 改写器证明机制，
+ *       再用**事务内造样本 + 回滚**真跑数据路径（把一家有二季度订单的企业临时改成停用+软删，
+ *       断言它仍出现在榜单里，并给出"加了过滤就会消失"的反证），跑完强制回滚、复核零污染；</li>
  *   <li><b>项目类型原样中文</b>：返回值必须落在中文枚举集合里。</li>
  * </ol>
  */
@@ -94,6 +97,17 @@ class EnterpriseProjectAnalysisToolIT {
             assertThat(actual.premiumAmount()).isEqualByComparingTo(vo.getPremiumAmount());
         }
 
+        // R1：占比由服务端下发且按维度归一 —— 逐项等于 Service 的值，合计正好 100.00
+        assertThat(result.items()).extracting(EnterpriseAnalysisToolResult.EnterpriseItem::share)
+                .allSatisfy((share) -> assertThat(share).isNotNull());
+        assertThat(result.items().stream()
+                .mapToLong((item) -> item.share().movePointRight(2).longValueExact()).sum())
+                .as("share 之和必须正好 100.00（最大余数法归一，无浮点尾差）")
+                .isEqualTo(10000L);
+        for (int i = 0; i < expected.size(); i++) {
+            assertThat(result.items().get(i).share())
+                    .as("工具透传的占比必须等于 Service 算好的值").isEqualByComparingTo(expected.get(i).getShare());
+        }
         // 跨维度合计：按行业切开的订单量之和 = 同区间按地区切开的合计
         List<OrderRegionVO> regions = orderAnalysisService.regionDistribution(criteria(), 200);
         long byIndustry = result.items().stream()
@@ -150,6 +164,9 @@ class EnterpriseProjectAnalysisToolIT {
             assertThat(actual.guaranteeAmount()).isEqualByComparingTo(vo.getGuaranteeAmount());
         }
 
+        assertThat(result.items().stream()
+                .mapToLong((item) -> item.share().movePointRight(2).longValueExact()).sum())
+                .as("项目维度 share 之和同样必须正好 100.00").isEqualTo(10000L);
         List<OrderRegionVO> regions = orderAnalysisService.regionDistribution(criteria(), 200);
         long byType = result.items().stream()
                 .mapToLong(ProjectAnalysisToolResult.ProjectItem::orderCount).sum();
@@ -228,37 +245,95 @@ class EnterpriseProjectAnalysisToolIT {
         return statement.getBoundSql(params).getSql();
     }
 
+    /**
+     * 历史保留的**数据路径**证明（真跑，不再 Skipped）。
+     *
+     * <p>原先这条探针查"演示数据里已停用/已软删的企业"，而演示数据里根本没有这类样本
+     * （实测：`is_deleted=1` 0 家、`status=0` 0 家），于是它**永久 Skipped**——
+     * 机制被证明了（下一条测试看 SQL），但"数据真的走通了"没有被证明。</p>
+     *
+     * <p>现在改成**事务内造样本**：本方法跑在 Spring 测试事务里，JdbcTemplate 与
+     * MyBatis（Service/Tool 用的同一 DataSource）**加入同一事务**，因此
+     * "改主数据 → 调 Service" 能互相看见；断言完立即 <b>强制回滚</b>，
+     * 并在**新连接**上复核零污染。这样既真跑了数据路径，又不需要演示数据里有这类脏样本。</p>
+     */
     @Test
-    @DisplayName("历史保留探针：已停用/已软删企业的名字仍出现在排行里（无此类数据则如实跳过）")
+    @Transactional
+    @DisplayName("历史保留（事务内造样本 + 回滚）：软删/停用一家有二季度订单的企业后，它仍在榜单里且名字/行业正常")
     void deletedOrDisabledEnterpriseNameStillVisible() {
-        List<Map<String, Object>> candidates = jdbcTemplate.queryForList("""
-                SELECT e.id, e.ent_name, e.status, e.is_deleted
+        // 1) 选样本：二季度订单最多的一家**正常**企业（它一定在 TOP 50 里，改坏后也仍应出现）
+        Map<String, Object> target = jdbcTemplate.queryForMap("""
+                SELECT e.id, e.ent_name, e.industry, e.status, e.is_deleted, COUNT(o.id) AS orders
                 FROM enterprise e
-                WHERE (e.is_deleted = 1 OR e.status = 0)
-                  AND EXISTS (SELECT 1 FROM tender_order o
-                              WHERE o.enterprise_id = e.id AND o.is_deleted = 0
-                                AND o.apply_date >= '2026-04-01' AND o.apply_date <= '2026-06-30')
-                LIMIT 5
+                JOIN tender_order o ON o.enterprise_id = e.id AND o.is_deleted = 0
+                WHERE e.is_deleted = 0
+                  AND o.apply_date >= '2026-04-01' AND o.apply_date <= '2026-06-30'
+                GROUP BY e.id, e.ent_name, e.industry, e.status, e.is_deleted
+                ORDER BY orders DESC
+                LIMIT 1
                 """);
-        assumeTrue(!candidates.isEmpty(),
-                "演示数据里没有「已停用/已软删且仍有二季度订单」的企业，无法验证历史保留（如实跳过，不假装通过）");
+        long id = ((Number) target.get("id")).longValue();
+        String name = String.valueOf(target.get("ent_name"));
+        String industry = String.valueOf(target.get("industry"));
+        long orders = ((Number) target.get("orders")).longValue();
+        assertThat(orders).as("演示数据缺失：先跑 scripts/reset-demo-data.ps1").isPositive();
 
-        List<Long> ids = candidates.stream().map(row -> ((Number) row.get("id")).longValue()).toList();
-        List<String> names = candidates.stream().map(row -> String.valueOf(row.get("ent_name"))).toList();
+        // 2) 在本事务里把它变成"已停用 + 已软删"：主数据退场，历史订单仍在
+        int updated = jdbcTemplate.update("""
+                UPDATE enterprise SET is_deleted = 1, status = 0,
+                       deleted_at = NOW(6), deleted_by = 'it-history-retention'
+                WHERE id = ?
+                """, id);
+        assertThat(updated).as("样本企业必须被成功改为停用+软删").isEqualTo(1);
 
+        // 3) 同一事务内调 Service/Tool：这家企业**仍然出现**，名字与行业都正常
         EnterpriseAnalysisToolResult result = enterpriseTool.queryEnterpriseAnalysis(
                 "TOP", null, "ORDER_COUNT", "TENDER", "2026-04-01", "2026-06-30", null, 50);
-        List<String> returnedNames = result.items().stream()
-                .map(EnterpriseAnalysisToolResult.EnterpriseItem::name).toList();
+        EnterpriseAnalysisToolResult.EnterpriseItem hit = result.items().stream()
+                .filter(item -> name.equals(item.name()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(
+                        "已停用/软删企业的名字没有出现在榜单里（历史保留口径被破坏）："
+                                + "样本=" + name + "，返回=" + result.items().stream()
+                                .map(EnterpriseAnalysisToolResult.EnterpriseItem::name).toList()));
+        assertThat(hit.industry()).as("行业也必须历史保留（join 不带 e.is_deleted）").isEqualTo(industry);
+        assertThat(hit.orderCount()).as("历史订单照常统计").isEqualTo(orders);
 
-        for (int i = 0; i < ids.size(); i++) {
-            if (returnedNames.contains(names.get(i))) {
-                // 只要命中一个就足以证明 join 没有过滤主数据
-                return;
-            }
+        // 4) 反证：若 join 真加了 `AND e.is_deleted = 0`，这家企业就查不到了 —— 差异非空
+        Integer filtered = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM enterprise e
+                JOIN tender_order o ON o.enterprise_id = e.id AND o.is_deleted = 0
+                WHERE e.id = ? AND e.is_deleted = 0
+                  AND o.apply_date >= '2026-04-01' AND o.apply_date <= '2026-06-30'
+                """, Integer.class, id);
+        Integer unfiltered = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM enterprise e
+                JOIN tender_order o ON o.enterprise_id = e.id AND o.is_deleted = 0
+                WHERE e.id = ?
+                  AND o.apply_date >= '2026-04-01' AND o.apply_date <= '2026-06-30'
+                """, Integer.class, id);
+        assertThat(filtered).as("反证：加了 is_deleted 过滤后样本企业会消失").isZero();
+        assertThat(unfiltered).as("不加过滤时它的历史订单仍在（正是历史保留要保住的东西）")
+                .isEqualTo((int) orders);
+
+        // 5) 立即回滚，并在**新连接**（无事务）上复核：演示数据零污染
+        TestTransaction.flagForRollback();
+        TestTransaction.end();
+        Map<String, Object> after = jdbcTemplate.queryForMap(
+                "SELECT is_deleted, status FROM enterprise WHERE id = ?", id);
+        assertThat(((Number) after.get("is_deleted")).intValue())
+                .as("探针必须回滚：演示数据不能被污染").isZero();
+        assertThat(((Number) after.get("status")).intValue())
+                .as("status 也要还原为启用").isEqualTo(1);
+    }
+
+    /** 兜底：任何提前失败的路径都不许把测试事务留在打开状态。 */
+    @AfterEach
+    void rollbackProbeTransactionIfStillActive() {
+        if (TestTransaction.isActive()) {
+            TestTransaction.flagForRollback();
+            TestTransaction.end();
         }
-        throw new AssertionError("已停用/软删企业的名字没有出现在排行里（历史保留口径可能被破坏）："
-                + "候选=" + names + "，返回=" + returnedNames);
     }
 
     @Test

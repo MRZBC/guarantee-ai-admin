@@ -48,12 +48,23 @@ public final class ProposalNumberGuard {
      * 模型如实回一句"该编号不存在"是正确回答。把用户打出的串当成编造移除，会把一次
      * 如实回答改坏——校验的目标是"模型凭记忆/臆想造出来的编号"，不是用户自己写的字。</p>
      *
+     * <p><b>集合元素是归一值</b>（见 {@link ProposalNoFormat#canonical}）：这样
+     * 模型把真编号写成 {@code op2026…}／{@code OP-2026-…}／全角形态时，仍会被判为"真编号"
+     * 而**不会被误删**——"不得误删如实回显的真编号"这条底线靠的就是这里统一归一化。</p>
+     *
      * @param userText     用户本轮原话（可为 null）
-     * @param toolNumbers  本轮工具真实返回过的编号（可为 null）
+     * @param toolNumbers  本轮工具真实返回过的编号（可为 null；可含原文写法）
      */
     public static Set<String> trusted(String userText, Set<String> toolNumbers) {
-        Set<String> trusted = new LinkedHashSet<>(toolNumbers == null ? Set.of() : toolNumbers);
-        trusted.addAll(ProposalNoFormat.findAll(userText));
+        Set<String> trusted = new LinkedHashSet<>();
+        if (toolNumbers != null) {
+            for (String number : toolNumbers) {
+                if (number != null && !number.isBlank()) {
+                    trusted.add(ProposalNoFormat.canonical(number));
+                }
+            }
+        }
+        trusted.addAll(ProposalNoFormat.findAllCanonical(userText));
         return trusted;
     }
 
@@ -78,22 +89,32 @@ public final class ProposalNumberGuard {
     /**
      * 移除正文中不在白名单内的提案编号。
      *
+     * <p><b>比对用归一值、删除用原文 span</b>（R2 修"形态逃逸"）：先用
+     * {@link ProposalNoFormat#CANDIDATE_PATTERN} 宽口径扫描拿到**原文里的位置**，
+     * 再用 {@link ProposalNoFormat#canonical} 归一后与可信集合比较；被判定为编造时，
+     * 删掉的是 {@code matcher} 匹配到的**那一段原文**——绝不能用归一值替换文本，
+     * 那样会把用户看到的全角/分隔符写法一起改掉，甚至错删相邻字符。</p>
+     *
      * @param answer  模型正文
-     * @param allowed 本轮可采信的编号集合（工具真实返回 + 用户原话），null 视为空集（全不采信）
+     * @param allowed 本轮可采信的编号集合（**归一值**，见 {@link #trusted}），null 视为空集（全不采信）
      */
     public static Result sanitize(String answer, Set<String> allowed) {
         if (answer == null || answer.isBlank()) {
             return new Result(answer == null ? "" : answer, List.of());
         }
         Set<String> trusted = allowed == null ? Set.of() : allowed;
-        Matcher matcher = ProposalNoFormat.PATTERN.matcher(answer);
+        Matcher matcher = ProposalNoFormat.CANDIDATE_PATTERN.matcher(answer);
         StringBuilder out = new StringBuilder(answer.length());
         List<String> removed = new ArrayList<>();
         boolean matched = false;
         while (matcher.find()) {
-            matched = true;
             String token = matcher.group();
-            if (trusted.contains(token)) {
+            if (!ProposalNoFormat.isProposalNumberShape(token)) {
+                // 只是"长得像"但不是编号形态（例如正文里的 OP 3.14159265）：原样留着，不算改写
+                continue;
+            }
+            matched = true;
+            if (trusted.contains(ProposalNoFormat.canonical(token))) {
                 matcher.appendReplacement(out, Matcher.quoteReplacement(token));
             } else {
                 removed.add(token);
