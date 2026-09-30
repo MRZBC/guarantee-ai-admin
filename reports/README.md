@@ -139,6 +139,16 @@ java -cp "guarantee-web/target/classes;guarantee-ai/target/classes;guarantee-sys
 
 ## 归档策略
 
-- 正式报告（`eval-*`）**跟踪入库**，作为可 diff 的基线；
-- 被取代的正式报告**移入 `archive/` 并加原因后缀**（不再重写），保持历史可对照；
-- 跑评测会重写同名的正式报告——提交时只带"确实想固化为基线"的那一版。
+**跑出来的报告默认不入库**（自 2026-10-01 / R3 收尾起）：
+
+- `reports/eval-*.{md,json}` 已被 `.gitignore` 排除，并已从索引移除
+  （`git rm --cached`，磁盘文件照常保留）—— 跑一次评测**不会**再把工作区弄脏；
+- **仍然跟踪**：`reports/README.md`（本文件）与 `reports/archive/**`（历史基线）；
+- **要固化为基线**：显式把它复制成 `reports/archive/<名字>-<原因>.{md,json}` **再提交**
+  （`archive/` 里的文件一律保留，用于对照与回滚，不再改写）；
+- 例：`cp reports/eval-live-t610-2026-09-30.md reports/archive/eval-live-2026-09-30-snapshot-31-3-1.md`
+  —— 文件名里带"原因"后缀，读的人不必翻 commit message 就知道它是哪一次、为什么留。
+
+> 为什么这么定：旧口径是"正式报告跟踪入库"，结果每次跑评测都重写被跟踪的文件，
+> 产生一堆与代码无关的 diff；而"哪些是基线"实际由人记。现在把**默认动作**（跑评测）
+> 与**显式动作**（挑一份归档）分开，基线只由后者产生。

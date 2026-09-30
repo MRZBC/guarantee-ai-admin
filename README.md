@@ -604,6 +604,7 @@ sh scripts/setup-git.sh              # Linux / macOS / Git Bash
 | 权限 | 登录态与权限编码已下发，前端按菜单展示；第一阶段未在接口上开启 `@PreAuthorize` 细粒度拦截。 |
 | 真实模型验证 | `DEEPSEEK_API_KEY` 就位后**已做端到端实测**。当前发布口径（T7 收口轮）：**全量 37 题 → 36 PASS / 0 FAIL / 1 未跑**（未跑的 GQ-25 关知识层，已在独立实例单独 PASS）；**拒答类 8 题 × 3 轮 = 24/24 全通过**（`--suite=refusal`）；`forbiddenTermViolations = 0`、口径正确率与引用完整率均 1.0。历史快照（`33 题 32/32`、`35 题 31/3/1`、`35 题 34/0/1`）均保留在 `reports/archive/` 作为对照；其中 `31/3/1` 那 3 处已定性（1 项是**评测脚本断言假失败**、2 项是**已修的模型行为缺陷**），全程**未放宽断言**。报告见 `reports/README.md`。工具链路由仍由 `AiToolChainIT`（Stub 模型）确定性验证；未配 Key 时的行为也已实测为「明确报错、不编造数据」。 |
 | 前端运行验证 | 前端 `npm run build` 通过（vue-tsc 类型检查 + 打包）；SSE 客户端已按后端实测事件协议对齐。但本次开发会话的沙箱禁止 Node 监听端口（`listen EACCES`），**未能启动 Vite dev server 做浏览器实测**；在你自己的终端里 `npm run dev` 可正常启动。 |
+| 本地构建（**多人/多 Agent 共库时必读**） | 改代码后跑 Maven **一律用** `pwsh scripts/mvn-locked.ps1 <mvn 参数…>`：它先取 `.agent/locks/maven.lock`（>20 分钟视为陈旧可抢占），跑完在 `finally` 释放。**未持锁的并发构建会共用一个 MySQL 并互相删 IT 夹具**（本轮真实发生过 `LogicalDeleteWebIT` 因两构建并发而红、隔离重跑全绿）。协议、实测与逃生舱见 [本地构建与锁.md](docs/本地构建与锁.md)。**CI 内不需要**（runner 环境隔离）。 |
 
 ---
 

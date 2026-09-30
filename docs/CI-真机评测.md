@@ -115,13 +115,48 @@ $ pwsh scripts/run-live-eval.ps1 -Port 8092 -SkipBuild -EvalScript .agent/stub-e
 |---|---|---|
 | `build-and-it` | 手动 + 每日 02:00 UTC | MySQL 8 + Redis service；`mvn -B verify`；上传 surefire/failsafe 报告 |
 | `deterministic-eval` | 手动 + 每日 | `--suite=deterministic`（发布门禁）；上传确定性报告 |
-| `live-eval` | **仅手动** | 有 `secrets.DEEPSEEK_API_KEY` 才跑；起后端（8092）→ `--suite=live` **→ `--suite=refusal`（拒答类默认 3 轮）** → 上传 `reports/**`；缺 Key **打印"未跑"并跳过**；**两个步骤任一退出码 1（断言失败）即让作业失败**，退出码 2 按"未跑"告警不失败 |
+| `live-eval` | 手动；**或 定时 + 仓库变量 `EVAL_LIVE_ON_SCHEDULE='true'`（opt-in，默认关）** | 有 `secrets.DEEPSEEK_API_KEY` 才跑；起后端（8092）→ `--suite=live` **→ `--suite=refusal`（拒答类默认 3 轮）** → 上传 `reports/**`；缺 Key **打印"未跑"并跳过**；**两个步骤任一退出码 1（断言失败）即让作业失败**，退出码 2 按"未跑"告警不失败 |
 
 > **发布门禁口径（与 `docs/TEST-助手黄金问题集.md` §5.1 一致）**：**确定性集 12/12**（`deterministic-eval` 作业）
 > **+ 拒答类 ×3 全通过**（`live-eval` 里的 `--suite=refusal` 步骤）。拒答类是唯一有**方差实证**的一类题，
 > 因此判据是"**N 次全部通过才算通过**"，任一次失败 → 整题失败并逐轮列出差异，**不做平均**。
 
-定时任务**刻意不跑 live**：真模型花钱且依赖数据基线，无人看管时跑等于烧额度 + 长期假绿。
+### 3.1 定时跑真机：显式 opt-in（`EVAL_LIVE_ON_SCHEDULE`）
+
+**默认关**：定时任务**无人看管**——真机集会真花钱（DeepSeek 额度）、且依赖订单数据基线，
+而仓库当前**没有订单 seed**，无人值守地跑大概率长期停在 `environment`（exit 2）→ 既烧额度又假绿。
+因此"定时也跑 live/refusal"必须由人**显式**打开：
+
+```bash
+# 开启（仓库级变量；Settings → Secrets and variables → Actions → Variables → New repository variable）
+gh variable set EVAL_LIVE_ON_SCHEDULE --body true --repo <owner>/<repo>
+
+# 查看 / 关闭
+gh variable list --repo <owner>/<repo>
+gh variable delete EVAL_LIVE_ON_SCHEDULE --repo <owner>/<repo>   # 或 set --body false
+```
+
+判定口径：**只有值恰好是字符串 `'true'` 才算开**（`TRUE`/`1`/空值/未设置一律视为关）。
+
+Job3 的进入条件（`.github/workflows/ai-eval.yml`，折叠标量，等价于单行）：
+
+```yaml
+if: >-
+  (github.event_name == 'workflow_dispatch' && inputs.skip_live != true)
+  || (github.event_name == 'schedule' && vars.EVAL_LIVE_ON_SCHEDULE == 'true')
+```
+
+- 第一条：手动触发且没勾"跳过 live" → 跑（与改动前一致）；
+- 第二条：**定时**触发**且**仓库变量为 `'true'` → 跑；
+- `inputs.skip_live` 只在 `workflow_dispatch` 下有值（schedule 下为空串），
+  但被前半段的 `github.event_name == 'workflow_dispatch' &&` **短接**，不会误判；
+- 手动触发**不受**该变量影响（仍然照跑），定时触发**只认**该变量。
+
+**不变的两条宽松口径**（手动与定时都适用，且**未在 CI 上执行过**，仅静态自检）：
+
+1. **缺 `secrets.DEEPSEEK_API_KEY` → 打印"未跑"并跳过作业，不失败**（`has_key=false` 时后续步骤全部 `if:` 挡住）；
+2. **`--suite=live` / `--suite=refusal` 退出码 2（environment）→ 告警不失败**
+   ——注释里已写明"**接入订单 seed 之后应改为 `exit 1`**"，否则这道门会长期以"未跑"姿态空转。
 
 ## 4. 只读校验与语法自检
 
@@ -130,15 +165,17 @@ python -c "import yaml; d=yaml.safe_load(open('.github/workflows/ai-eval.yml',en
 # → YAML 解析 OK；triggers=['workflow_dispatch','schedule']；jobs=['build-and-it','deterministic-eval','live-eval']
 #   build-and-it: runs-on=ubuntu-latest, services=['mysql','redis'], steps=6
 #   deterministic-eval: 同上，steps=6
-#   live-eval: if=github.event_name=='workflow_dispatch' && inputs.skip_live!=true, steps=9
+#   live-eval: if=(github.event_name == 'workflow_dispatch' && inputs.skip_live != true) || (github.event_name == 'schedule' && vars.EVAL_LIVE_ON_SCHEDULE == 'true')，steps=10
 ```
 
 **语法自检 ≠ 执行验证**：解析通过只能说明 YAML 合法，**不能**说明 job 在 runner 上会成功
 （service 健康检查、schema、seed、artifact 路径都需要首跑校准）。
+**本 workflow（含本次 opt-in 改动）从未在 CI 上执行过**；`if:` 逻辑只做了静态自检（见上面的解析输出）。
 
 ## 5. 后续（本任务不做）
 
 1. 订单 seed 脚本（≥1000，区间正确）→ 之后把 Job3 的 `exit 2` 从"警告"改成"失败"。
-2. 真机集**每日**跑的前提是基线数据可复现；否则维持"仅手动"。
+2. 真机集**定时跑**已由仓库变量 `EVAL_LIVE_ON_SCHEDULE` 控制（opt-in，默认关）；
+   等基线数据可复现（seed 落地）后，再把该变量设为 `true` 打开每日门禁。
 3. 本地脚本若要跨平台（Linux/macOS），把 `Get-NetTCPConnection` 换成 `Test-NetConnection`/`lsof` 抽象层，
    或直接复用 Job3 的 bash 版本。
