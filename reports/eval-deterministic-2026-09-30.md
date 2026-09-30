@@ -1,6 +1,6 @@
 # 助手评测报告（deterministic）
 
-> 生成时间：2026-09-30T15:29:38.654Z
+> 生成时间：2026-09-30T15:40:16.064Z
 > 目标：`http://localhost:8081`（账号 admin）
 > 数据基线：— 确定性集不需要真实数据基线
 > 结果：**通过 12/12**，失败 0，未跑 0
@@ -31,7 +31,7 @@
 | GQ-16 | 定义/知识类 | ✅ | 1 | 2 | — | 0.1 | 106 |  |
 | GQ-17 | 定义/知识类 | ✅ | 1 | 2 | — | 0.1 | 112 |  |
 | GQ-18 | 定义/知识类 | ✅ | 1 | 2 | — | 0.1 | 113 |  |
-| GQ-19 | 定义/知识类 | ✅ | 1 | 2 | — | 0.1 | 105 |  |
+| GQ-19 | 定义/知识类 | ✅ | 1 | 2 | — | 0.0 | 105 |  |
 | GQ-20 | 定义/知识类混合 | ✅ | 2 | 2 | — | 0.1 | 175 |  |
 | GQ-21 | 定义/知识类混合 | ✅ | 2 | 2 | — | 0.1 | 178 |  |
 | GQ-22 | 定义/知识类未收录 | ✅ | 1 | 2 | — | 0.0 | 9 |  |
@@ -45,7 +45,7 @@
 
 ```json
 {
-  "generatedAt": "2026-09-30T15:29:38.426Z",
+  "generatedAt": "2026-09-30T15:40:15.781Z",
   "generator": "scripts/single-source-of-truth.mjs",
   "requirement": "REQ-MCP-12 / AC-MCP-12",
   "tests": {
@@ -999,10 +999,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 8.729,
+          "timeSeconds": 8.545,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.EvaluationDeterministicIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790782177743.67
+          "mtimeMs": 1790782815094.8662
         },
         {
           "suite": "com.guarantee.web.ai.KnowledgeDisabledIT",
@@ -1241,9 +1241,9 @@
         "failures": 0,
         "errors": 0,
         "skipped": 0,
-        "timeSeconds": 60.74600000000001,
+        "timeSeconds": 60.56200000000001,
         "classes": 28,
-        "newnessMs": 1790782177743.67
+        "newnessMs": 1790782815094.8662
       }
     },
     "total": {
@@ -1421,7 +1421,7 @@
         }
       ]
     },
-    "newestReportAt": "2026-09-30T15:29:37.743Z",
+    "newestReportAt": "2026-09-30T15:40:15.094Z",
     "newestSourceAt": "2026-09-30T14:36:00.887Z",
     "stale": false
   },

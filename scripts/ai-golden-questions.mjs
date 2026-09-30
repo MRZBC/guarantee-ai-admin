@@ -37,7 +37,7 @@
  *     既不算通过也不算失败，单独统计（红线：不得把未跑写成通过）。
  */
 import { setTimeout as sleep } from 'node:timers/promises'
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -542,11 +542,15 @@ const DETERMINISTIC_IDS = [
   'GQ-33' // 知识：引用完整
 ]
 
-/** 内部术语：任何一条回答里都不该出现（提示词第 42 条）。 */
-const FORBIDDEN_TECH_TERMS = [
-  'queryOrderSummary',
-  'queryOrderDistribution',
-  'queryOrderTrend',
+/**
+ * 人工精选的内部术语（提示词第 42 条）：**参数名 / 编码 / 机制词**。
+ *
+ * <p>这些**刻意不动态生成**：把整张区域码表、险种码表拉进来会造成误报——
+ * 模型在正文里正当引用区划码（"浙江省（330000）"）是合理的，机器无法区分
+ * "正当引用"与"泄漏编码"。工具名则相反：工具名出现在用户正文里**永远是泄漏**，
+ * 所以那一半改成从源码动态抽取（见 {@link #collectToolNames}）。</p>
+ */
+const CURATED_FORBIDDEN_TERMS = [
   'orderType',
   'TENDER',
   'PERFORMANCE',
@@ -555,6 +559,56 @@ const FORBIDDEN_TECH_TERMS = [
   'dataSource',
   'tool_call'
 ]
+
+/**
+ * 从**源码**抽取全部工具名（读 + 写工具），避免"新加一个工具、黑名单忘了同步"。
+ *
+ * <p>两个真源：① `guarantee-ai` 下所有 `@Tool(name = "…")`（覆盖读工具与 propose* 写工具）；
+ * ② 业务 MCP 白名单 `tools/business-mcp/src/catalog.ts` 的 `backendName`（网关对外名）。
+ * 抽不到时**保留精选清单**（fail-safe：宁可少拦，也不误报）。</p>
+ */
+function collectToolNames() {
+  const names = new Set()
+  const scanJava = (dir) => {
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        scanJava(full)
+      } else if (entry.name.endsWith('.java')) {
+        try {
+          const text = readFileSync(full, 'utf8')
+          for (const match of text.matchAll(/@Tool\(\s*name\s*=\s*"([^"]+)"/g)) names.add(match[1])
+        } catch {
+          // 单文件读失败不影响整体
+        }
+      }
+    }
+  }
+  scanJava(path.join(ROOT, 'guarantee-ai', 'src', 'main', 'java'))
+  const catalogPath = path.join(ROOT, 'tools', 'business-mcp', 'src', 'catalog.ts')
+  if (existsSync(catalogPath)) {
+    const text = readFileSync(catalogPath, 'utf8')
+    for (const match of text.matchAll(/backendName:\s*'([^']+)'/g)) names.add(match[1])
+  }
+  return names
+}
+
+/** 动态抽到的工具名（`--self-check` 会校验它不为空，防止扫描静默失效）。 */
+const TOOL_NAMES = collectToolNames()
+
+/**
+ * 内部术语黑名单 = 动态工具名（全量）∪ 精选参数名/编码/机制词。
+ *
+ * <p>为什么工具名要全量：AC-BA-07 要求"正文不得出现工具名/参数名/编码"，
+ * 原先只硬编码了 3 个读工具名，13+ 个工具里绝大多数**根本没被强制**（登记过的真实缺口）。</p>
+ */
+const FORBIDDEN_TECH_TERMS = [...new Set([...TOOL_NAMES, ...CURATED_FORBIDDEN_TERMS])].sort()
 
 // ---------------------------------------------------------------------------
 // HTTP / SSE
@@ -1684,6 +1738,14 @@ function selfCheck() {
   // 周期解析器：把"真机踩过的坑"变成自检用例（解析器写错会让 AC-BA-02 假红/假绿）
   problems.push(...periodParserProblems())
 
+  // 动态工具名黑名单：扫描失效会静默退化成"只拦 3 个工具名"，必须自检
+  if (TOOL_NAMES.size < 13) {
+    problems.push(`动态工具名抽取只拿到 ${TOOL_NAMES.size} 个（应 ≥13）——检查 @Tool(name=…) 扫描与业务 MCP 白名单`)
+  }
+  for (const known of ['queryOrderSummary', 'queryBusinessKnowledge']) {
+    if (!TOOL_NAMES.has(known)) problems.push(`动态工具名缺少 ${known}（扫描逻辑可能坏了）`)
+  }
+
   if (problems.length > 0) {
     console.error('静态自检失败：')
     for (const problem of problems) console.error(`  - ${problem}`)
@@ -1745,7 +1807,12 @@ function periodParserProblems() {
   return problems
 }
 
-if (SELF_CHECK) {
+if (process.argv.includes('--list-forbidden')) {
+  // 诊断/留证用：把"到底在拦哪些词"打出来（工具名来自源码动态抽取）
+  console.log(`内部术语黑名单：动态工具名 ${TOOL_NAMES.size} 个 + 精选 ${CURATED_FORBIDDEN_TERMS.length} 个，去重后共 ${FORBIDDEN_TECH_TERMS.length} 个`)
+  console.log(FORBIDDEN_TECH_TERMS.join(', '))
+  process.exitCode = 0
+} else if (SELF_CHECK) {
   process.exitCode = selfCheck()
 } else {
   main().catch((error) => {
