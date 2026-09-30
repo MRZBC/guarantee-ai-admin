@@ -1,6 +1,6 @@
 {
   "schema": "ai-golden-questions/report@1",
-  "generatedAt": "2026-09-30T15:05:09.604Z",
+  "generatedAt": "2026-09-30T15:00:15.401Z",
   "suite": "live",
   "target": {
     "baseUrl": "http://127.0.0.1:8089",
@@ -36,9 +36,9 @@
       "avg": 2
     },
     "elapsedMs": {
-      "min": 3518,
-      "max": 3518,
-      "avg": 3518
+      "min": 4722,
+      "max": 4722,
+      "avg": 4722
     },
     "toolCalls": {
       "min": 1,
@@ -85,26 +85,26 @@
   ],
   "results": [
     {
-      "id": "GQ-25",
-      "category": "知识·降级（关掉知识层）",
-      "question": "2026 年第二季度投标订单量是多少？另外，你现在还能查业务知识库吗？",
+      "id": "GQ-05",
+      "category": "趋势（M2.1 新增能力）",
+      "question": "2026 年投标订单的保费按月走势如何？哪个月拐点最明显？",
       "status": "pass",
       "reasons": [],
       "tools": [
-        "queryOrderSummary:SUCCESS"
+        "queryOrderTrend:SUCCESS"
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 3518,
-      "answerChars": 536,
-      "consecutivePeriods": null,
+      "elapsedMs": 4722,
+      "answerChars": 1830,
+      "consecutivePeriods": 8,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
         "knowledgeSourceExpected": false,
         "knowledgeSourcePresent": false,
         "forbiddenViolations": 0,
-        "consecutivePeriods": null
+        "consecutivePeriods": 8
       }
     }
   ],
@@ -114,7 +114,7 @@
     "degraded": false,
     "source": "scripts/single-source-of-truth.mjs",
     "data": {
-      "generatedAt": "2026-09-30T15:05:09.373Z",
+      "generatedAt": "2026-09-30T15:00:15.171Z",
       "generator": "scripts/single-source-of-truth.mjs",
       "requirement": "REQ-MCP-12 / AC-MCP-12",
       "tests": {

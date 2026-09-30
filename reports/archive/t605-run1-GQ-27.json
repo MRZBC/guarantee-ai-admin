@@ -1,6 +1,6 @@
 {
   "schema": "ai-golden-questions/report@1",
-  "generatedAt": "2026-09-30T15:05:09.604Z",
+  "generatedAt": "2026-09-30T15:00:20.015Z",
   "suite": "live",
   "target": {
     "baseUrl": "http://127.0.0.1:8089",
@@ -12,21 +12,21 @@
     "detail": "总订单量 150000（投标 100000 / 履约 50000），数据区间 2025-01-01 ~ 2026-09-30（seed 未自动校验：无 HTTP 出口）"
   },
   "status": {
-    "live": "ok",
+    "live": "assertion-failed",
     "deterministic": "not-run",
     "detail": {
-      "live": "全部通过",
+      "live": "1 条断言失败",
       "deterministic": null
     }
   },
   "totals": {
     "total": 1,
-    "passed": 1,
-    "failed": 0,
+    "passed": 0,
+    "failed": 1,
     "notRun": 0
   },
   "metrics": {
-    "passRate": 1,
+    "passRate": 0,
     "dataSourceConsistencyRate": 1,
     "citationCompletenessRate": null,
     "forbiddenTermViolations": 0,
@@ -36,9 +36,9 @@
       "avg": 2
     },
     "elapsedMs": {
-      "min": 3518,
-      "max": 3518,
-      "avg": 3518
+      "min": 3160,
+      "max": 3160,
+      "avg": 3160
     },
     "toolCalls": {
       "min": 1,
@@ -85,26 +85,28 @@
   ],
   "results": [
     {
-      "id": "GQ-25",
-      "category": "知识·降级（关掉知识层）",
-      "question": "2026 年第二季度投标订单量是多少？另外，你现在还能查业务知识库吗？",
-      "status": "pass",
-      "reasons": [],
+      "id": "GQ-27",
+      "category": "单维度统计",
+      "question": "2026 年上半年履约订单按月汇总，哪个月订单量最高？",
+      "status": "fail",
+      "reasons": [
+        "最长连续周期数 4 < 6（识别到 7 个周期点；AC-BA-02 要求 ≥6 个连续周期）"
+      ],
       "tools": [
-        "queryOrderSummary:SUCCESS"
+        "queryOrderTrend:SUCCESS"
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 3518,
-      "answerChars": 536,
-      "consecutivePeriods": null,
+      "elapsedMs": 3160,
+      "answerChars": 1111,
+      "consecutivePeriods": 4,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
         "knowledgeSourceExpected": false,
         "knowledgeSourcePresent": false,
         "forbiddenViolations": 0,
-        "consecutivePeriods": null
+        "consecutivePeriods": 4
       }
     }
   ],
@@ -114,7 +116,7 @@
     "degraded": false,
     "source": "scripts/single-source-of-truth.mjs",
     "data": {
-      "generatedAt": "2026-09-30T15:05:09.373Z",
+      "generatedAt": "2026-09-30T15:00:19.782Z",
       "generator": "scripts/single-source-of-truth.mjs",
       "requirement": "REQ-MCP-12 / AC-MCP-12",
       "tests": {

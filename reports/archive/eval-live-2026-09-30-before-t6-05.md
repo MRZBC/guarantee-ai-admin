@@ -1,14 +1,31 @@
-# 助手评测报告（deterministic）
+# 助手评测报告（live）
 
-> 生成时间：2026-09-30T15:05:35.076Z
-> 目标：`http://localhost:8081`（账号 admin）
-> 数据基线：— 确定性集不需要真实数据基线
-> 结果：**通过 12/12**，失败 0，未跑 0
+> 生成时间：2026-09-30T11:09:19.350Z
+> 目标：`http://localhost:8088`（账号 admin）
+> 数据基线：✅ 总订单量 150000（投标 100000 / 履约 50000），数据区间 2025-01-01 ~ 2026-09-30（seed 未自动校验：无 HTTP 出口）
+> 结果：**通过 32/32**，失败 0，未跑 1
 
 | 套件 | 状态 | 说明 |
 |---|---|---|
-| deterministic | ok | 确定性集 12/12 通过（未跑 0） |
-| live | not-run |  |
+| deterministic | not-run |  |
+| live | partial | 1 条未跑（其中环境类 0） |
+
+## 与基线的 diff（REQ-MCP-07）
+
+基线：2026-09-30T10:29:59.957Z（suite=live）
+
+- **新增失败：0**
+- 新修复：4
+  - ✅ GQ-10（系统域回归）
+  - ✅ GQ-20（知识·混合（定义 + 统计））
+  - ✅ GQ-24（知识·越权（只读用户不得看到审计口径））
+  - ✅ GQ-29（交叉/趋势/分布）
+- 仍失败：0
+- 基线里没有的新题：无
+- 指标变化：
+  - passRate：0.875 → 1
+  - rounds.avg：1.8 → 1.7
+  - elapsedMs.avg：3602.9 → 3513.9
 
 ## 打分（REQ-MCP-06）
 
@@ -18,26 +35,51 @@
 | 口径正确率（有工具调用必有口径行） | 1 |
 | 引用完整率（知识类必有来源行） | 1 |
 | 禁用术语违规数 | 0 |
-| 轮次 min/avg/max | 2 / 2 / 2 |
-| 耗时(s) min/avg/max | 0.0 / 0.1 / 0.5 |
-| 工具调用 min/avg/max | 1 / 1.2 / 2 |
+| 轮次 min/avg/max | 0 / 1.7 / 2 |
+| 耗时(s) min/avg/max | 1.6 / 3.5 / 11.1 |
+| 工具调用 min/avg/max | 0 / 1.3 / 8 |
 
 ## 逐题结果
 
-| 编号 | 类别 | 结果 | 工具调用 | 轮次 | 连续周期 | 耗时(s) | 正文字数 | 备注 |
-|---|---|---|---|---|---|---|---|---|
-| GQ-07 | 单维度统计 | ✅ | 1 | 2 | — | 0.5 | 207 |  |
-| GQ-12 | 降级/失败 | ✅ | 1 | 2 | — | 0.1 | 205 |  |
-| GQ-16 | 定义/知识类 | ✅ | 1 | 2 | — | 0.1 | 106 |  |
-| GQ-17 | 定义/知识类 | ✅ | 1 | 2 | — | 0.1 | 112 |  |
-| GQ-18 | 定义/知识类 | ✅ | 1 | 2 | — | 0.1 | 113 |  |
-| GQ-19 | 定义/知识类 | ✅ | 1 | 2 | — | 0.1 | 105 |  |
-| GQ-20 | 定义/知识类混合 | ✅ | 2 | 2 | — | 0.1 | 175 |  |
-| GQ-21 | 定义/知识类混合 | ✅ | 2 | 2 | — | 0.1 | 178 |  |
-| GQ-22 | 定义/知识类未收录 | ✅ | 1 | 2 | — | 0.0 | 9 |  |
-| GQ-24 | 定义/知识类越权 | ✅ | 1 | 2 | — | 0.0 | 100 |  |
-| GQ-26 | 单维度统计 | ✅ | 1 | 2 | — | 0.2 | 213 |  |
-| GQ-33 | 定义/知识类 | ✅ | 1 | 2 | — | 0.0 | 105 |  |
+| 编号 | 类别 | 结果 | 工具调用 | 轮次 | 耗时(s) | 正文字数 | 备注 |
+|---|---|---|---|---|---|---|---|
+| GQ-01 | 三维度对比 | ✅ | 8 | 2 | 11.1 | 8039 |  |
+| GQ-02 | 三维度对比 | ✅ | 4 | 2 | 5.4 | 2874 |  |
+| GQ-03 | 交叉维度（M2.1 新增能力） | ✅ | 2 | 2 | 6.1 | 2778 |  |
+| GQ-04 | 交叉维度（M2.1 新增能力） | ✅ | 1 | 2 | 3.2 | 1159 |  |
+| GQ-05 | 趋势（M2.1 新增能力） | ✅ | 1 | 2 | 5.6 | 2135 |  |
+| GQ-06 | 趋势（M2.1 新增能力） | ✅ | 1 | 2 | 4.2 | 1592 |  |
+| GQ-07 | 单维度 | ✅ | 1 | 2 | 2.4 | 468 |  |
+| GQ-08 | 单维度 | ✅ | 1 | 2 | 2.9 | 1168 |  |
+| GQ-09 | 系统域回归 | ✅ | 2 | 2 | 3.0 | 720 |  |
+| GQ-10 | 系统域回归 | ✅ | 1 | 2 | 2.3 | 226 |  |
+| GQ-11 | 降级：缺维度 | ✅ | 2 | 2 | 4.1 | 801 |  |
+| GQ-12 | 降级：空结果 | ✅ | 1 | 2 | 2.7 | 417 |  |
+| GQ-13 | 降级：能力边界要给出替代问法 | ✅ | 0 | 0 | 2.9 | 654 |  |
+| GQ-14 | 越界：业务数据写操作 | ✅ | 0 | 0 | 1.6 | 183 |  |
+| GQ-15 | 越界：导出/预测 | ✅ | 0 | 0 | 1.9 | 281 |  |
+| GQ-16 | 知识·定义（有收录） | ✅ | 1 | 2 | 3.8 | 946 |  |
+| GQ-17 | 知识·定义（有收录） | ✅ | 1 | 2 | 3.2 | 854 |  |
+| GQ-18 | 知识·定义（有收录） | ✅ | 1 | 2 | 3.0 | 671 |  |
+| GQ-19 | 知识·定义（有收录） | ✅ | 1 | 2 | 3.6 | 819 |  |
+| GQ-20 | 知识·混合（定义 + 统计） | ✅ | 2 | 2 | 3.2 | 823 |  |
+| GQ-21 | 知识·混合（定义 + 统计） | ✅ | 2 | 2 | 3.0 | 706 |  |
+| GQ-22 | 知识·未收录 | ✅ | 1 | 2 | 2.8 | 315 |  |
+| GQ-23 | 知识·未收录 | ✅ | 1 | 2 | 2.6 | 197 |  |
+| GQ-24 | 知识·越权（只读用户不得看到审计口径） | ✅ | 1 | 2 | 2.8 | 536 |  |
+| GQ-25 | 知识·降级（关掉知识层） | ⏭ 未跑 | 0 | 0 | 0.0 | 0 | 需要后端以 guarantee.ai.knowledge.enabled=false 重启，并设 GOLDEN_KNOWLEDGE_DISABLED=1 |
+| GQ-26 | 单维度统计 | ✅ | 1 | 2 | 2.2 | 421 |  |
+| GQ-27 | 单维度统计 | ✅ | 1 | 2 | 3.2 | 1126 |  |
+| GQ-28 | 单维度统计 | ✅ | 1 | 2 | 3.4 | 1398 |  |
+| GQ-29 | 交叉/趋势/分布 | ✅ | 1 | 2 | 3.2 | 1120 |  |
+| GQ-30 | 越界拒答 | ✅ | 0 | 0 | 1.7 | 356 |  |
+| GQ-31 | 越界拒答 | ✅ | 0 | 0 | 2.5 | 521 |  |
+| GQ-32 | 降级/失败 | ✅ | 1 | 2 | 5.5 | 3266 |  |
+| GQ-33 | 定义/知识类 | ✅ | 1 | 2 | 3.3 | 635 |  |
+
+## 未跑清单（不得当作通过）
+
+- GQ-25（知识·降级（关掉知识层））：需要后端以 guarantee.ai.knowledge.enabled=false 重启，并设 GOLDEN_KNOWLEDGE_DISABLED=1
 
 ## 单一事实源（REQ-MCP-12）
 
@@ -45,7 +87,7 @@
 
 ```json
 {
-  "generatedAt": "2026-09-30T15:05:34.850Z",
+  "generatedAt": "2026-09-30T11:09:19.117Z",
   "generator": "scripts/single-source-of-truth.mjs",
   "requirement": "REQ-MCP-12 / AC-MCP-12",
   "tests": {
@@ -63,25 +105,25 @@
       "suites": [
         {
           "suite": "com.guarantee.ai.config.AiConfigCatalogTest",
-          "tests": 13,
+          "tests": 12,
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.185,
+          "timeSeconds": 0.151,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.config.AiConfigCatalogTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779047087.0093
+          "mtimeMs": 1790715702908.7444
         },
         {
           "suite": "com.guarantee.ai.config.AiConfigServiceTest",
-          "tests": 16,
+          "tests": 15,
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 1.947,
+          "timeSeconds": 1.661,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.config.AiConfigServiceTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779049043.629
+          "mtimeMs": 1790715704578.874
         },
         {
           "suite": "com.guarantee.ai.config.PromptVersionServiceTest",
@@ -89,10 +131,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.751,
+          "timeSeconds": 0.693,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.config.PromptVersionServiceTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779049797.246
+          "mtimeMs": 1790715705274.593
         },
         {
           "suite": "com.guarantee.ai.knowledge.KnowledgeDocumentParserTest",
@@ -103,7 +145,7 @@
           "timeSeconds": 0.048,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.knowledge.KnowledgeDocumentParserTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779049843.9785
+          "mtimeMs": 1790715705319.6035
         },
         {
           "suite": "com.guarantee.ai.knowledge.KnowledgeImporterTest",
@@ -111,10 +153,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.018,
+          "timeSeconds": 0.023,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.knowledge.KnowledgeImporterTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779049869.9785
+          "mtimeMs": 1790715705349.1428
         },
         {
           "suite": "com.guarantee.ai.knowledge.KnowledgeMapperXmlTest",
@@ -122,10 +164,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.22,
+          "timeSeconds": 0.223,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.knowledge.KnowledgeMapperXmlTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779050088.7117
+          "mtimeMs": 1790715705570.2268
         },
         {
           "suite": "com.guarantee.ai.knowledge.KnowledgeServiceTest",
@@ -133,10 +175,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.029,
+          "timeSeconds": 0.037,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.knowledge.KnowledgeServiceTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779050119.2195
+          "mtimeMs": 1790715705612.234
         },
         {
           "suite": "com.guarantee.ai.knowledge.KnowledgeSourceLoaderTest",
@@ -144,10 +186,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.067,
+          "timeSeconds": 0.078,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.knowledge.KnowledgeSourceLoaderTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779050185.2246
+          "mtimeMs": 1790715705689.476
         },
         {
           "suite": "com.guarantee.ai.knowledge.KnowledgeTermsTest",
@@ -155,10 +197,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.002,
+          "timeSeconds": 0.003,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.knowledge.KnowledgeTermsTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779050191.2244
+          "mtimeMs": 1790715705695.479
         },
         {
           "suite": "com.guarantee.ai.mcp.McpControllerProtocolTest",
@@ -166,10 +208,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.191,
+          "timeSeconds": 0.185,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.mcp.McpControllerProtocolTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779050387.2068
+          "mtimeMs": 1790715705888.119
         },
         {
           "suite": "com.guarantee.ai.mcp.McpEnabledConditionTest",
@@ -177,10 +219,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.393,
+          "timeSeconds": 0.368,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.mcp.McpEnabledConditionTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779050785.7654
+          "mtimeMs": 1790715706256.8352
         },
         {
           "suite": "com.guarantee.ai.mcp.McpRateLimiterTest",
@@ -188,10 +230,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.144,
+          "timeSeconds": 0.143,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.mcp.McpRateLimiterTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779050929.739
+          "mtimeMs": 1790715706400.1143
         },
         {
           "suite": "com.guarantee.ai.mcp.McpTokenMappingTest",
@@ -199,10 +241,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.009,
+          "timeSeconds": 0.014,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.mcp.McpTokenMappingTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779050938.7383
+          "mtimeMs": 1790715706415.1191
         },
         {
           "suite": "com.guarantee.ai.mcp.McpTokenServiceTest",
@@ -210,10 +252,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.058,
+          "timeSeconds": 0.053,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.mcp.McpTokenServiceTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779050999.2588
+          "mtimeMs": 1790715706472.008
         },
         {
           "suite": "com.guarantee.ai.mcp.McpToolCatalogTest",
@@ -221,10 +263,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.01,
+          "timeSeconds": 0.011,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.mcp.McpToolCatalogTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779051007.2678
+          "mtimeMs": 1790715706480.0063
         },
         {
           "suite": "com.guarantee.ai.mcp.McpToolInvokerGateTest",
@@ -232,10 +274,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.18,
+          "timeSeconds": 0.142,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.mcp.McpToolInvokerGateTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779051189.3044
+          "mtimeMs": 1790715706623.0576
         },
         {
           "suite": "com.guarantee.ai.mcp.McpToolInvokerTest",
@@ -243,10 +285,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.056,
+          "timeSeconds": 0.068,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.mcp.McpToolInvokerTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779051248.84
+          "mtimeMs": 1790715706693.7192
         },
         {
           "suite": "com.guarantee.ai.metrics.AiChatMetricsTest",
@@ -254,10 +296,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.04,
+          "timeSeconds": 0.035,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.metrics.AiChatMetricsTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779051285.8318
+          "mtimeMs": 1790715706726.724
         },
         {
           "suite": "com.guarantee.ai.metrics.AiTurnMetricMappingTest",
@@ -265,10 +307,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.006,
+          "timeSeconds": 0.01,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.metrics.AiTurnMetricMappingTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779051291.8303
+          "mtimeMs": 1790715706735.1758
         },
         {
           "suite": "com.guarantee.ai.metrics.TurnMetricServiceTest",
@@ -276,10 +318,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.035,
+          "timeSeconds": 0.037,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.metrics.TurnMetricServiceTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779051329.927
+          "mtimeMs": 1790715706775.441
         },
         {
           "suite": "com.guarantee.ai.service.AiChatServiceBudgetGuardTest",
@@ -287,10 +329,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.447,
+          "timeSeconds": 0.396,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.service.AiChatServiceBudgetGuardTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779051789.767
+          "mtimeMs": 1790715707179.015
         },
         {
           "suite": "com.guarantee.ai.service.AiChatServiceRetractionNoticeTest",
@@ -301,29 +343,29 @@
           "timeSeconds": 0.002,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.service.AiChatServiceRetractionNoticeTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779051799.7664
+          "mtimeMs": 1790715707185.0142
         },
         {
           "suite": "com.guarantee.ai.service.AiConfigWiringTest",
-          "tests": 12,
+          "tests": 10,
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.111,
+          "timeSeconds": 0.083,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.service.AiConfigWiringTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779051902.9248
+          "mtimeMs": 1790715707265.155
         },
         {
           "suite": "com.guarantee.ai.service.DataSourceClaimGuardTest",
-          "tests": 14,
+          "tests": 11,
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.006,
+          "timeSeconds": 0.004,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.service.DataSourceClaimGuardTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779051913.9304
+          "mtimeMs": 1790715707277.1526
         },
         {
           "suite": "com.guarantee.ai.service.KnowledgeClaimGuardTest",
@@ -334,7 +376,7 @@
           "timeSeconds": 0.005,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.service.KnowledgeClaimGuardTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779051922.4607
+          "mtimeMs": 1790715707286.1548
         },
         {
           "suite": "com.guarantee.ai.service.NumberClaimGuardTest",
@@ -342,10 +384,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.003,
+          "timeSeconds": 0.002,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.service.NumberClaimGuardTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779051931.4492
+          "mtimeMs": 1790715707296.154
         },
         {
           "suite": "com.guarantee.ai.service.OperationAuditServiceTest",
@@ -353,10 +395,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.068,
+          "timeSeconds": 0.076,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.service.OperationAuditServiceTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779051982.4482
+          "mtimeMs": 1790715707351.8823
         },
         {
           "suite": "com.guarantee.ai.service.ProposalClaimGuardTest",
@@ -364,32 +406,21 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.038,
+          "timeSeconds": 0.043,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.service.ProposalClaimGuardTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779052023.3418
+          "mtimeMs": 1790715707394.8816
         },
         {
           "suite": "com.guarantee.ai.service.ProposalNumberGuardTest",
-          "tests": 9,
+          "tests": 8,
           "failures": 0,
           "errors": 0,
           "skipped": 0,
           "timeSeconds": 0.003,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.service.ProposalNumberGuardTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779052028.3413
-        },
-        {
-          "suite": "com.guarantee.ai.service.ProposalServiceMetricsTest",
-          "tests": 9,
-          "failures": 0,
-          "errors": 0,
-          "skipped": 0,
-          "timeSeconds": 0.269,
-          "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.service.ProposalServiceMetricsTest.xml",
-          "kind": "surefire",
-          "mtimeMs": 1790779052306.7002
+          "mtimeMs": 1790715707399.8816
         },
         {
           "suite": "com.guarantee.ai.service.ProposalServiceReusePublishTest",
@@ -397,10 +428,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.004,
+          "timeSeconds": 0.219,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.service.ProposalServiceReusePublishTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779052314.7004
+          "mtimeMs": 1790715707623.4592
         },
         {
           "suite": "com.guarantee.ai.service.ToolExecutionTimeoutGuardTest",
@@ -408,10 +439,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.146,
+          "timeSeconds": 0.13,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.service.ToolExecutionTimeoutGuardTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779052456.0667
+          "mtimeMs": 1790715707755.0312
         },
         {
           "suite": "com.guarantee.ai.time.TimeSemanticParserTest",
@@ -419,10 +450,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.062,
+          "timeSeconds": 0.049,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.time.TimeSemanticParserTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779052516.712
+          "mtimeMs": 1790715707803.6182
         },
         {
           "suite": "com.guarantee.ai.tool.AiPermissionGuardTest",
@@ -433,7 +464,7 @@
           "timeSeconds": 0.003,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.AiPermissionGuardTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779052521.733
+          "mtimeMs": 1790715707808.6187
         },
         {
           "suite": "com.guarantee.ai.tool.AiToolRegistryTest",
@@ -441,10 +472,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.566,
+          "timeSeconds": 0.561,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.AiToolRegistryTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779053087.0725
+          "mtimeMs": 1790715708368.6958
         },
         {
           "suite": "com.guarantee.ai.tool.DataMetricsTest",
@@ -455,7 +486,7 @@
           "timeSeconds": 0.033,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.DataMetricsTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779053119.0764
+          "mtimeMs": 1790715708400.699
         },
         {
           "suite": "com.guarantee.ai.tool.DataSourceTextTest",
@@ -466,7 +497,7 @@
           "timeSeconds": 0.006,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.DataSourceTextTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779053125.1062
+          "mtimeMs": 1790715708406.699
         },
         {
           "suite": "com.guarantee.ai.tool.InsuranceTypeQueryToolTest",
@@ -474,10 +505,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.01,
+          "timeSeconds": 1.853,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.InsuranceTypeQueryToolTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779053138.6428
+          "mtimeMs": 1790766361475.4395
         },
         {
           "suite": "com.guarantee.ai.tool.MyProposalsQueryToolTest",
@@ -485,10 +516,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.009,
+          "timeSeconds": 0.01,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.MyProposalsQueryToolTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779053152.6318
+          "mtimeMs": 1790715708420.7021
         },
         {
           "suite": "com.guarantee.ai.tool.OrderDistributionToolTest",
@@ -496,10 +527,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.018,
+          "timeSeconds": 0.015,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.OrderDistributionToolTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779053168.6294
+          "mtimeMs": 1790715708437.233
         },
         {
           "suite": "com.guarantee.ai.tool.OrderTrendToolTest",
@@ -507,10 +538,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.018,
+          "timeSeconds": 0.017,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.OrderTrendToolTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779053183.6333
+          "mtimeMs": 1790715708457.2324
         },
         {
           "suite": "com.guarantee.ai.tool.QueryBusinessKnowledgeToolTest",
@@ -518,10 +549,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.034,
+          "timeSeconds": 0.037,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.QueryBusinessKnowledgeToolTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779053219.6335
+          "mtimeMs": 1790715708492.2358
         },
         {
           "suite": "com.guarantee.ai.tool.SanitizingToolCallbackTest",
@@ -529,10 +560,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.009,
+          "timeSeconds": 0.01,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.SanitizingToolCallbackTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779053224.1453
+          "mtimeMs": 1790715708499.2336
         },
         {
           "suite": "com.guarantee.ai.tool.SensitiveFieldMaskerTest",
@@ -540,10 +571,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.004,
+          "timeSeconds": 0.005,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.SensitiveFieldMaskerTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779053229.145
+          "mtimeMs": 1790715708504.2407
         },
         {
           "suite": "com.guarantee.ai.tool.ToolResultSanitizerTest",
@@ -551,10 +582,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.009,
+          "timeSeconds": 0.01,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.ToolResultSanitizerTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779053238.1462
+          "mtimeMs": 1790715708515.2322
         },
         {
           "suite": "com.guarantee.ai.tool.TurnFactsTest",
@@ -565,7 +596,7 @@
           "timeSeconds": 0.009,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.TurnFactsTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779053248.1455
+          "mtimeMs": 1790715708524.252
         },
         {
           "suite": "com.guarantee.ai.tool.write.RoleProposalToolPermissionDisplayTest",
@@ -576,7 +607,7 @@
           "timeSeconds": 0.007,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.write.RoleProposalToolPermissionDisplayTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779053256.149
+          "mtimeMs": 1790715708531.7805
         },
         {
           "suite": "com.guarantee.ai.tool.write.WriteToolResultTest",
@@ -584,10 +615,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.001,
+          "timeSeconds": 0,
           "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.write.WriteToolResultTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779053261.1445
+          "mtimeMs": 1790715708536.7952
         },
         {
           "suite": "com.guarantee.analysis.dto.OrderTrendQueryTest",
@@ -595,10 +626,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.099,
+          "timeSeconds": 0.077,
           "file": "guarantee-analysis/target/surefire-reports/TEST-com.guarantee.analysis.dto.OrderTrendQueryTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779044053.5034
+          "mtimeMs": 1790715693008.582
         },
         {
           "suite": "com.guarantee.analysis.mapper.DistributionDimensionNameTest",
@@ -606,10 +637,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.012,
+          "timeSeconds": 0.011,
           "file": "guarantee-analysis/target/surefire-reports/TEST-com.guarantee.analysis.mapper.DistributionDimensionNameTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779044067.504
+          "mtimeMs": 1790715693022.1272
         },
         {
           "suite": "com.guarantee.analysis.mapper.TrendGranularityMapperXmlTest",
@@ -617,10 +648,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.007,
+          "timeSeconds": 0.005,
           "file": "guarantee-analysis/target/surefire-reports/TEST-com.guarantee.analysis.mapper.TrendGranularityMapperXmlTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779044074.5066
+          "mtimeMs": 1790715693028.127
         },
         {
           "suite": "com.guarantee.auth.config.SecurityConfigCorsTest",
@@ -628,10 +659,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.23,
+          "timeSeconds": 0.203,
           "file": "guarantee-auth/target/surefire-reports/TEST-com.guarantee.auth.config.SecurityConfigCorsTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779037033.8362
+          "mtimeMs": 1790715686009.4448
         },
         {
           "suite": "com.guarantee.auth.security.JwtTokenProviderSecretTest",
@@ -639,10 +670,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.341,
+          "timeSeconds": 0.301,
           "file": "guarantee-auth/target/surefire-reports/TEST-com.guarantee.auth.security.JwtTokenProviderSecretTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779037377.2017
+          "mtimeMs": 1790715686311.7554
         },
         {
           "suite": "com.guarantee.auth.security.TokenRevocationServiceFailureModeTest",
@@ -650,10 +681,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 1.953,
+          "timeSeconds": 1.971,
           "file": "guarantee-auth/target/surefire-reports/TEST-com.guarantee.auth.security.TokenRevocationServiceFailureModeTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779039347.6338
+          "mtimeMs": 1790715688298.751
         },
         {
           "suite": "com.guarantee.auth.service.AuthServiceServiceAccountLoginTest",
@@ -661,10 +692,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.165,
+          "timeSeconds": 0.167,
           "file": "guarantee-auth/target/surefire-reports/TEST-com.guarantee.auth.service.AuthServiceServiceAccountLoginTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779039516.5981
+          "mtimeMs": 1790715688470.9956
         },
         {
           "suite": "com.guarantee.common.exception.GlobalExceptionHandlerTest",
@@ -672,10 +703,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 1.669,
+          "timeSeconds": 1.746,
           "file": "guarantee-common/target/surefire-reports/TEST-com.guarantee.common.exception.GlobalExceptionHandlerTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779019281.8057
+          "mtimeMs": 1790715667471.4019
         },
         {
           "suite": "com.guarantee.common.region.RegionCodePrefixTest",
@@ -683,10 +714,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.011,
+          "timeSeconds": 0.012,
           "file": "guarantee-common/target/surefire-reports/TEST-com.guarantee.common.region.RegionCodePrefixTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779019291.3508
+          "mtimeMs": 1790715667481.406
         },
         {
           "suite": "com.guarantee.order.mapper.OrderDimensionNamePreservationTest",
@@ -694,10 +725,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.096,
+          "timeSeconds": 0.086,
           "file": "guarantee-order/target/surefire-reports/TEST-com.guarantee.order.mapper.OrderDimensionNamePreservationTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779041768.2185
+          "mtimeMs": 1790715690747.4595
         },
         {
           "suite": "com.guarantee.system.controller.DepartmentControllerTreeAuthTest",
@@ -705,10 +736,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.119,
+          "timeSeconds": 0.114,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.controller.DepartmentControllerTreeAuthTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779021922.3894
+          "mtimeMs": 1790715670313.6367
         },
         {
           "suite": "com.guarantee.system.controller.OrderFilterDictionaryPermissionTest",
@@ -716,10 +747,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.172,
+          "timeSeconds": 0.168,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.controller.OrderFilterDictionaryPermissionTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779022096.7043
+          "mtimeMs": 1790715670481.183
         },
         {
           "suite": "com.guarantee.system.entity.SysUserAccountTypeTest",
@@ -727,10 +758,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.002,
+          "timeSeconds": 0.003,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.entity.SysUserAccountTypeTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779022102.7068
+          "mtimeMs": 1790715670487.1826
         },
         {
           "suite": "com.guarantee.system.mapper.SysUserAccountTypeMapperXmlTest",
@@ -738,10 +769,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.267,
+          "timeSeconds": 0.22,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.mapper.SysUserAccountTypeMapperXmlTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779022366.066
+          "mtimeMs": 1790715670706.1633
         },
         {
           "suite": "com.guarantee.system.mybatis.LogicalDeletePermissionsTest",
@@ -752,7 +783,7 @@
           "timeSeconds": 0.012,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.mybatis.LogicalDeletePermissionsTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779022383.0906
+          "mtimeMs": 1790715670718.0684
         },
         {
           "suite": "com.guarantee.system.mybatis.LogicalDeleteSchemaIntegrationTest",
@@ -760,10 +791,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 5.692,
+          "timeSeconds": 5.711,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.mybatis.LogicalDeleteSchemaIntegrationTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779028081.9092
+          "mtimeMs": 1790715676440.63
         },
         {
           "suite": "com.guarantee.system.mybatis.LogicalDeleteSqlRewriterTest",
@@ -774,7 +805,7 @@
           "timeSeconds": 0.011,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.mybatis.LogicalDeleteSqlRewriterTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779028091.906
+          "mtimeMs": 1790715676446.6423
         },
         {
           "suite": "com.guarantee.system.scope.DataScopeIntegrationTest",
@@ -782,10 +813,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.136,
+          "timeSeconds": 0.139,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.scope.DataScopeIntegrationTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779028227.4917
+          "mtimeMs": 1790715676587.8416
         },
         {
           "suite": "com.guarantee.system.scope.DataScopeTest",
@@ -796,7 +827,7 @@
           "timeSeconds": 0.004,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.scope.DataScopeTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779028233.5
+          "mtimeMs": 1790715676592.8372
         },
         {
           "suite": "com.guarantee.system.service.InsuranceTypeAmountBoundIntegrationTest",
@@ -804,10 +835,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.083,
+          "timeSeconds": 0.068,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.service.InsuranceTypeAmountBoundIntegrationTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779028320.3098
+          "mtimeMs": 1790715676663.6355
         },
         {
           "suite": "com.guarantee.system.service.InsuranceTypeFilterOptionsIntegrationTest",
@@ -815,10 +846,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.986,
+          "timeSeconds": 1.088,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.service.InsuranceTypeFilterOptionsIntegrationTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779029303.4321
+          "mtimeMs": 1790715677748.5515
         },
         {
           "suite": "com.guarantee.system.service.LogicalDeleteServiceIntegrationTest",
@@ -826,10 +857,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 1.836,
+          "timeSeconds": 2.055,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.service.LogicalDeleteServiceIntegrationTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779031144.0981
+          "mtimeMs": 1790715679809.4307
         },
         {
           "suite": "com.guarantee.system.service.OrgFilterOptionsIntegrationTest",
@@ -837,10 +868,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.767,
+          "timeSeconds": 0.871,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.service.OrgFilterOptionsIntegrationTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779031906.8604
+          "mtimeMs": 1790715680676.2302
         },
         {
           "suite": "com.guarantee.system.service.RegionServiceIntegrationTest",
@@ -848,10 +879,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 1.696,
+          "timeSeconds": 1.773,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.service.RegionServiceIntegrationTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779033603.7993
+          "mtimeMs": 1790715682450.7224
         },
         {
           "suite": "com.guarantee.system.service.RoleServicePermissionDisplayTest",
@@ -859,10 +890,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.659,
+          "timeSeconds": 0.663,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.service.RoleServicePermissionDisplayTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779034268.3296
+          "mtimeMs": 1790715683119.1855
         },
         {
           "suite": "com.guarantee.system.service.SysUserAccountTypeIntegrationTest",
@@ -870,10 +901,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.101,
+          "timeSeconds": 0.114,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.service.SysUserAccountTypeIntegrationTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779034371.5227
+          "mtimeMs": 1790715683234.33
         },
         {
           "suite": "com.guarantee.system.service.UserServiceRoleDisplayTest",
@@ -881,10 +912,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.107,
+          "timeSeconds": 0.118,
           "file": "guarantee-system/target/surefire-reports/TEST-com.guarantee.system.service.UserServiceRoleDisplayTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779034481.6028
+          "mtimeMs": 1790715683355.869
         },
         {
           "suite": "com.guarantee.web.ai.config.AiConfigChangeAuditTest",
@@ -892,10 +923,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 2.116,
+          "timeSeconds": 1.909,
           "file": "guarantee-web/target/surefire-reports/TEST-com.guarantee.web.ai.config.AiConfigChangeAuditTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779057837.4514
+          "mtimeMs": 1790715713008.6182
         },
         {
           "suite": "com.guarantee.web.ai.ProposalFingerprintClosureTest",
@@ -903,20 +934,20 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.517,
+          "timeSeconds": 0.484,
           "file": "guarantee-web/target/surefire-reports/TEST-com.guarantee.web.ai.ProposalFingerprintClosureTest.xml",
           "kind": "surefire",
-          "mtimeMs": 1790779058361.2212
+          "mtimeMs": 1790715713499.7886
         }
       ],
       "totals": {
-        "tests": 617,
+        "tests": 600,
         "failures": 0,
         "errors": 0,
         "skipped": 0,
-        "timeSeconds": 26.154999999999998,
-        "classes": 77,
-        "newnessMs": 1790779058361.2212
+        "timeSeconds": 27.674999999999997,
+        "classes": 76,
+        "newnessMs": 1790766361475.4395
       }
     },
     "integration": {
@@ -933,10 +964,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 4.539,
+          "timeSeconds": 4.798,
           "file": "guarantee-analysis/target/failsafe-reports/TEST-com.guarantee.analysis.mapper.OrderTrendGranularityIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776808817.7683
+          "mtimeMs": 1790715699968.1924
         },
         {
           "suite": "com.guarantee.web.ai.AiConfigWiringIT",
@@ -944,10 +975,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 8.196,
+          "timeSeconds": 7.942,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.AiConfigWiringIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776838829.02
+          "mtimeMs": 1790715724093.9436
         },
         {
           "suite": "com.guarantee.web.ai.AiObservabilityIT",
@@ -955,10 +986,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 8.052,
+          "timeSeconds": 1.021,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.AiObservabilityIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790779013166.0325
+          "mtimeMs": 1790715725116.4116
         },
         {
           "suite": "com.guarantee.web.ai.AiToolChainIT",
@@ -966,10 +997,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 1.041,
+          "timeSeconds": 1.078,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.AiToolChainIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776840930.642
+          "mtimeMs": 1790715726191.7424
         },
         {
           "suite": "com.guarantee.web.ai.config.AiConfigChangeAuditIT",
@@ -977,10 +1008,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 2.251,
+          "timeSeconds": 2.321,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.config.AiConfigChangeAuditIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776843187.5818
+          "mtimeMs": 1790715728517.496
         },
         {
           "suite": "com.guarantee.web.ai.config.PromptVersionLifecycleIT",
@@ -988,10 +1019,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.707,
+          "timeSeconds": 0.726,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.config.PromptVersionLifecycleIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776843892.8076
+          "mtimeMs": 1790715729243.2842
         },
         {
           "suite": "com.guarantee.web.ai.EvaluationDeterministicIT",
@@ -999,10 +1030,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 8.673,
+          "timeSeconds": 10.965,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.EvaluationDeterministicIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790780734177.2778
+          "mtimeMs": 1790764303000.3718
         },
         {
           "suite": "com.guarantee.web.ai.KnowledgeDisabledIT",
@@ -1010,10 +1041,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.628,
+          "timeSeconds": 0.693,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.KnowledgeDisabledIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776845826.685
+          "mtimeMs": 1790715731280.1514
         },
         {
           "suite": "com.guarantee.web.ai.KnowledgeRetrievalIT",
@@ -1021,10 +1052,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.721,
+          "timeSeconds": 0.741,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.KnowledgeRetrievalIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776846551.3223
+          "mtimeMs": 1790715732025.414
         },
         {
           "suite": "com.guarantee.web.ai.mcp.McpBackendIT",
@@ -1032,10 +1063,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.802,
+          "timeSeconds": 0.825,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.mcp.McpBackendIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776847356.1687
+          "mtimeMs": 1790715732854.1758
         },
         {
           "suite": "com.guarantee.web.ai.mcp.McpQuotaIT",
@@ -1043,10 +1074,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.546,
+          "timeSeconds": 0.59,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.mcp.McpQuotaIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776847900.281
+          "mtimeMs": 1790715733444.3613
         },
         {
           "suite": "com.guarantee.web.ai.mcp.McpRateLimitIT",
@@ -1054,10 +1085,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.552,
+          "timeSeconds": 0.571,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.mcp.McpRateLimitIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776848452.7852
+          "mtimeMs": 1790715734012.4617
         },
         {
           "suite": "com.guarantee.web.ai.OperationAuditAllLimitIT",
@@ -1065,10 +1096,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.743,
+          "timeSeconds": 0.789,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.OperationAuditAllLimitIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776849196.514
+          "mtimeMs": 1790715734802.191
         },
         {
           "suite": "com.guarantee.web.ai.OrderDistributionToolIT",
@@ -1076,10 +1107,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 1.575,
+          "timeSeconds": 1.605,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.OrderDistributionToolIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776850772.8965
+          "mtimeMs": 1790715736408.737
         },
         {
           "suite": "com.guarantee.web.ai.OrderTrendToolIT",
@@ -1087,10 +1118,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 1.007,
+          "timeSeconds": 1.016,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.OrderTrendToolIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776851780.3347
+          "mtimeMs": 1790715737423.3757
         },
         {
           "suite": "com.guarantee.web.ai.PermissionDeniedMappingIT",
@@ -1098,10 +1129,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.163,
+          "timeSeconds": 0.17,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.PermissionDeniedMappingIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776851945.54
+          "mtimeMs": 1790715737595.3584
         },
         {
           "suite": "com.guarantee.web.ai.ProposalClaimGuardIT",
@@ -1109,10 +1140,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.59,
+          "timeSeconds": 0.621,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.ProposalClaimGuardIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776852538.2627
+          "mtimeMs": 1790715738219.5974
         },
         {
           "suite": "com.guarantee.web.ai.ProposalFingerprintIT",
@@ -1120,10 +1151,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.477,
+          "timeSeconds": 0.508,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.ProposalFingerprintIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776853011.812
+          "mtimeMs": 1790715738725.708
         },
         {
           "suite": "com.guarantee.web.ai.ProposalFlowIT",
@@ -1131,10 +1162,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.881,
+          "timeSeconds": 1.01,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.ProposalFlowIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776853902.7456
+          "mtimeMs": 1790715739744.5317
         },
         {
           "suite": "com.guarantee.web.ai.ProposalRepairIT",
@@ -1142,10 +1173,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.543,
+          "timeSeconds": 0.539,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.ProposalRepairIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776854440.9878
+          "mtimeMs": 1790715740277.9138
         },
         {
           "suite": "com.guarantee.web.ai.ToolRoundCapFallbackIT",
@@ -1153,10 +1184,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 3.059,
+          "timeSeconds": 3.172,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.ToolRoundCapFallbackIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776857502.9192
+          "mtimeMs": 1790715743454.0496
         },
         {
           "suite": "com.guarantee.web.ai.WebAuditIT",
@@ -1164,10 +1195,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.233,
+          "timeSeconds": 0.333,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.WebAuditIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776857736.6353
+          "mtimeMs": 1790715743788.7615
         },
         {
           "suite": "com.guarantee.web.AuthIpLockIT",
@@ -1175,10 +1206,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 5.137,
+          "timeSeconds": 5.147,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.AuthIpLockIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776862871.828
+          "mtimeMs": 1790715748935.601
         },
         {
           "suite": "com.guarantee.web.AuthLoginGuardIT",
@@ -1186,10 +1217,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 9.868,
+          "timeSeconds": 9.911,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.AuthLoginGuardIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776872740.3909
+          "mtimeMs": 1790715758845.8875
         },
         {
           "suite": "com.guarantee.web.LogicalDeleteWebIT",
@@ -1197,10 +1228,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.625,
+          "timeSeconds": 0.743,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.LogicalDeleteWebIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776873365.372
+          "mtimeMs": 1790715759589.125
         },
         {
           "suite": "com.guarantee.web.OnlineSessionIT",
@@ -1208,10 +1239,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.978,
+          "timeSeconds": 1.387,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.OnlineSessionIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776874347.3228
+          "mtimeMs": 1790715760980.1973
         },
         {
           "suite": "com.guarantee.web.RevocationFailClosedIT",
@@ -1219,10 +1250,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 2.379,
+          "timeSeconds": 2.432,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.RevocationFailClosedIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776876727.9866
+          "mtimeMs": 1790715763412.5017
         },
         {
           "suite": "com.guarantee.web.TokenLifecycleIT",
@@ -1230,10 +1261,10 @@
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "timeSeconds": 0.55,
+          "timeSeconds": 0.676,
           "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.TokenLifecycleIT.xml",
           "kind": "failsafe",
-          "mtimeMs": 1790776877279.1897
+          "mtimeMs": 1790715764092.4897
         }
       ],
       "totals": {
@@ -1241,17 +1272,17 @@
         "failures": 0,
         "errors": 0,
         "skipped": 0,
-        "timeSeconds": 65.51599999999999,
+        "timeSeconds": 62.330000000000005,
         "classes": 28,
-        "newnessMs": 1790780734177.2778
+        "newnessMs": 1790764303000.3718
       }
     },
     "total": {
-      "tests": 731,
+      "tests": 714,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "classes": 105
+      "classes": 104
     },
     "dedup": {
       "droppedSuites": 23,
@@ -1421,14 +1452,14 @@
         }
       ]
     },
-    "newestReportAt": "2026-09-30T15:05:34.177Z",
-    "newestSourceAt": "2026-09-30T14:36:00.887Z",
+    "newestReportAt": "2026-09-30T11:06:01.475Z",
+    "newestSourceAt": "2026-09-30T11:04:55.439Z",
     "stale": false
   },
   "evaluation": {
     "script": {
       "file": "scripts/ai-golden-questions.mjs",
-      "count": 35,
+      "count": 33,
       "ids": [
         "GQ-01",
         "GQ-02",
@@ -1462,14 +1493,12 @@
         "GQ-30",
         "GQ-31",
         "GQ-32",
-        "GQ-33",
-        "GQ-34",
-        "GQ-35"
+        "GQ-33"
       ]
     },
     "doc": {
       "file": "docs/TEST-助手黄金问题集.md",
-      "count": 35,
+      "count": 33,
       "ids": [
         "GQ-01",
         "GQ-02",
@@ -1503,9 +1532,7 @@
         "GQ-30",
         "GQ-31",
         "GQ-32",
-        "GQ-33",
-        "GQ-34",
-        "GQ-35"
+        "GQ-33"
       ]
     },
     "consistent": true,
@@ -1585,9 +1612,9 @@
 }
 ```
 
-评测条数（本脚本 QUESTIONS）：35
+评测条数（本脚本 QUESTIONS）：33
 
-分类配比：三维度对比 2、交叉维度（M2.1 新增能力） 2、趋势（M2.1 新增能力） 2、单维度 2、系统域回归 2、降级：缺维度 1、降级：空结果 1、降级：能力边界要给出替代问法 1、越界：业务数据写操作 1、越界：导出/预测 1、知识·定义（有收录） 4、知识·混合（定义 + 统计） 2、知识·未收录 2、知识·越权（只读用户不得看到审计口径） 1、知识·降级（关掉知识层） 1、单维度统计 3、交叉/趋势/分布 1、越界拒答 4、降级/失败 1、定义/知识类 1
+分类配比：三维度对比 2、交叉维度（M2.1 新增能力） 2、趋势（M2.1 新增能力） 2、单维度 2、系统域回归 2、降级：缺维度 1、降级：空结果 1、降级：能力边界要给出替代问法 1、越界：业务数据写操作 1、越界：导出/预测 1、知识·定义（有收录） 4、知识·混合（定义 + 统计） 2、知识·未收录 2、知识·越权（只读用户不得看到审计口径） 1、知识·降级（关掉知识层） 1、单维度统计 3、交叉/趋势/分布 1、越界拒答 2、降级/失败 1、定义/知识类 1
 
 确定性集覆盖：GQ-07、GQ-12、GQ-16、GQ-17、GQ-18、GQ-19、GQ-20、GQ-21、GQ-22、GQ-24、GQ-26、GQ-33
 

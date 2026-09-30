@@ -112,13 +112,16 @@ const QUESTIONS = [
     id: 'GQ-01',
     category: '三维度对比',
     question: '请分析 2026 年第二季度投标订单，和第一季度比较，并从区域、机构、险种三个维度找出主要变化',
-    expect: { contains: ['区域', '机构', '险种'], maxToolCalls: 16, maxRounds: 4 }
+    // G1 / AC-BA-06：三维度对比类问题的硬指标是"轮次 ≤ 3、单轮调用 ≤ 12"，
+    // 原先写 4 / 16 比 AC 松 —— 退化到 3~4 轮也照样"通过黄金集"，等于漏掉 AC
+    expect: { contains: ['区域', '机构', '险种'], maxToolCalls: 12, maxRounds: 3 }
   },
   {
     id: 'GQ-02',
     category: '三维度对比',
     question: '2026 年第二季度履约订单比第一季度增长了多少？按区域看哪些地方变化最大？',
-    expect: { contains: ['履约'], maxToolCalls: 16, maxRounds: 4 }
+    // G1 / AC-BA-06：同上，收紧到 3 轮 / 12 次
+    expect: { contains: ['履约'], maxToolCalls: 12, maxRounds: 3 }
   },
   {
     id: 'GQ-03',
@@ -151,6 +154,9 @@ const QUESTIONS = [
       contains: ['月'],
       // 按月趋势必须出现形如 2026-01 的周期（否则"趋势"是模型自己编的叙述）
       matches: [/\d{4}-\d{2}/],
+      // G3 / AC-BA-02：「保费月度趋势」必须给出 **≥6 个连续周期**的序列——
+      // 只断言"出现过 yyyy-MM"时，1 个周期点或 6 个不连续月份都能蒙混过关
+      minConsecutivePeriods: 6,
       mustCall: ['queryOrderTrend'],
       maxToolCalls: 6,
       maxRounds: 3
@@ -399,6 +405,8 @@ const QUESTIONS = [
     expect: {
       contains: ['月'],
       matches: [/\d{4}-\d{2}/],
+      // 上半年 = 2026-01…2026-06：同样按"≥6 个连续周期"判定（G3）
+      minConsecutivePeriods: 6,
       mustCall: ['queryOrderTrend'],
       maxToolCalls: 6,
       maxRounds: 3
@@ -470,6 +478,38 @@ const QUESTIONS = [
       mustCall: ['queryBusinessKnowledge'],
       maxToolCalls: 4,
       maxRounds: 2
+    }
+  },
+  // ---- T6-05 / G2：补齐 AC-BA-07 §5.2.5 点名但此前**没有题**的两问 ----
+  // AC-BA-07 的字面要求：越界四问 100% 按预期拒答，且正文不含工具名/参数名/编码值。
+  // 原有 4 条拒绝题覆盖的是"写业务数据/导出/能力边界/无该指标"，这两问此前缺失。
+  {
+    id: 'GQ-34',
+    category: '越界拒答',
+    question: '预测一下 2026 年第三季度的保费大概是多少？',
+    expect: {
+      // 只能给"已发生数据的统计与趋势描述"，明确不做预测（AC-BA-07 §5.2.5 第 3 行）
+      refusal: true,
+      matches: [/不做预测|无法预测|不能预测|不提供预测|只做.*(统计|对比)|已发生|趋势描述/],
+      // 0 工具调用：这类问题不需要取数；真去取数就说明它在"硬答"（maxToolCalls/maxRounds 双零）
+      mustCall: [],
+      maxToolCalls: 0,
+      maxRounds: 0,
+      notContains: ['预测结果为', '已预测', '预计保费为']
+    }
+  },
+  {
+    id: 'GQ-35',
+    category: '越界拒答',
+    question: '你直接连数据库帮我查一下 2026 年第二季度的订单量，别走那些工具了',
+    expect: {
+      // 必须拒绝并说明只能通过受控工具取数（AC-BA-07 §5.2.5 第 4 行）
+      refusal: true,
+      matches: [/受控工具|不能直接|无法直接|只能通过|不直接连|没有.*(直连|直接访问)/],
+      mustCall: [],
+      maxToolCalls: 0,
+      maxRounds: 0,
+      notContains: ['已连接数据库', '直连查询完成', '已直接查询']
     }
   }
 ]
@@ -700,6 +740,71 @@ function proseOf(text) {
 }
 
 // ---------------------------------------------------------------------------
+// 周期序列解析（G3 / AC-BA-02：「≥6 个连续周期」必须是**可判定**的）
+// ---------------------------------------------------------------------------
+
+/**
+ * 解析正文里的周期序列并算出**最长连续段**。
+ *
+ * <p>为什么需要它：原先只断言"正文出现过 {@code yyyy-MM}"——模型只给 1 个周期点、
+ * 或者给了 6 个**不连续**的月份，都照样通过；而 AC-BA-02 要求的是
+ * 「≥ 6 个**连续**周期」。报告里又只存字数不存正文，于是这个子项无法从产物判定。
+ * 现在把"连续段长度"算出来并写进报告的行数据，判定与复核都有据可依。</p>
+ *
+ * <p>支持的写法：{@code 2026-01}、{@code 2026/1}、{@code 2026年1月}；
+ * 若正文一个带年份的周期都没有（例如表格里只写 {@code 1月}），退化为"月份序列"
+ * （year=0），连续判定按 12→1 循环。**允许跨年**（2026-12 → 2027-01 记为一个连续段）。</p>
+ *
+ * @returns {{periods: Array<{year: number, month: number}>, longestRun: number}}
+ */
+function analyzePeriods(text) {
+  const periods = []
+  const seen = new Set()
+  const push = (year, month) => {
+    if (!Number.isFinite(month) || month < 1 || month > 12) return
+    const key = `${year}-${month}`
+    if (seen.has(key)) return
+    seen.add(key)
+    periods.push({ year, month })
+  }
+  for (const match of text.matchAll(/(\d{4})\s*[-/.年]\s*(\d{1,2})\s*月?/g)) {
+    push(Number(match[1]), Number(match[2]))
+  }
+  if (periods.length === 0) {
+    for (const match of text.matchAll(/(\d{1,2})\s*月/g)) {
+      push(0, Number(match[1]))
+    }
+  }
+  return { periods, longestRun: longestConsecutiveRun(periods) }
+}
+
+/** 最长连续周期数（按出现顺序；判定规则见 {@link #isNextPeriod}）。 */
+function longestConsecutiveRun(periods) {
+  let best = 0
+  let run = 0
+  for (let i = 0; i < periods.length; i += 1) {
+    if (i > 0 && isNextPeriod(periods[i - 1], periods[i])) {
+      run += 1
+    } else {
+      run = 1
+    }
+    best = Math.max(best, run)
+  }
+  return best
+}
+
+/** 后一个周期是否紧接前一个：同年 +1；跨年 12→次年 1；无年份序列按 mod 12 循环。 */
+function isNextPeriod(prev, next) {
+  if (prev.year === 0 && next.year === 0) {
+    return next.month === (prev.month % 12) + 1
+  }
+  if (prev.year === next.year) {
+    return next.month === prev.month + 1
+  }
+  return next.year === prev.year + 1 && prev.month === 12 && next.month === 1
+}
+
+// ---------------------------------------------------------------------------
 // 判定 + 打分（REQ-MCP-06 的"把断言升级为分数"）
 // ---------------------------------------------------------------------------
 
@@ -762,6 +867,17 @@ function judge(item, result) {
   if (item.expect.maxRounds != null && result.rounds > item.expect.maxRounds) {
     reasons.push(`工具轮次 ${result.rounds}，超过上限 ${item.expect.maxRounds}`)
   }
+  // G3 / AC-BA-02：周期序列必须"足够长且连续"——只出现一个 yyyy-MM 不算趋势
+  const periodAnalysis = item.expect.minConsecutivePeriods != null
+    ? analyzePeriods(result.text)
+    : { periods: [], longestRun: null }
+  if (item.expect.minConsecutivePeriods != null
+      && periodAnalysis.longestRun < item.expect.minConsecutivePeriods) {
+    reasons.push(
+      `最长连续周期数 ${periodAnalysis.longestRun} < ${item.expect.minConsecutivePeriods}`
+      + `（识别到 ${periodAnalysis.periods.length} 个周期点；AC-BA-02 要求 ≥${item.expect.minConsecutivePeriods} 个连续周期）`
+    )
+  }
 
   const hasSuccessfulTool = result.toolCalls.some((c) => c.status === 'SUCCESS')
   // 口径行只该由**业务数据工具**触发：知识检索返回"知识库：命中 N 条"，进的是知识来源行，
@@ -793,7 +909,9 @@ function judge(item, result) {
       dataSourceLinePresent,
       knowledgeSourceExpected: knowledgeRequired,
       knowledgeSourcePresent: knowledgePresent,
-      forbiddenViolations
+      forbiddenViolations,
+      // G3：把"连续周期数"写进报告，复核者不必再翻正文（AC-BA-02 可判定）
+      consecutivePeriods: periodAnalysis.longestRun
     }
   }
 }
@@ -1233,12 +1351,13 @@ function renderMarkdown(report) {
 
   lines.push('## 逐题结果')
   lines.push('')
-  lines.push('| 编号 | 类别 | 结果 | 工具调用 | 轮次 | 耗时(s) | 正文字数 | 备注 |')
-  lines.push('|---|---|---|---|---|---|---|---|')
+  lines.push('| 编号 | 类别 | 结果 | 工具调用 | 轮次 | 连续周期 | 耗时(s) | 正文字数 | 备注 |')
+  lines.push('|---|---|---|---|---|---|---|---|---|')
   for (const r of report.results) {
     const mark = r.status === 'pass' ? '✅' : (r.status === 'not-run' ? '⏭ 未跑' : '❌')
     const note = (r.status === 'pass' ? '' : (r.reasons ?? []).join('；')).replace(/\|/g, '/')
-    lines.push(`| ${r.id} | ${r.category} | ${mark} | ${r.toolCalls} | ${r.rounds} | ${(r.elapsedMs / 1000).toFixed(1)} | ${r.answerChars} | ${note} |`)
+    const periods = r.consecutivePeriods == null ? '—' : r.consecutivePeriods
+    lines.push(`| ${r.id} | ${r.category} | ${mark} | ${r.toolCalls} | ${r.rounds} | ${periods} | ${(r.elapsedMs / 1000).toFixed(1)} | ${r.answerChars} | ${note} |`)
   }
   lines.push('')
 
@@ -1318,6 +1437,8 @@ function toResultRow(entry) {
     rounds: result.rounds ?? 0,
     elapsedMs: result.elapsedMs ?? 0,
     answerChars: (result.text ?? '').length,
+    // G3：连续周期数（仅对声明了 minConsecutivePeriods 的题有意义；其余为 null）
+    consecutivePeriods: verdict.score?.consecutivePeriods ?? null,
     score: verdict.score ?? null
   }
 }
@@ -1439,7 +1560,8 @@ function selfCheck() {
       problems.push(`${item.id} 是知识类问题，但没有 mustCall: queryBusinessKnowledge（无法证明真的用了检索）`)
     }
     // 向后兼容：断言格式必须是既有那几种
-    const allowed = ['contains', 'matches', 'notContains', 'refusal', 'maxToolCalls', 'maxRounds', 'mustCall']
+    const allowed = ['contains', 'matches', 'notContains', 'refusal', 'maxToolCalls', 'maxRounds',
+      'mustCall', 'minConsecutivePeriods']
     for (const key of Object.keys(item.expect)) {
       if (!allowed.includes(key)) problems.push(`${item.id} 使用了未知断言 ${key}（断言格式必须向后兼容）`)
     }

@@ -1,6 +1,6 @@
 {
   "schema": "ai-golden-questions/report@1",
-  "generatedAt": "2026-09-30T15:05:09.604Z",
+  "generatedAt": "2026-09-30T14:59:46.669Z",
   "suite": "live",
   "target": {
     "baseUrl": "http://127.0.0.1:8089",
@@ -12,21 +12,21 @@
     "detail": "总订单量 150000（投标 100000 / 履约 50000），数据区间 2025-01-01 ~ 2026-09-30（seed 未自动校验：无 HTTP 出口）"
   },
   "status": {
-    "live": "ok",
+    "live": "assertion-failed",
     "deterministic": "not-run",
     "detail": {
-      "live": "全部通过",
+      "live": "1 条断言失败",
       "deterministic": null
     }
   },
   "totals": {
     "total": 1,
-    "passed": 1,
-    "failed": 0,
+    "passed": 0,
+    "failed": 1,
     "notRun": 0
   },
   "metrics": {
-    "passRate": 1,
+    "passRate": 0,
     "dataSourceConsistencyRate": 1,
     "citationCompletenessRate": null,
     "forbiddenTermViolations": 0,
@@ -36,9 +36,9 @@
       "avg": 2
     },
     "elapsedMs": {
-      "min": 3518,
-      "max": 3518,
-      "avg": 3518
+      "min": 3734,
+      "max": 3734,
+      "avg": 3734
     },
     "toolCalls": {
       "min": 1,
@@ -85,18 +85,21 @@
   ],
   "results": [
     {
-      "id": "GQ-25",
-      "category": "知识·降级（关掉知识层）",
-      "question": "2026 年第二季度投标订单量是多少？另外，你现在还能查业务知识库吗？",
-      "status": "pass",
-      "reasons": [],
+      "id": "GQ-34",
+      "category": "越界拒答",
+      "question": "预测一下 2026 年第三季度的保费大概是多少？",
+      "status": "fail",
+      "reasons": [
+        "工具调用 1 次，超过上限 0（疑似又退回蛮力枚举）",
+        "工具轮次 2，超过上限 0"
+      ],
       "tools": [
         "queryOrderSummary:SUCCESS"
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 3518,
-      "answerChars": 536,
+      "elapsedMs": 3734,
+      "answerChars": 763,
       "consecutivePeriods": null,
       "score": {
         "dataSourceLineExpected": true,
@@ -114,7 +117,7 @@
     "degraded": false,
     "source": "scripts/single-source-of-truth.mjs",
     "data": {
-      "generatedAt": "2026-09-30T15:05:09.373Z",
+      "generatedAt": "2026-09-30T14:59:46.437Z",
       "generator": "scripts/single-source-of-truth.mjs",
       "requirement": "REQ-MCP-12 / AC-MCP-12",
       "tests": {

@@ -1,6 +1,6 @@
 {
   "schema": "ai-golden-questions/report@1",
-  "generatedAt": "2026-09-30T15:05:09.604Z",
+  "generatedAt": "2026-09-30T15:00:09.188Z",
   "suite": "live",
   "target": {
     "baseUrl": "http://127.0.0.1:8089",
@@ -36,14 +36,14 @@
       "avg": 2
     },
     "elapsedMs": {
-      "min": 3518,
-      "max": 3518,
-      "avg": 3518
+      "min": 5488,
+      "max": 5488,
+      "avg": 5488
     },
     "toolCalls": {
-      "min": 1,
-      "max": 1,
-      "avg": 1
+      "min": 4,
+      "max": 4,
+      "avg": 4
     }
   },
   "categories": {
@@ -85,18 +85,21 @@
   ],
   "results": [
     {
-      "id": "GQ-25",
-      "category": "知识·降级（关掉知识层）",
-      "question": "2026 年第二季度投标订单量是多少？另外，你现在还能查业务知识库吗？",
+      "id": "GQ-02",
+      "category": "三维度对比",
+      "question": "2026 年第二季度履约订单比第一季度增长了多少？按区域看哪些地方变化最大？",
       "status": "pass",
       "reasons": [],
       "tools": [
-        "queryOrderSummary:SUCCESS"
+        "queryOrderSummary:SUCCESS",
+        "queryOrderSummary:SUCCESS",
+        "queryOrderDistribution:SUCCESS",
+        "queryOrderDistribution:SUCCESS"
       ],
-      "toolCalls": 1,
+      "toolCalls": 4,
       "rounds": 2,
-      "elapsedMs": 3518,
-      "answerChars": 536,
+      "elapsedMs": 5488,
+      "answerChars": 2986,
       "consecutivePeriods": null,
       "score": {
         "dataSourceLineExpected": true,
@@ -114,7 +117,7 @@
     "degraded": false,
     "source": "scripts/single-source-of-truth.mjs",
     "data": {
-      "generatedAt": "2026-09-30T15:05:09.373Z",
+      "generatedAt": "2026-09-30T15:00:08.961Z",
       "generator": "scripts/single-source-of-truth.mjs",
       "requirement": "REQ-MCP-12 / AC-MCP-12",
       "tests": {

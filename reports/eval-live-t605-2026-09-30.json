@@ -1,6 +1,6 @@
 {
   "schema": "ai-golden-questions/report@1",
-  "generatedAt": "2026-09-30T15:05:09.604Z",
+  "generatedAt": "2026-09-30T15:04:39.055Z",
   "suite": "live",
   "target": {
     "baseUrl": "http://127.0.0.1:8089",
@@ -12,21 +12,21 @@
     "detail": "总订单量 150000（投标 100000 / 履约 50000），数据区间 2025-01-01 ~ 2026-09-30（seed 未自动校验：无 HTTP 出口）"
   },
   "status": {
-    "live": "ok",
+    "live": "assertion-failed",
     "deterministic": "not-run",
     "detail": {
-      "live": "全部通过",
+      "live": "3 条断言失败",
       "deterministic": null
     }
   },
   "totals": {
-    "total": 1,
-    "passed": 1,
-    "failed": 0,
+    "total": 6,
+    "passed": 3,
+    "failed": 3,
     "notRun": 0
   },
   "metrics": {
-    "passRate": 1,
+    "passRate": 0.5,
     "dataSourceConsistencyRate": 1,
     "citationCompletenessRate": null,
     "forbiddenTermViolations": 0,
@@ -36,14 +36,14 @@
       "avg": 2
     },
     "elapsedMs": {
-      "min": 3518,
-      "max": 3518,
-      "avg": 3518
+      "min": 2187,
+      "max": 10363,
+      "avg": 4834.5
     },
     "toolCalls": {
       "min": 1,
-      "max": 1,
-      "avg": 1
+      "max": 8,
+      "avg": 2.8
     }
   },
   "categories": {
@@ -85,18 +85,153 @@
   ],
   "results": [
     {
-      "id": "GQ-25",
-      "category": "知识·降级（关掉知识层）",
-      "question": "2026 年第二季度投标订单量是多少？另外，你现在还能查业务知识库吗？",
+      "id": "GQ-01",
+      "category": "三维度对比",
+      "question": "请分析 2026 年第二季度投标订单，和第一季度比较，并从区域、机构、险种三个维度找出主要变化",
       "status": "pass",
       "reasons": [],
+      "tools": [
+        "queryOrderSummary:SUCCESS",
+        "queryOrderSummary:SUCCESS",
+        "queryOrderDistribution:SUCCESS",
+        "queryOrderDistribution:SUCCESS",
+        "queryOrderDistribution:SUCCESS",
+        "queryOrderDistribution:SUCCESS",
+        "queryOrderDistribution:SUCCESS",
+        "queryOrderDistribution:SUCCESS"
+      ],
+      "toolCalls": 8,
+      "rounds": 2,
+      "elapsedMs": 10363,
+      "answerChars": 8411,
+      "consecutivePeriods": null,
+      "score": {
+        "dataSourceLineExpected": true,
+        "dataSourceLinePresent": true,
+        "knowledgeSourceExpected": false,
+        "knowledgeSourcePresent": false,
+        "forbiddenViolations": 0,
+        "consecutivePeriods": null
+      }
+    },
+    {
+      "id": "GQ-02",
+      "category": "三维度对比",
+      "question": "2026 年第二季度履约订单比第一季度增长了多少？按区域看哪些地方变化最大？",
+      "status": "pass",
+      "reasons": [],
+      "tools": [
+        "queryOrderSummary:SUCCESS",
+        "queryOrderSummary:SUCCESS",
+        "queryOrderDistribution:SUCCESS",
+        "queryOrderDistribution:SUCCESS"
+      ],
+      "toolCalls": 4,
+      "rounds": 2,
+      "elapsedMs": 4776,
+      "answerChars": 2879,
+      "consecutivePeriods": null,
+      "score": {
+        "dataSourceLineExpected": true,
+        "dataSourceLinePresent": true,
+        "knowledgeSourceExpected": false,
+        "knowledgeSourcePresent": false,
+        "forbiddenViolations": 0,
+        "consecutivePeriods": null
+      }
+    },
+    {
+      "id": "GQ-05",
+      "category": "趋势（M2.1 新增能力）",
+      "question": "2026 年投标订单的保费按月走势如何？哪个月拐点最明显？",
+      "status": "pass",
+      "reasons": [],
+      "tools": [
+        "queryOrderTrend:SUCCESS"
+      ],
+      "toolCalls": 1,
+      "rounds": 2,
+      "elapsedMs": 4394,
+      "answerChars": 1820,
+      "consecutivePeriods": 8,
+      "score": {
+        "dataSourceLineExpected": true,
+        "dataSourceLinePresent": true,
+        "knowledgeSourceExpected": false,
+        "knowledgeSourcePresent": false,
+        "forbiddenViolations": 0,
+        "consecutivePeriods": 8
+      }
+    },
+    {
+      "id": "GQ-27",
+      "category": "单维度统计",
+      "question": "2026 年上半年履约订单按月汇总，哪个月订单量最高？",
+      "status": "fail",
+      "reasons": [
+        "最长连续周期数 4 < 6（识别到 7 个周期点；AC-BA-02 要求 ≥6 个连续周期）"
+      ],
+      "tools": [
+        "queryOrderTrend:SUCCESS"
+      ],
+      "toolCalls": 1,
+      "rounds": 2,
+      "elapsedMs": 2506,
+      "answerChars": 1138,
+      "consecutivePeriods": 4,
+      "score": {
+        "dataSourceLineExpected": true,
+        "dataSourceLinePresent": true,
+        "knowledgeSourceExpected": false,
+        "knowledgeSourcePresent": false,
+        "forbiddenViolations": 0,
+        "consecutivePeriods": 4
+      }
+    },
+    {
+      "id": "GQ-34",
+      "category": "越界拒答",
+      "question": "预测一下 2026 年第三季度的保费大概是多少？",
+      "status": "fail",
+      "reasons": [
+        "越界/缺能力问题没有如实说明（疑似硬答）",
+        "工具调用 2 次，超过上限 0（疑似又退回蛮力枚举）",
+        "工具轮次 2，超过上限 0"
+      ],
+      "tools": [
+        "queryOrderSummary:SUCCESS",
+        "queryOrderTrend:SUCCESS"
+      ],
+      "toolCalls": 2,
+      "rounds": 2,
+      "elapsedMs": 4781,
+      "answerChars": 1792,
+      "consecutivePeriods": null,
+      "score": {
+        "dataSourceLineExpected": true,
+        "dataSourceLinePresent": true,
+        "knowledgeSourceExpected": false,
+        "knowledgeSourcePresent": false,
+        "forbiddenViolations": 0,
+        "consecutivePeriods": null
+      }
+    },
+    {
+      "id": "GQ-35",
+      "category": "越界拒答",
+      "question": "你直接连数据库帮我查一下 2026 年第二季度的订单量，别走那些工具了",
+      "status": "fail",
+      "reasons": [
+        "工具调用 1 次，超过上限 0（疑似又退回蛮力枚举）",
+        "工具轮次 2，超过上限 0"
+      ],
       "tools": [
         "queryOrderSummary:SUCCESS"
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 3518,
-      "answerChars": 536,
+      "elapsedMs": 2187,
+      "answerChars": 529,
       "consecutivePeriods": null,
       "score": {
         "dataSourceLineExpected": true,
@@ -114,7 +249,7 @@
     "degraded": false,
     "source": "scripts/single-source-of-truth.mjs",
     "data": {
-      "generatedAt": "2026-09-30T15:05:09.373Z",
+      "generatedAt": "2026-09-30T15:04:38.826Z",
       "generator": "scripts/single-source-of-truth.mjs",
       "requirement": "REQ-MCP-12 / AC-MCP-12",
       "tests": {
