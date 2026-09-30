@@ -601,7 +601,7 @@ sh scripts/setup-git.sh              # Linux / macOS / Git Bash
 | SSE 与 Spring Security | 必须放行 `DispatcherType.ASYNC`，否则异步派发时会因上下文已清理而抛 `Access Denied` 并截断事件流（已在 `SecurityConfig` 中处理）。 |
 | 前端 | 使用 hash 路由（`createWebHashHistory`），避免静态部署需要 history fallback。 |
 | 权限 | 登录态与权限编码已下发，前端按菜单展示；第一阶段未在接口上开启 `@PreAuthorize` 细粒度拦截。 |
-| 真实模型验证 | `DEEPSEEK_API_KEY` 就位后**已做端到端实测**：真机黄金问题集先以 33 条跑通（主实例 32/32 PASS + GQ-25 在 `guarantee.ai.knowledge.enabled=false` 实例 PASS），随后**断言收紧并扩到 35 条**，当前真机结果 **通过 31 / 失败 3 / 未跑 1**——3 处失败是收紧后暴露的**真实模型行为缺陷**（拒答正文泄漏「SQL」、趋势周期不连续、一处方差），**未放宽断言**，正在按 `task-29` 修提示词。报告 `reports/eval-live-2026-09-30.md`、`reports/README.md`。工具链路由仍由 `AiToolChainIT`（Stub 模型）确定性验证；未配 Key 时的行为也已实测为「明确报错、不编造数据」。 |
+| 真实模型验证 | `DEEPSEEK_API_KEY` 就位后**已做端到端实测**。当前发布口径（T6-10，2026-09-30 深夜）：**全量 35 题 → 34 PASS / 0 FAIL / 1 未跑**，未跑的 GQ-25（关知识层）已在独立实例单独 PASS → **35/35 全覆盖**；`forbiddenTermViolations = 0`、口径正确率与引用完整率均 1.0。中间快照 `31/3/1` 已归档（其中 1 项为**评测脚本断言假失败**、2 项为**已修的模型行为缺陷**——拒答话术泄漏「SQL」等，**未放宽断言**）。报告见 `reports/README.md`、`reports/eval-live-t610-2026-09-30.md`。工具链路由仍由 `AiToolChainIT`（Stub 模型）确定性验证；未配 Key 时的行为也已实测为「明确报错、不编造数据」。 |
 | 前端运行验证 | 前端 `npm run build` 通过（vue-tsc 类型检查 + 打包）；SSE 客户端已按后端实测事件协议对齐。但本次开发会话的沙箱禁止 Node 监听端口（`listen EACCES`），**未能启动 Vite dev server 做浏览器实测**；在你自己的终端里 `npm run dev` 可正常启动。 |
 
 ---
