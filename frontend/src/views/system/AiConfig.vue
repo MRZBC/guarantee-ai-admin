@@ -84,18 +84,14 @@ const promptPointer = computed(() =>
 )
 
 /**
- * 本期**未接线**的配置项（D3）：页面可编辑、但运行期不读取 —— 明确标注并置灰。
+ * 未接线项由**服务端目录**下发（`AiConfigItemView.wired`）——页面不再维护硬编码清单。
  *
- * <p>真源是"运行期是否消费这些键"：目前 `AiChatService` / `BoundedToolCallback` 只消费
- * model 的 base-url / name / temperature 与全部 budget、tools、prompt 键；
- * `model.max-tokens` / `model.timeout` / `model.max-retries` 只存在于目录里。
- * 页面仍然展示它们（运维需要知道预留了什么），但**不允许编辑**，避免"改了以为生效"。
- * 将来接线后请同步删除这个清单与页面标注。</p>
+ * <p>历史：D3 之前 `NOT_WIRED_KEYS` 是前端手写清单，服务端仍接受写入；T6-02 接线
+ * `model.max-tokens` / `model.timeout` / `model.max-retries` 后，目录里已全部 `wired=true`，
+ * 机制保留给将来"仅展示"的配置项；服务端对 `wired=false` 同样拒写（不止前端置灰）。</p>
  */
-const NOT_WIRED_KEYS = new Set(['model.max-tokens', 'model.timeout', 'model.max-retries'])
-
 function isNotWired(item: AiConfigItemView): boolean {
-  return NOT_WIRED_KEYS.has(item.key)
+  return !item.wired
 }
 
 const notWiredItems = computed(() => modelItems.value.filter(isNotWired))

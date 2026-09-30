@@ -21,6 +21,9 @@ import java.util.List;
  * @param dangerous    危险配置：页面二次确认，且纳入 {@code CONFIG_UPDATE} 审计的重点提示
  * @param maxLength    STRING 的最大长度；{@code <=0} 表示不限
  * @param description  影响面说明（页面/接口原样展示）
+ * @param wired        运行期是否真的消费该键。{@code false} = 本期未接线（仅展示）：
+ *                     页面据此标注并禁用编辑，服务端也拒绝写入。它替代"前端硬编码未接线清单"
+ *                     的做法——两处清单必然漂移，而"是否被运行期消费"是代码事实，只应声明一次
  */
 public record AiConfigDefinition(
         String key,
@@ -32,7 +35,8 @@ public record AiConfigDefinition(
         AiConfigCategory category,
         boolean dangerous,
         int maxLength,
-        String description) {
+        String description,
+        boolean wired) {
 
     public AiConfigDefinition {
         if (key == null || key.isBlank()) {

@@ -338,4 +338,27 @@ class AiConfigServiceTest {
         service.warmUp();
         assertThat(service.version()).as("预热失败保留上一份快照").isEqualTo(1);
     }
+
+    // ==================================================================
+    // T6-02：wired=false 的服务端护栏（D3 残留：不再只靠前端置灰）
+    // ==================================================================
+
+    @Test
+    @DisplayName("未接线项（wired=false）服务端拒绝写入：update/reset 都给可读错误且不触库")
+    void unwiredKeyIsRejectedByServer() {
+        AiConfigDefinition unwired = new AiConfigDefinition("test.unwired", AiConfigType.STRING, "x",
+                null, null, List.of(), AiConfigCategory.MODEL, false, 0, "测试用未接线项", false);
+        AiConfigService custom = new AiConfigService(mapper, new AiConfigCatalog(List.of(unwired)));
+
+        assertThatThrownBy(() -> custom.update("test.unwired", "y", "7"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("test.unwired")
+                .hasMessageContaining("未接线");
+        assertThatThrownBy(() -> custom.reset("test.unwired", "7"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("未接线");
+
+        // 与"非法值"一样：在触库之前就拒绝
+        verifyNoInteractions(mapper);
+    }
 }

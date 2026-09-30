@@ -259,7 +259,9 @@ public class AiConfigController {
             BigDecimal minValue,
             BigDecimal maxValue,
             List<String> enumOptions,
-            String description) {
+            String description,
+            /** 运行期是否真的消费该键：false = 本期未接线（仅展示，页面禁用编辑，服务端拒写） */
+            boolean wired) {
     }
 
     /**
@@ -401,7 +403,8 @@ public class AiConfigController {
                 def.minValue(),
                 def.maxValue(),
                 def.enumOptions(),
-                def.description());
+                def.description(),
+                def.wired());
     }
 
     /** 密钥是否已配置：引用名指向的环境变量存在且不是启动占位值 {@code not-configured}。 */

@@ -26,6 +26,7 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.http.codec.ServerSentEvent;
@@ -266,6 +267,46 @@ class AiConfigWiringTest {
     }
 
     // ==================================================================
+    // T6-02：max-tokens / timeout / max-retries 接线（缺省不漂移 + 显式生效）
+    // ==================================================================
+
+    @Test
+    @DisplayName("AC-CFG-08 缺省不漂移：max-tokens/timeout/max-retries 未显式配置时**一律不写入**请求参数")
+    void defaultModelParamsAreNotSent() {
+        // 切到 OpenAI 选项：timeout / maxRetries 是它的专有字段，缺省一致性只有在该实现下才可判定
+        model.useOpenAiOptions(true);
+        chat();
+
+        OpenAiChatOptions options = model.lastOpenAiOptions();
+        assertThat(options.getMaxTokens())
+                .as("改造前不发送 max_tokens；catalog 默认 2048 只是页面建议值，不能变成恒定发送")
+                .isNull();
+        assertThat(options.getTimeout())
+                .as("未配置时沿用 starter/yml 默认超时，不得被 catalog 默认值覆盖")
+                .isEqualTo(CapturingChatModel.DEFAULT_TIMEOUT);
+        assertThat(options.getMaxRetries())
+                .as("未配置时沿用 starter/yml 默认重试次数")
+                .isEqualTo(CapturingChatModel.DEFAULT_MAX_RETRIES);
+    }
+
+    @Test
+    @DisplayName("显式配置后生效：max-tokens/timeout/max-retries 写进下一轮 chat options（不重启）")
+    void explicitModelParamsAreAppliedAtNextTurn() {
+        model.useOpenAiOptions(true);
+        chat();
+        configService.update(AiConfigCatalog.MODEL_MAX_TOKENS, "512", "1");
+        configService.update(AiConfigCatalog.MODEL_TIMEOUT, "45000", "1");
+        configService.update(AiConfigCatalog.MODEL_MAX_RETRIES, "1", "1");
+
+        chat();
+
+        OpenAiChatOptions options = model.lastOpenAiOptions();
+        assertThat(options.getMaxTokens()).as("显式 512 必须随请求下发").isEqualTo(512);
+        assertThat(options.getTimeout()).isEqualTo(Duration.ofMillis(45_000));
+        assertThat(options.getMaxRetries()).isEqualTo(1);
+    }
+
+    // ==================================================================
     // 一轮一份快照（REQ-CFG-06）
     // ==================================================================
 
@@ -379,11 +420,35 @@ class AiConfigWiringTest {
     /** 记下每次模型调用的 Prompt，便于断言"这一轮实际用了什么参数"。 */
     private static final class CapturingChatModel implements ChatModel {
 
+        /** 模拟 starter/yml 的默认超时（60s）——未显式配置时不得被覆盖。 */
+        static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(60);
+        /** 模拟 starter/yml 的默认重试次数（3）——未显式配置时不得被覆盖。 */
+        static final int DEFAULT_MAX_RETRIES = 3;
+
         private final List<Prompt> prompts = new ArrayList<>();
 
-        /** 模拟 starter/yml 的默认选项（temperature=0.2）；未显式配置时不得被覆盖。 */
+        /**
+         * 是否返回 {@code OpenAiChatOptions}（默认 false，返回通用 options）。
+         *
+         * <p>默认保持通用实现，是为了让"未显式配置模型名时 getModel() 为 null"这类既有断言语义不变；
+         * `model.timeout` / `model.max-retries` 是 **OpenAI 专有**字段，只有需要验证它们时才切过来
+         * （用通用 options 测试会掩盖"根本写不进去"的问题）。</p>
+         */
+        private boolean openAiOptions;
+
+        void useOpenAiOptions(boolean value) {
+            this.openAiOptions = value;
+        }
+
         @Override
         public ChatOptions getOptions() {
+            if (openAiOptions) {
+                return OpenAiChatOptions.builder()
+                        .temperature(0.2)
+                        .timeout(DEFAULT_TIMEOUT)
+                        .maxRetries(DEFAULT_MAX_RETRIES)
+                        .build();
+            }
             return ToolCallingChatOptions.builder().temperature(0.2).build();
         }
 
@@ -404,6 +469,11 @@ class AiConfigWiringTest {
 
         ToolCallingChatOptions lastOptions() {
             return (ToolCallingChatOptions) prompts.get(prompts.size() - 1).getOptions();
+        }
+
+        /** 最近一轮的 OpenAI 选项（timeout / maxRetries 断言用）。 */
+        OpenAiChatOptions lastOpenAiOptions() {
+            return (OpenAiChatOptions) prompts.get(prompts.size() - 1).getOptions();
         }
     }
 }

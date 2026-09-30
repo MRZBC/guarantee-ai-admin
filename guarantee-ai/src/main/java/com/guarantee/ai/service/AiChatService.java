@@ -39,6 +39,7 @@ import org.springframework.ai.model.tool.ToolCallLimitExceededException;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,6 +52,7 @@ import reactor.core.publisher.Sinks;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -855,6 +857,41 @@ public class AiChatService {
             // 等于"看起来改了、其实没生效"（TEST-CFG-06 的可观测点正是模型调用参数）。
             // 未配置时不设置，沿用 starter/yml（AC-CFG-08）。
             builder.model(config.get(AiConfigCatalog.MODEL_NAME));
+        }
+        // 最大输出 token：通用 ChatOptions 本身就有该字段，任何实现都能生效。
+        // **只有显式配置才写**（AC-CFG-08）：catalog 默认 2048 只是"页面展示的建议值"，
+        // 若一律写入，就会把改造前"不发送 max_tokens、交给模型侧决定"变成"恒定 2048"——行为漂移。
+        if (config.isOverridden(AiConfigCatalog.MODEL_MAX_TOKENS)) {
+            builder.maxTokens(config.getInt(AiConfigCatalog.MODEL_MAX_TOKENS));
+        }
+        // timeout / max-retries 是 OpenAiChatOptions **专有**字段（通用 ToolCallingChatOptions.Builder
+        // 没有这两个 setter），因此只有当前模型的 options 确实是 OpenAI 实现时才设置；
+        // 否则明确告警而不是静默丢弃——静默丢弃会让"我改了配置"变成一句谎话。
+        if (config.isOverridden(AiConfigCatalog.MODEL_TIMEOUT)
+                || config.isOverridden(AiConfigCatalog.MODEL_MAX_RETRIES)) {
+            if (builder instanceof OpenAiChatOptions.Builder openAiBuilder) {
+                if (config.isOverridden(AiConfigCatalog.MODEL_TIMEOUT)) {
+                    openAiBuilder.timeout(Duration.ofMillis(config.getLong(AiConfigCatalog.MODEL_TIMEOUT)));
+                }
+                if (config.isOverridden(AiConfigCatalog.MODEL_MAX_RETRIES)) {
+                    openAiBuilder.maxRetries(config.getInt(AiConfigCatalog.MODEL_MAX_RETRIES));
+                }
+            } else {
+                log.warn("当前模型的 chat options 不是 OpenAI 实现（{}），model.timeout / model.max-retries "
+                        + "本轮未生效；请改回默认或改用 OpenAI 兼容模型",
+                        builder.getClass().getName());
+            }
+        }
+        // 可观测性：只要这三项里有**任一被显式配置**就打一行日志（全默认时沉默，避免刷屏）。
+        // 运维据此在真机上确认"改了确实随请求下发了"，而不必去猜（T6-02 的真机验证钩子）。
+        boolean maxTokensSet = config.isOverridden(AiConfigCatalog.MODEL_MAX_TOKENS);
+        boolean timeoutSet = config.isOverridden(AiConfigCatalog.MODEL_TIMEOUT);
+        boolean retriesSet = config.isOverridden(AiConfigCatalog.MODEL_MAX_RETRIES);
+        if (maxTokensSet || timeoutSet || retriesSet) {
+            log.info("本轮显式模型参数：maxTokens={} timeoutMs={} maxRetries={}（未列出的沿用 starter/yml 默认值）",
+                    maxTokensSet ? config.get(AiConfigCatalog.MODEL_MAX_TOKENS) : "默认",
+                    timeoutSet ? config.get(AiConfigCatalog.MODEL_TIMEOUT) : "默认",
+                    retriesSet ? config.get(AiConfigCatalog.MODEL_MAX_RETRIES) : "默认");
         }
         return builder.build();
     }

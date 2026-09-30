@@ -153,6 +153,18 @@ public class AiConfigCatalog {
         this.definitions = Collections.unmodifiableMap(map);
     }
 
+    /**
+     * 测试用构造器：用自定义定义构造目录（生产走无参构造器）。
+     *
+     * <p>存在的意义：验证"未接线项（{@code wired=false}）不允许写入"这条护栏——
+     * 本期接线后真实目录里已没有未接线项，不可能靠真实清单构造该场景。</p>
+     */
+    AiConfigCatalog(List<AiConfigDefinition> custom) {
+        Map<String, AiConfigDefinition> map = new LinkedHashMap<>();
+        custom.forEach(def -> put(map, def));
+        this.definitions = Collections.unmodifiableMap(map);
+    }
+
     /** 全部配置项定义（保持声明顺序，页面按此分组展示）。 */
     public List<AiConfigDefinition> all() {
         return List.copyOf(definitions.values());
@@ -170,6 +182,12 @@ public class AiConfigCatalog {
             throw BizException.badRequest("未知的配置项：" + key);
         }
         return def;
+    }
+
+    /** 该键是否已被运行期接线；未知 key 返回 false（宁严勿松）。 */
+    public boolean isWired(String key) {
+        AiConfigDefinition def = key == null ? null : definitions.get(key);
+        return def != null && def.wired();
     }
 
     /** 所有有默认值的配置项：key → 默认值。未设置默认值的项不在其中。 */
@@ -281,11 +299,26 @@ public class AiConfigCatalog {
         }
     }
 
+    /**
+     * 声明一个**已接线**（运行期真的消费该键）的配置项。
+     *
+     * <p>本期 T6-02 接线 `model.max-tokens` / `model.timeout` / `model.max-retries` 之后，
+     * 目录里全部 20 项都是 wired；未接线项将来若再出现，用下面的重载显式声明 {@code false}，
+     * 页面会自动标注并禁用编辑，服务端也会拒绝写入。</p>
+     */
     private static AiConfigDefinition def(String key, AiConfigType type, String defaultValue,
                                           BigDecimal min, BigDecimal max, AiConfigCategory category,
                                           boolean dangerous, int maxLength, String description) {
+        return def(key, type, defaultValue, min, max, category, dangerous, maxLength, description, true);
+    }
+
+    /** 声明配置项，并显式指定运行期是否消费该键。 */
+    private static AiConfigDefinition def(String key, AiConfigType type, String defaultValue,
+                                          BigDecimal min, BigDecimal max, AiConfigCategory category,
+                                          boolean dangerous, int maxLength, String description,
+                                          boolean wired) {
         return new AiConfigDefinition(key, type, defaultValue, min, max, List.of(), category,
-                dangerous, maxLength, description);
+                dangerous, maxLength, description, wired);
     }
 
 }

@@ -348,6 +348,12 @@ export interface AiConfigItemView {
   enumOptions: string[]
   /** 影响面说明（后端目录里的原话，页面不自行改写） */
   description: string
+  /**
+   * 运行期是否真的消费该键；`false` = 本期未接线（仅展示）：
+   * 页面标注"本期未接线"并禁用编辑，服务端也会拒绝写入。
+   * 由服务端目录下发，**前端不再维护硬编码清单**（两处清单必然漂移）。
+   */
+  wired: boolean
 }
 
 /** `GET /api/ai/config`：全部配置项 + 当前快照版本。 */

@@ -131,6 +131,7 @@ public class AiConfigService {
      */
     public AiConfigSnapshot update(String key, String rawValue, String operator) {
         AiConfigDefinition def = catalog.require(key);
+        requireWired(def);
         if (rawValue == null) {
             throw BizException.badRequest("配置项 " + key + " 的值不能为空；如需恢复默认值请使用 reset");
         }
@@ -146,8 +147,21 @@ public class AiConfigService {
      */
     public AiConfigSnapshot reset(String key, String operator) {
         AiConfigDefinition def = catalog.require(key);
+        requireWired(def);
         write(def, null, operator);
         return refresh();
+    }
+
+    /**
+     * 未接线的配置项**拒绝写入**（D3 的残留：此前只有前端置灰，服务端照收）。
+     *
+     * <p>"改了不生效"必须由服务端明确拒绝，而不是让页面假装拦住。错误信息里说明它只是展示项。</p>
+     */
+    private static void requireWired(AiConfigDefinition def) {
+        if (!def.wired()) {
+            throw BizException.badRequest("配置项 " + def.key()
+                    + " 本期未接线（仅展示，改了不生效），不允许写入；接线后本限制自动解除");
+        }
     }
 
     /** 目录（页面展示元数据用）。 */

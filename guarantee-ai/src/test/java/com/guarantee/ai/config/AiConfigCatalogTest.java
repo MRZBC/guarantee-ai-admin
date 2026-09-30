@@ -186,7 +186,7 @@ class AiConfigCatalogTest {
     @DisplayName("ENUM：命中可选值（大小写不敏感）归一化为声明拼写，未命中列出可选值")
     void enumValidationUsesSyntheticDefinition() {
         AiConfigDefinition def = new AiConfigDefinition("test.gate-mode", AiConfigType.ENUM, "DETERMINISTIC",
-                null, null, List.of("DETERMINISTIC", "LIVE"), AiConfigCategory.SWITCH, false, 0, "测试用枚举项");
+                null, null, List.of("DETERMINISTIC", "LIVE"), AiConfigCategory.SWITCH, false, 0, "测试用枚举项", true);
 
         assertThat(AiConfigCatalog.validate(def, "deterministic")).isEqualTo("DETERMINISTIC");
         assertThat(AiConfigCatalog.validate(def, "LIVE")).isEqualTo("LIVE");
@@ -214,10 +214,10 @@ class AiConfigCatalogTest {
     @DisplayName("定义自身的约束：ENUM 必须声明可选值，键不能为空")
     void definitionInvariants() {
         assertThatThrownBy(() -> new AiConfigDefinition("", AiConfigType.STRING, "x", null, null,
-                List.of(), AiConfigCategory.MODEL, false, 0, "d"))
+                List.of(), AiConfigCategory.MODEL, false, 0, "d", true))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new AiConfigDefinition("k", AiConfigType.ENUM, "x", null, null,
-                List.of(), AiConfigCategory.MODEL, false, 0, "d"))
+                List.of(), AiConfigCategory.MODEL, false, 0, "d", true))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("ENUM");
     }
 
@@ -226,11 +226,27 @@ class AiConfigCatalogTest {
     void rangeComparisonIsNumeric() {
         AiConfigDefinition def = new AiConfigDefinition("test.bytes", AiConfigType.INT, "16384",
                 new BigDecimal("4096"), new BigDecimal("65536"), List.of(),
-                AiConfigCategory.BUDGET, false, 0, "测试用范围项");
+                AiConfigCategory.BUDGET, false, 0, "测试用范围项", true);
 
         assertThat(AiConfigCatalog.validate(def, "4096")).isEqualTo("4096");
         assertThat(AiConfigCatalog.validate(def, "65536")).isEqualTo("65536");
         assertThatThrownBy(() -> AiConfigCatalog.validate(def, "4095"))
                 .isInstanceOf(BizException.class).hasMessageContaining("超出允许范围");
+    }
+
+    // ==================================================================
+    // T6-02：wired 标志（替代前端硬编码未接线清单）
+    // ==================================================================
+
+    @Test
+    @DisplayName("T6-02 接线后：目录里所有配置项都是 wired（不再有『仅展示』项）")
+    void allCatalogItemsAreWiredAfterT602() {
+        assertThat(catalog.all()).allSatisfy(def -> assertThat(def.wired())
+                .as("%s 应已接线（未接线项会被页面禁用编辑并被服务端拒写）", def.key())
+                .isTrue());
+        assertThat(catalog.isWired(AiConfigCatalog.MODEL_MAX_TOKENS)).isTrue();
+        assertThat(catalog.isWired(AiConfigCatalog.MODEL_TIMEOUT)).isTrue();
+        assertThat(catalog.isWired(AiConfigCatalog.MODEL_MAX_RETRIES)).isTrue();
+        assertThat(catalog.isWired("not.exists")).as("未知键按未接线处理（宁严勿松）").isFalse();
     }
 }
