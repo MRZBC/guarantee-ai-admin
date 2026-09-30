@@ -1,0 +1,330 @@
+# =============================================================================
+# AI 评测 CI（ai-eval）
+#
+# ⚠️ 真实状态（必读）：**本 workflow 从未在 GitHub Actions 上执行过。**
+#    本机没有 CI 环境、也无法在本地运行 GitHub runner，所以它是依据 runner 环境
+#    **推断**写出的第一版。首次在 GitHub 上跑，很可能需要按实际报错调整，尤其是：
+#
+#    1) schema 初始化：应用启动时靠 `guarantee-web/src/main/resources/db/schema.sql`
+#       自建表（`spring.sql.init.mode=always`）。仓库**没有 Flyway**，
+#       `db/migration/V1..V10` 是**手工**执行的幂等脚本 → CI 首跑务必确认表结构完整
+#       （缺列/缺表会在启动或 IT 里以 SQL 异常暴露）。
+#    2) live 集的数据基线：真机集要求订单量 ≥1000 且数据区间正确
+#       （`GOLDEN_BASELINE_MIN_ORDERS` 默认 1000）。仓库目前**没有订单 seed 脚本**
+#       （只有 `db/seed/region.sql`），所以 CI 上直接跑 live 极可能被判
+#       `environment`（脚本退出码 2）。本 workflow 对此采取"**打印未跑/环境不足但不失败**"
+#       的口径（见 live-eval 作业）；**接入 seed 之后应把退出码 2 也改为失败**，
+#       否则这道门会长期空转。
+#    3) 真机集需要 `secrets.DEEPSEEK_API_KEY`：未配置时该作业**跳过而不是失败**。
+#
+# 三道门（与本地一致）：
+#   Job1 `mvn -B verify`      —— 编译 + 单测 + 集成测试（MySQL 8 + Redis service）
+#   Job2 确定性集              —— Stub 模型，12 条，**发布门禁就是它**（快、不花钱）
+#   Job3 真机集（仅手动）      —— 真模型 25/33 条，覆盖"只有真机才能暴露"的那半边
+#
+# 本地等价物：`pwsh scripts/run-live-eval.ps1 -Port 8092`（Windows；本机已实测）。
+#   ⚠️ 本机脚本用 Windows API（Get-NetTCPConnection），**不能**直接在 ubuntu runner 上跑；
+#      因此 Job3 用 bash 重写了同样的步骤（同样的三条纪律：带 `-am`、
+#      禁止 `-Dspring-boot.repackage.skip=true`、绝不碰用户自己的实例端口）。
+# =============================================================================
+
+name: ai-eval
+
+on:
+  # 手动：可只跑指定题号，便于定位
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'live 集只跑指定题号（逗号分隔，如 GQ-31,GQ-34；留空=全量）'
+        required: false
+        default: ''
+      skip_live:
+        description: '仅跑 Job1/Job2（跳过真机集）'
+        required: false
+        type: boolean
+        default: false
+  # 每日 02:00 UTC（北京时间 10:00）：只跑到 Job2 —— Job3 是真模型、花钱且数据依赖强，
+  # 因此**定时任务不跑 live**（live 只由手动触发，避免无人看管时烧额度/长期空转）。
+  schedule:
+    - cron: '0 2 * * *'
+
+permissions:
+  contents: read
+
+# 应用读取的**数据库/缓存环境变量名**（application.yml 里的占位符就是这些）
+env:
+  DB_HOST: 127.0.0.1
+  DB_PORT: '3306'
+  DB_NAME: guarantee_ai_admin
+  DB_USER: guarantee
+  DB_PASSWORD: 'guarantee@2026'
+  REDIS_HOST: 127.0.0.1
+  REDIS_PORT: '6379'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job1：构建 + 单测 + 集成测试
+  # ---------------------------------------------------------------------------
+  build-and-it:
+    name: 构建与集成测试（mvn -B verify）
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: guarantee_ai_admin
+          MYSQL_USER: guarantee
+          MYSQL_PASSWORD: 'guarantee@2026'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: 安装 Node 22（评测脚本用）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 等待 MySQL 就绪
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -proot --silent; then exit 0; fi
+            sleep 2
+          done
+          echo "MySQL 未在 60s 内就绪" >&2
+          exit 1
+
+      - name: mvn -B verify
+        run: mvn -B verify
+
+      - name: 上传 surefire/failsafe 报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-failsafe-reports
+          path: |
+            **/target/surefire-reports/**
+            **/target/failsafe-reports/**
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Job2：确定性集（发布门禁；Stub 模型，不花钱）
+  #   注意：该脚本内部会自己 spawn `mvn -pl guarantee-web -Dit.test=EvaluationDeterministicIT verify`，
+  #   所以同样需要 MySQL/Redis 服务，并且**不带** `-am`（脚本的参数是固定的，
+  #   它依赖 reactor 里已构建的产物 / 本地仓库；Job1 已 `mvn verify` 过，
+  #   这里依赖 Job1 产物不存在（不同 runner），故 Job2 自己再 build 一次）
+  # ---------------------------------------------------------------------------
+  deterministic-eval:
+    name: 确定性黄金问题集（发布门禁）
+    runs-on: ubuntu-latest
+    needs: build-and-it
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: guarantee_ai_admin
+          MYSQL_USER: guarantee
+          MYSQL_PASSWORD: 'guarantee@2026'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: 安装 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 先安装依赖模块到本地仓库（保证确定性集用的是本次代码）
+        run: mvn -B -DskipTests install
+
+      - name: 确定性集（--suite=deterministic）
+        run: node scripts/ai-golden-questions.mjs --suite=deterministic
+
+      - name: 上传确定性集报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deterministic-eval-reports
+          path: |
+            reports/eval-deterministic-*
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Job3：真机集（**仅手动触发**；缺 Key 跳过而非失败）
+  # ---------------------------------------------------------------------------
+  live-eval:
+    name: 真机黄金问题集（仅手动 + 需 DEEPSEEK_API_KEY）
+    # 只有手动触发、且没有勾"跳过 live"时才进入这个作业；定时任务永远不跑真模型
+    if: github.event_name == 'workflow_dispatch' && inputs.skip_live != true
+    runs-on: ubuntu-latest
+    needs: build-and-it
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: guarantee_ai_admin
+          MYSQL_USER: guarantee
+          MYSQL_PASSWORD: 'guarantee@2026'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      # 🔑 密钥只以环境变量形式进入 runner；**不要**放到命令行参数里（会出现在进程列表）
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      ONLY: ${{ inputs.only }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: 安装 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 检查是否有 DEEPSEEK_API_KEY
+        id: key
+        run: |
+          if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+            echo "真机集：未跑（缺 DEEPSEEK_API_KEY）"
+          else
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+            echo "已检测到 DEEPSEEK_API_KEY（值不打印）"
+          fi
+
+      - name: 缺 Key：跳过（不判定、不失败）
+        if: steps.key.outputs.has_key != 'true'
+        run: |
+          echo "::notice::真机集未跑：未配置 secrets.DEEPSEEK_API_KEY，跳过 live-eval（不失败）"
+
+      - name: 打包（**带 -am**；**禁止** repackage.skip）
+        if: steps.key.outputs.has_key == 'true'
+        run: mvn -B -pl guarantee-web -am -DskipTests package
+
+      - name: fat jar 自检（防 thin jar 事故）
+        if: steps.key.outputs.has_key == 'true'
+        run: |
+          JAR=guarantee-web/target/guarantee-ai-admin.jar
+          if ! unzip -l "$JAR" | grep -q 'BOOT-INF/'; then
+            echo "::error::$JAR 不是 fat jar（BOOT-INF 缺失）——不要传 -Dspring-boot.repackage.skip=true"
+            exit 1
+          fi
+          ls -lh "$JAR"
+
+      - name: 起后端 + 跑真机集（--suite=live）
+        if: steps.key.outputs.has_key == 'true'
+        run: |
+          set -euo pipefail
+          JAR=guarantee-web/target/guarantee-ai-admin.jar
+          PORT=8092                      # 绝不用 8081（本地约定：那是用户自己的实例）
+          java -jar "$JAR" --server.port=$PORT > live-eval-app.log 2>&1 &
+          APP_PID=$!
+          # 无论后面成功、失败、报错，都必须回收实例
+          trap 'kill $APP_PID 2>/dev/null || true' EXIT
+
+          up=0
+          for i in $(seq 1 40); do
+            if curl -fsS "http://127.0.0.1:$PORT/actuator/health" 2>/dev/null | grep -q '"status":"UP"'; then
+              up=1; break
+            fi
+            sleep 3
+          done
+          if [ "$up" != "1" ]; then
+            echo "::error::后端在 120s 内未就绪（/actuator/health）"
+            tail -n 50 live-eval-app.log || true
+            exit 1
+          fi
+
+          ARGS=""
+          if [ -n "${ONLY:-}" ]; then ARGS="--only=$ONLY"; fi
+          set +e
+          BASE_URL="http://127.0.0.1:$PORT" node scripts/ai-golden-questions.mjs --suite=live $ARGS
+          CODE=$?
+          set -e
+          echo "live 退出码=$CODE（0 通过 / 1 断言失败 / 2 环境问题）"
+
+          if [ "$CODE" = "1" ]; then
+            echo "::error::真机集断言失败（模型行为回归）"
+            exit 1
+          fi
+          if [ "$CODE" = "2" ]; then
+            # 见文件头第 2 条：CI 目前没有订单 seed，live 集大概率数据不足。
+            # 这是**有意**的宽松口径；接入 seed 后应改成 exit 1。
+            echo "::warning::真机集判为 environment（多半是缺数据 seed），按'未跑'处理，本作业不失败"
+          fi
+          exit 0
+
+      - name: 上传真机集报告与后端日志
+        if: always() && steps.key.outputs.has_key == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-eval-reports
+          path: |
+            reports/**
+            live-eval-app.log
+          if-no-files-found: warn
