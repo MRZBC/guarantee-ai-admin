@@ -1,34 +1,34 @@
 {
   "schema": "ai-golden-questions/report@1",
-  "generatedAt": "2026-09-30T15:29:38.654Z",
-  "suite": "deterministic",
+  "generatedAt": "2026-09-30T15:24:47.247Z",
+  "suite": "live",
   "target": {
-    "baseUrl": "http://localhost:8081",
+    "baseUrl": "http://127.0.0.1:8091",
     "user": "admin",
     "deterministicIt": "EvaluationDeterministicIT"
   },
   "dataBaseline": {
-    "ok": null,
-    "detail": "确定性集不需要真实数据基线"
+    "ok": true,
+    "detail": "总订单量 150000（投标 100000 / 履约 50000），数据区间 2025-01-01 ~ 2026-09-30（seed 未自动校验：无 HTTP 出口）"
   },
   "status": {
-    "live": "not-run",
-    "deterministic": "ok",
+    "live": "ok",
+    "deterministic": "not-run",
     "detail": {
-      "live": null,
-      "deterministic": "确定性集 12/12 通过（未跑 0）"
+      "live": "全部通过",
+      "deterministic": null
     }
   },
   "totals": {
-    "total": 12,
-    "passed": 12,
+    "total": 2,
+    "passed": 2,
     "failed": 0,
     "notRun": 0
   },
   "metrics": {
     "passRate": 1,
     "dataSourceConsistencyRate": 1,
-    "citationCompletenessRate": 1,
+    "citationCompletenessRate": null,
     "forbiddenTermViolations": 0,
     "rounds": {
       "min": 2,
@@ -36,14 +36,14 @@
       "avg": 2
     },
     "elapsedMs": {
-      "min": 36,
-      "max": 470,
-      "avg": 101.3
+      "min": 3462,
+      "max": 6285,
+      "avg": 4873.5
     },
     "toolCalls": {
       "min": 1,
-      "max": 2,
-      "avg": 1.2
+      "max": 1,
+      "avg": 1
     }
   },
   "categories": {
@@ -85,257 +85,49 @@
   ],
   "results": [
     {
-      "id": "GQ-07",
+      "id": "GQ-05",
+      "category": "趋势（M2.1 新增能力）",
+      "question": "2026 年投标订单的保费按月走势如何？哪个月拐点最明显？",
+      "status": "pass",
+      "reasons": [],
+      "tools": [
+        "queryOrderTrend:SUCCESS"
+      ],
+      "toolCalls": 1,
+      "rounds": 2,
+      "elapsedMs": 6285,
+      "answerChars": 1779,
+      "consecutivePeriods": 9,
+      "score": {
+        "dataSourceLineExpected": true,
+        "dataSourceLinePresent": true,
+        "knowledgeSourceExpected": false,
+        "knowledgeSourcePresent": false,
+        "forbiddenViolations": 0,
+        "consecutivePeriods": 9
+      }
+    },
+    {
+      "id": "GQ-27",
       "category": "单维度统计",
-      "question": "2026 年第二季度投标保函的订单量、担保金额和保费分别是多少？",
+      "question": "2026 年上半年履约订单按月汇总，哪个月订单量最高？",
       "status": "pass",
       "reasons": [],
       "tools": [
-        "queryOrderSummary:SUCCESS"
+        "queryOrderTrend:SUCCESS"
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 470,
-      "answerChars": 207,
+      "elapsedMs": 3462,
+      "answerChars": 1184,
+      "consecutivePeriods": 6,
       "score": {
-        "knowledgeSourceExpected": false,
-        "dataSourceLinePresent": true,
         "dataSourceLineExpected": true,
+        "dataSourceLinePresent": true,
+        "knowledgeSourceExpected": false,
         "knowledgeSourcePresent": false,
-        "forbiddenViolations": 0
-      }
-    },
-    {
-      "id": "GQ-12",
-      "category": "降级/失败",
-      "question": "2025 年 1 月西藏自治区的投标订单有多少？",
-      "status": "pass",
-      "reasons": [],
-      "tools": [
-        "queryOrderSummary:SUCCESS"
-      ],
-      "toolCalls": 1,
-      "rounds": 2,
-      "elapsedMs": 63,
-      "answerChars": 205,
-      "score": {
-        "knowledgeSourceExpected": false,
-        "dataSourceLinePresent": true,
-        "dataSourceLineExpected": true,
-        "knowledgeSourcePresent": false,
-        "forbiddenViolations": 0
-      }
-    },
-    {
-      "id": "GQ-16",
-      "category": "定义/知识类",
-      "question": "停用和删除有什么区别？",
-      "status": "pass",
-      "reasons": [],
-      "tools": [
-        "queryBusinessKnowledge:SUCCESS"
-      ],
-      "toolCalls": 1,
-      "rounds": 2,
-      "elapsedMs": 97,
-      "answerChars": 106,
-      "score": {
-        "knowledgeSourceExpected": true,
-        "dataSourceLinePresent": false,
-        "dataSourceLineExpected": false,
-        "knowledgeSourcePresent": true,
-        "forbiddenViolations": 0
-      }
-    },
-    {
-      "id": "GQ-17",
-      "category": "定义/知识类",
-      "question": "保额区间的口径是怎么规定的？只讲规定，不要给统计数字。",
-      "status": "pass",
-      "reasons": [],
-      "tools": [
-        "queryBusinessKnowledge:SUCCESS"
-      ],
-      "toolCalls": 1,
-      "rounds": 2,
-      "elapsedMs": 56,
-      "answerChars": 112,
-      "score": {
-        "knowledgeSourceExpected": true,
-        "dataSourceLinePresent": false,
-        "dataSourceLineExpected": false,
-        "knowledgeSourcePresent": true,
-        "forbiddenViolations": 0
-      }
-    },
-    {
-      "id": "GQ-18",
-      "category": "定义/知识类",
-      "question": "区域编码的层级前缀匹配是什么意思？选省和选市有什么区别？",
-      "status": "pass",
-      "reasons": [],
-      "tools": [
-        "queryBusinessKnowledge:SUCCESS"
-      ],
-      "toolCalls": 1,
-      "rounds": 2,
-      "elapsedMs": 52,
-      "answerChars": 113,
-      "score": {
-        "knowledgeSourceExpected": true,
-        "dataSourceLinePresent": false,
-        "dataSourceLineExpected": false,
-        "knowledgeSourcePresent": true,
-        "forbiddenViolations": 0
-      }
-    },
-    {
-      "id": "GQ-19",
-      "category": "定义/知识类",
-      "question": "逻辑删除是什么意思？删除之后还能恢复吗？",
-      "status": "pass",
-      "reasons": [],
-      "tools": [
-        "queryBusinessKnowledge:SUCCESS"
-      ],
-      "toolCalls": 1,
-      "rounds": 2,
-      "elapsedMs": 55,
-      "answerChars": 105,
-      "score": {
-        "knowledgeSourceExpected": true,
-        "dataSourceLinePresent": false,
-        "dataSourceLineExpected": false,
-        "knowledgeSourcePresent": true,
-        "forbiddenViolations": 0
-      }
-    },
-    {
-      "id": "GQ-20",
-      "category": "定义/知识类混合",
-      "question": "保额区间的规则是怎么规定的？另外，平台上「投标保函（标准）」现在配置的区间是多少？",
-      "status": "pass",
-      "reasons": [],
-      "tools": [
-        "queryBusinessKnowledge:SUCCESS",
-        "queryInsuranceType:SUCCESS"
-      ],
-      "toolCalls": 2,
-      "rounds": 2,
-      "elapsedMs": 73,
-      "answerChars": 175,
-      "score": {
-        "knowledgeSourceExpected": true,
-        "dataSourceLinePresent": true,
-        "dataSourceLineExpected": true,
-        "knowledgeSourcePresent": true,
-        "forbiddenViolations": 0
-      }
-    },
-    {
-      "id": "GQ-21",
-      "category": "定义/知识类混合",
-      "question": "险种的基准费率口径是什么？顺便告诉我「投标保函（标准）」现在的基准费率是多少。",
-      "status": "pass",
-      "reasons": [],
-      "tools": [
-        "queryBusinessKnowledge:SUCCESS",
-        "queryInsuranceType:SUCCESS"
-      ],
-      "toolCalls": 2,
-      "rounds": 2,
-      "elapsedMs": 52,
-      "answerChars": 178,
-      "score": {
-        "knowledgeSourceExpected": true,
-        "dataSourceLinePresent": true,
-        "dataSourceLineExpected": true,
-        "knowledgeSourcePresent": true,
-        "forbiddenViolations": 0
-      }
-    },
-    {
-      "id": "GQ-22",
-      "category": "定义/知识类未收录",
-      "question": "保证金退还流程是怎样的？",
-      "status": "pass",
-      "reasons": [],
-      "tools": [
-        "queryBusinessKnowledge:SUCCESS"
-      ],
-      "toolCalls": 1,
-      "rounds": 2,
-      "elapsedMs": 48,
-      "answerChars": 9,
-      "score": {
-        "knowledgeSourceExpected": false,
-        "dataSourceLinePresent": false,
-        "dataSourceLineExpected": false,
-        "knowledgeSourcePresent": false,
-        "forbiddenViolations": 0
-      }
-    },
-    {
-      "id": "GQ-24",
-      "category": "定义/知识类越权",
-      "question": "操作审计记录里敏感字段是怎么记录的？",
-      "status": "pass",
-      "reasons": [],
-      "tools": [
-        "queryBusinessKnowledge:SUCCESS"
-      ],
-      "toolCalls": 1,
-      "rounds": 2,
-      "elapsedMs": 37,
-      "answerChars": 100,
-      "score": {
-        "knowledgeSourceExpected": false,
-        "dataSourceLinePresent": false,
-        "dataSourceLineExpected": false,
-        "knowledgeSourcePresent": true,
-        "forbiddenViolations": 0
-      }
-    },
-    {
-      "id": "GQ-26",
-      "category": "单维度统计",
-      "question": "2026 年第一季度投标订单的订单量和担保金额分别是多少？",
-      "status": "pass",
-      "reasons": [],
-      "tools": [
-        "queryOrderSummary:SUCCESS"
-      ],
-      "toolCalls": 1,
-      "rounds": 2,
-      "elapsedMs": 176,
-      "answerChars": 213,
-      "score": {
-        "knowledgeSourceExpected": false,
-        "dataSourceLinePresent": true,
-        "dataSourceLineExpected": true,
-        "knowledgeSourcePresent": false,
-        "forbiddenViolations": 0
-      }
-    },
-    {
-      "id": "GQ-33",
-      "category": "定义/知识类",
-      "question": "投标保函和履约保函有什么区别？",
-      "status": "pass",
-      "reasons": [],
-      "tools": [
-        "queryBusinessKnowledge:SUCCESS"
-      ],
-      "toolCalls": 1,
-      "rounds": 2,
-      "elapsedMs": 36,
-      "answerChars": 105,
-      "score": {
-        "knowledgeSourceExpected": true,
-        "dataSourceLinePresent": false,
-        "dataSourceLineExpected": false,
-        "knowledgeSourcePresent": true,
-        "forbiddenViolations": 0
+        "forbiddenViolations": 0,
+        "consecutivePeriods": 6
       }
     }
   ],
@@ -345,7 +137,7 @@
     "degraded": false,
     "source": "scripts/single-source-of-truth.mjs",
     "data": {
-      "generatedAt": "2026-09-30T15:29:38.426Z",
+      "generatedAt": "2026-09-30T15:24:47.013Z",
       "generator": "scripts/single-source-of-truth.mjs",
       "requirement": "REQ-MCP-12 / AC-MCP-12",
       "tests": {
@@ -1299,10 +1091,10 @@
               "failures": 0,
               "errors": 0,
               "skipped": 0,
-              "timeSeconds": 8.729,
+              "timeSeconds": 1.503,
               "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.EvaluationDeterministicIT.xml",
               "kind": "failsafe",
-              "mtimeMs": 1790782177743.67
+              "mtimeMs": 1790781613607.4587
             },
             {
               "suite": "com.guarantee.web.ai.KnowledgeDisabledIT",
@@ -1541,9 +1333,9 @@
             "failures": 0,
             "errors": 0,
             "skipped": 0,
-            "timeSeconds": 60.74600000000001,
+            "timeSeconds": 53.52000000000001,
             "classes": 28,
-            "newnessMs": 1790782177743.67
+            "newnessMs": 1790781647539.2917
           }
         },
         "total": {
@@ -1721,7 +1513,7 @@
             }
           ]
         },
-        "newestReportAt": "2026-09-30T15:29:37.743Z",
+        "newestReportAt": "2026-09-30T15:20:47.539Z",
         "newestSourceAt": "2026-09-30T14:36:00.887Z",
         "stale": false
       },
