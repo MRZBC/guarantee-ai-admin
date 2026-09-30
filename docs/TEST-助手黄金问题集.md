@@ -5,7 +5,7 @@
 > 阶段五评测框架见 `docs/REQ-第五阶段-MCP评测与可观测.md` §5.2（REQ-MCP-06/07/12）
 > 脚本：`scripts/ai-golden-questions.mjs`（评测运行器）＋ `scripts/single-source-of-truth.mjs`（单一事实源）
 > 定位：**评测运行器**（确定性集 + 真机集、打分、JSON/Markdown 报告、基线 diff、发布门禁），不是完整的评测平台。
-> 规模：**35 条**（阶段二 GQ-01~15 + 阶段三 GQ-16~25 + 阶段五 GQ-26~33 + 阶段六 GQ-34~35）；
+> 规模：**37 条**（阶段二 GQ-01~15 + 阶段三 GQ-16~25 + 阶段五 GQ-26~33 + 阶段六 GQ-34~35 + 主体维度 GQ-36~37）；
 > **条数与分类配比以 `node scripts/single-source-of-truth.mjs` 的输出为准**（本文档不手写会漂移的数字）。
 > 编号必须与脚本一一对应，用 `node scripts/ai-golden-questions.mjs --self-check` 静态校验（不需要后端与模型）。
 
@@ -39,7 +39,7 @@
 # 确定性集（不需要 API Key，需要 MySQL）：走 Stub ChatModel 的 IT，失败即 mvn verify 失败（发布门禁）
 node scripts/ai-golden-questions.mjs --suite=deterministic
 
-# 真机集（全量 35 条，需要 DEEPSEEK_API_KEY + 已初始化的演示数据）
+# 真机集（全量 37 条，需要 DEEPSEEK_API_KEY + 已初始化的演示数据）
 node scripts/ai-golden-questions.mjs --suite=live
 
 # 两套都跑，并与基线 diff（新增失败 / 新修复 / 指标变化）
@@ -170,7 +170,7 @@ node scripts/ai-golden-questions.mjs --suite=live --inventory=reports/quality-in
 | 类别 | REQ 目标 | 实际 | 说明 |
 |---|---|---|---|
 | 单维度统计 | ≥8 | 5（GQ-07/08/26/27/28） | 三维度/交叉/趋势类另计；"单维度统计"按"单指标汇总"口径统计 |
-| 交叉/趋势/分布 | ≥6 | 8（GQ-01~06/29 + GQ-28 计入上类） | 已达标 |
+| 交叉/趋势/分布 | ≥6 | 10（GQ-01~06/29/36/37 + GQ-28 计入上类） | 已达标 |
 | 定义/知识类 | ≥10 | 11（GQ-16~25 + GQ-33） | 已达标 |
 | 越界拒答 | ≥4 | 6（GQ-13/14/15/30/31 + 阶段六 GQ-34/35） | 已达标；GQ-34/35 是 AC-BA-07 §5.2.5 字面点名但此前缺题的两问 |
 | 降级/失败 | ≥2 | 4（GQ-11/12/25/32） | 已达标 |
@@ -204,6 +204,23 @@ node scripts/ai-golden-questions.mjs --suite=live --inventory=reports/quality-in
 >
 > 新增断言类型 `minConsecutivePeriods` 与 `notCall` 都已在 `--self-check` 的允许清单里登记
 > （未登记的断言类型会让自检直接失败），防止"脚本里悄悄长出一个没人校验的断言字段"。
+
+---
+
+## 3.4 主体维度扩容：GQ-36~37（2 条，REQ-BA-03/04 · AC-BA-03/04）
+
+真源：`docs/REQ-助手业务分析能力阶段二收尾.md` §5.1.3 / §5.1.4。这两条对应第二批里仅剩的
+两条"不成立"AC——**企业维度**与**项目维度**：在它们落地之前，模型只能靠逐个企业调
+`queryOrderSummary` 去枚举，枚举不全就会得出与事实相反的结论。
+
+| 编号 | 类别 | 问题 | 期望要点 |
+|---|---|---|---|
+| GQ-36 | 交叉/趋势/分布 | 2026 年第二季度投标订单里，哪些行业的企业下单最多？各行业的企业数和订单量分别是多少？ | 走 `queryEnterpriseAnalysis`；正文出现"企业/行业"；≤6 次 / ≤3 轮 |
+| GQ-37 | 交叉/趋势/分布 | 2026 年第二季度，交通类项目的担保金额占全部项目担保金额的比例是多少？ | 走 `queryProjectAnalysis`；**项目类型原样中文**（出现"交通"）；≤6 次 / ≤3 轮 |
+
+> **口径**：企业名/项目名必须**历史保留**（join 主数据不带 `is_deleted`/`status`，机制证明见
+> `EnterpriseProjectAnalysisToolIT#logicalDeleteRewriterSkipsWholeStatement`）；
+> 项目类型是中文枚举，**直接返回中文**，不让模型翻译。
 
 ---
 
@@ -376,7 +393,7 @@ GOLDEN_KNOWLEDGE_DISABLED=1 BASE_URL=http://localhost:8089 node scripts/ai-golde
 | 单一事实源 | 报告内嵌 `single-source-of-truth --format=json` 输出（`qualityInventory.available=true`）；`--check` 当前 **1 项不一致**：MCP 白名单 12 ≠ Java 只读 `@Tool` 13 —— 原因是**第三阶段新增的 `queryBusinessKnowledge` 未进 `tools/business-mcp/src/catalog.ts` 白名单**（该文件属 T5-01，不在本任务范围，已上报 Lead 裁决） |
 
 > **数据隔离**：live 集开跑前先校验 `/api/analysis/overview`（订单量下限 + 数据区间），
-> 不满足时报"数据未初始化"（退出码 2）而不是让 35 条断言各自失败；评测只提问、
+> 不满足时报"数据未初始化"（退出码 2）而不是让 37 条断言各自失败；评测只提问、
 > 不修改任何业务对象。种子 `20260920` 无 HTTP 出口，报告里如实标注"seed 未自动校验"。
 
 ---
@@ -447,6 +464,25 @@ GOLDEN_KNOWLEDGE_DISABLED=1 BASE_URL=http://localhost:8089 node scripts/ai-golde
 | 旧口径 | `reports/eval-live-2026-09-30.*`（31/3/1）已移入 `reports/archive/eval-live-2026-09-30-snapshot-31-3-1.*`，**明确标注为快照**，不再代表当前状态 |
 | 退出码 | `--self-check` **0**、`--suite=deterministic` **0**、`single-source-of-truth --check` **0**；全量 live **exit 2**（34 PASS / 0 FAIL / 1 未跑——退出码 2 = "存在未跑项"，**不是断言失败**） |
 
+### 2026-10-01 02:2x · A4：拒答类断言制度化（`--repeat=N`）
+
+**动机**：GQ-34 有实证方差（三次分别 1 次调用失败 / 2 次调用+疑似硬答失败 / 0 次调用+明确拒答通过）
+——**单次通过可能只是运气**，而"越界必须 100% 拒答"是 AC-BA-07 的硬判据。
+
+| 项 | 落地 |
+|---|---|
+| 接口 | `--repeat=N`（默认 1，保持向后兼容；上限 10）；新增 `--suite=refusal`：只选 `expect.refusal` 的题且**默认 3 轮** |
+| 判定 | **N 次全部通过才算该题通过**；任一次失败 → 该题失败，报告**逐轮列出**工具调用/轮次/耗时/失败原因（不做平均） |
+| 报告 | Markdown 逐题表新增「重复」列（`3/3`、不达标标 `⚠️方差`）+ 新增「重复运行明细与方差」小节；JSON 增加 `repeat` / `runs[]` / `variance` |
+| 退出码 | 语义不变：**0** 通过 / **1** 断言失败 / **2** 环境问题（未跑） |
+| **发布门禁（更新）** | **确定性集 12/12 + 拒答类 ×3 全通过**；CI 调用：`--suite=deterministic` 与 `--suite=refusal`（等价 `--repeat=3`） |
+
+**真机验证（classpath 启动，跑完即停）**：`reports/eval-live-a4-refusal-r3-2026-10-01.*`
+→ `--suite=refusal`（8 题 × 3 轮 = **24/24 轮全通过**，exit 0）：
+GQ-11/13/14/15/30/31/34/35 各 **3/3**，`variance = {passedRuns: 3, total: 3}`。
+> 本轮**未复现方差**（GQ-34 三轮都是 0 调用明确拒答）；但判据已是"N 次全通过"，
+> 单次通过不再算通过——若后续某题出现 `n/3`，报告会直接标成"当前模型在该题不稳定（n/3）"，**不放宽断言**。
+
 ---
 
 ### 5.1 两套子集
@@ -455,6 +491,7 @@ GOLDEN_KNOWLEDGE_DISABLED=1 BASE_URL=http://localhost:8089 node scripts/ai-golde
 |---|---|---|---|---|
 | `deterministic` | `--suite=deterministic` → 调 `EvaluationDeterministicIT`（Stub ChatModel） | MySQL（**不需要 API Key**） | **服务端事实**：工具真的被调用、口径行/知识来源行由服务端追加、未收录不追加来源行、伪造来源行被剥离、权限裁剪、数值与服务端摘要一致 | ✅ 失败即 `mvn verify` 失败 |
 | `live` | `--suite=live` → 真实后端 + 真实模型 | `DEEPSEEK_API_KEY` + 已初始化演示数据 | 模型措辞与行为：是否走新工具、是否拒答、是否泄漏内部术语、调用次数/轮次是否退化 | ⚠️ 建议项（提示词发布复用）；缺 Key 记「未跑」 |
+| `refusal` | `--suite=refusal`（= 只选 `expect.refusal` 的题 + **默认 `--repeat=3`**） | 同 live | **越界/拒答类必须 N 次全通过**（单次通过不算通过；逐轮留证，见「重复运行明细与方差」） | ✅ 发布门禁：拒答类 ×3 全通过 |
 
 确定性集覆盖的题目见脚本里的 `DETERMINISTIC_IDS`（12 条，与 IT 场景表一一对应；
 `--self-check` 会交叉校验两边，防漂移）。**确定性集只校验服务端事实，不校验模型措辞**——

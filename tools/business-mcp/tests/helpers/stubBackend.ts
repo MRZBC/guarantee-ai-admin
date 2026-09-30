@@ -40,13 +40,15 @@ export interface StubBackend {
   close(): Promise<void>;
 }
 
-/** 与 Java 侧 12 个只读 `@Tool` 方法一一对应的假清单。 */
+/** 与 Java 侧 15 个只读 `@Tool` 方法一一对应的假清单。 */
 export const DEFAULT_TOOLS: readonly StubTool[] = [
   { name: 'queryOrderSummary', description: '订单汇总（后端说明）', inputSchema: { type: 'object', properties: { orderType: { type: 'string' } }, required: [] } },
   { name: 'getCurrentDate', description: '当前日期（后端说明）' },
   { name: 'queryBusinessKnowledge', description: '业务知识检索（后端说明）' },
   { name: 'queryOrderDistribution', description: '维度分布（后端说明）' },
   { name: 'queryOrderTrend', description: '时间趋势（后端说明）' },
+  { name: 'queryEnterpriseAnalysis', description: '企业维度分析（后端说明）' },
+  { name: 'queryProjectAnalysis', description: '项目维度分析（后端说明）' },
   { name: 'queryOrg', description: '机构查询（后端说明）' },
   { name: 'queryDepartment', description: '部门查询（后端说明）' },
   { name: 'queryUser', description: '用户查询（后端说明）' },

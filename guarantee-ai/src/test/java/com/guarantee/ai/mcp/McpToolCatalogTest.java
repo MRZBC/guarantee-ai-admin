@@ -25,13 +25,15 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
  */
 class McpToolCatalogTest {
 
-    /** 与 {@code AiToolRegistry.readTools} 的 13 个只读 {@code @Tool} 方法一一对应。 */
+    /** 与 {@code AiToolRegistry.readTools} 的 15 个只读 {@code @Tool} 方法一一对应。 */
     private static final List<String> EXPECTED_TOOLS = List.of(
             "queryOrderSummary",
             "getCurrentDate",
             "queryBusinessKnowledge",
             "queryOrderDistribution",
             "queryOrderTrend",
+            "queryEnterpriseAnalysis",
+            "queryProjectAnalysis",
             "queryOrg",
             "queryDepartment",
             "queryUser",
@@ -52,10 +54,10 @@ class McpToolCatalogTest {
     private static final Path GATEWAY_CATALOG = resolveGatewayCatalog();
 
     @Test
-    @DisplayName("白名单就是这 13 个只读工具（顺序固定，便于逐名核对）")
+    @DisplayName("白名单就是这 15 个只读工具（顺序固定，便于逐名核对）")
     void catalogIsExactlyTheTwelveReadOnlyTools() {
         assertThat(McpToolCatalog.readOnlyToolNames()).containsExactlyElementsOf(EXPECTED_TOOLS);
-        assertThat(McpToolCatalog.readOnlyToolNames()).hasSize(13);
+        assertThat(McpToolCatalog.readOnlyToolNames()).hasSize(15);
 
         for (String tool : EXPECTED_TOOLS) {
             assertThat(McpToolCatalog.isReadOnlyTool(tool)).as("%s 应在白名单内", tool).isTrue();
@@ -76,7 +78,7 @@ class McpToolCatalogTest {
         assertThat(gatewayTools)
                 .as("网关清单（%s）与 Java 白名单必须逐名一致", GATEWAY_CATALOG)
                 .containsExactlyInAnyOrderElementsOf(McpToolCatalog.readOnlyToolNames());
-        assertThat(gatewayTools).as("网关清单个数也必须是 13").hasSize(EXPECTED_TOOLS.size());
+        assertThat(gatewayTools).as("网关清单个数也必须是 15").hasSize(EXPECTED_TOOLS.size());
     }
 
     @Test

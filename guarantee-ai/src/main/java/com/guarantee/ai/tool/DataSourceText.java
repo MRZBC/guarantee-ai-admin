@@ -60,6 +60,8 @@ public final class DataSourceText {
             Map.entry("neverLoggedIn", "从未登录"),
             Map.entry("toolName", "工具"),
             Map.entry("orderType", "险种"),
+            Map.entry("dimension", "维度"),
+            Map.entry("orderBy", "排序依据"),
             Map.entry("orgId", "机构"));
 
     /** 传输细节，不属于业务口径，一律不展示（截断另由 {@code truncated} 标志表达）。 */

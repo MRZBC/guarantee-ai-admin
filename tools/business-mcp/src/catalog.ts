@@ -10,7 +10,7 @@
  *     3. 没有任何"万能 HTTP 透传"入口：网关只认这些名字，其余一律拒。
  *
  * 与 Java 侧的关系（**不要在别处再写第二份**）：
- *   本清单 = `AiToolRegistry.readTools` 里注册的 13 个只读 `@Tool` 方法
+ *   本清单 = `AiToolRegistry.readTools` 里注册的 15 个只读 `@Tool` 方法
  *   （12 个只读类：`OrderSummaryTool` 同时提供 queryOrderSummary 与 getCurrentDate，
  *   `QueryBusinessKnowledgeTool` 提供第三阶段的知识检索）。
  *   写工具（5 个 `propose*` 类）**永不出现**在这里。
@@ -53,6 +53,19 @@ export const STATIC_READ_ONLY_TOOLS: readonly StaticToolEntry[] = [
     backendName: 'queryOrderTrend',
     description:
       '订单时间趋势（只读）：按日/月/季/年返回序列，用于趋势与拐点分析。',
+  },
+  {
+    backendName: 'queryEnterpriseAnalysis',
+    description:
+      '企业维度分析（只读）：mode=DISTRIBUTION 按行业/等级/地区聚合企业数与订单指标，'
+      + 'mode=TOP 按订单量或保额给出企业排行（企业名 + 编码 + 订单量 + 保额 + 保费）。'
+      + '企业名按历史口径保留；**数字类问题仍须用取数工具**，知识条目不能当统计值。',
+  },
+  {
+    backendName: 'queryProjectAnalysis',
+    description:
+      '项目维度分析（只读）：mode=DISTRIBUTION 按项目类型（房建/市政/交通/水利/其他，中文）/地区'
+      + '聚合项目数与订单指标，mode=TOP 按担保金额给出项目排行。项目类型原样返回中文。',
   },
   {
     backendName: 'queryOrg',

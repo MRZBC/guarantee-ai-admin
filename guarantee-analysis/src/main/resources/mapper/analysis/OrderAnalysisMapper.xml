@@ -181,5 +181,139 @@
         ORDER BY `orderCount` DESC, o.org_id ASC
         LIMIT #{limit}
     </select>
+    <!--
+      企业维度分布（REQ-BA-03 DISTRIBUTION）：按行业 / 等级 / 地区聚合**企业数** + 订单指标。
+
+      ⚠️ 两条刻意的口径（改动前请先读 docs/DEC-订单筛选下拉的选项口径.md §2.4）：
+      1) join `enterprise` **不带** is_deleted / status —— 企业名称必须"历史保留"：
+         已停用/已删除企业的历史订单，其金额仍要落在一个**有名字**的分组里，
+         否则会出现"占比最高的一行没有名字"（险种/机构分布踩过同样的坑，见下方注释）。
+      2) 本语句**不需要** IncludingDeleted 后缀：criteriaFilter 里已有显式的
+         `AND is_deleted = 0`（作用于订单子查询），改写器遇到"已显式出现 is_deleted 条件"
+         会**整句跳过**，因此不会给 enterprise 注入过滤条件——这正是我们要的历史口径。
+         反过来说：如果把订单侧的显式条件删掉，这条语句就会开始过滤企业主数据。
+    -->
+    <select id="selectEnterpriseDistribution" resultType="com.guarantee.analysis.vo.EnterpriseGroupVO">
+        SELECT
+            <choose>
+                <when test="dimension == 'INDUSTRY'">
+                    MAX(e.industry) AS groupCode, MAX(e.industry) AS groupName
+                </when>
+                <when test="dimension == 'LEVEL'">
+                    MAX(e.ent_level) AS groupCode, MAX(e.ent_level) AS groupName
+                </when>
+                <otherwise>
+                    o.region_code AS groupCode, MAX(o.region_name) AS groupName
+                </otherwise>
+            </choose>
+            , COUNT(DISTINCT o.enterprise_id)        AS enterpriseCount
+            , COUNT(*)                               AS orderCount
+            , COALESCE(SUM(o.guarantee_amount), 0)   AS guaranteeAmount
+            , COALESCE(SUM(o.premium_amount), 0)     AS premiumAmount
+        FROM (
+            <include refid="orderSource"/>
+        ) o
+        LEFT JOIN enterprise e ON e.id = o.enterprise_id
+        GROUP BY
+        <choose>
+            <when test="dimension == 'INDUSTRY'">
+                e.industry
+            </when>
+            <when test="dimension == 'LEVEL'">
+                e.ent_level
+            </when>
+            <otherwise>
+                o.region_code
+            </otherwise>
+        </choose>
+        ORDER BY `orderCount` DESC, groupCode ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 企业排行（REQ-BA-03 TOP）：按订单量或保额倒序；同样"历史保留"企业名。 -->
+    <select id="selectEnterpriseTop" resultType="com.guarantee.analysis.vo.EnterpriseRankVO">
+        SELECT
+            o.enterprise_id                          AS enterpriseId,
+            MAX(e.ent_code)                          AS entCode,
+            MAX(e.ent_name)                          AS entName,
+            MAX(e.industry)                          AS industry,
+            MAX(e.ent_level)                         AS entLevel,
+            COUNT(*)                                 AS orderCount,
+            COALESCE(SUM(o.guarantee_amount), 0)     AS guaranteeAmount
+            , COALESCE(SUM(o.premium_amount), 0)     AS premiumAmount
+        FROM (
+            <include refid="orderSource"/>
+        ) o
+        LEFT JOIN enterprise e ON e.id = o.enterprise_id
+        GROUP BY o.enterprise_id
+        <choose>
+            <when test="orderBy == 'GUARANTEE_AMOUNT'">
+                ORDER BY `guaranteeAmount` DESC
+            </when>
+            <otherwise>
+                ORDER BY `orderCount` DESC
+            </otherwise>
+        </choose>
+        , o.enterprise_id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      项目维度分布（REQ-BA-04 DISTRIBUTION）：按项目类型或地区聚合项目数 + 订单指标。
+
+      项目类型**直接返回中文**（project.project_type 库里就是"房建/市政/交通/水利/其他"）——
+      与项目管理页同一口径，不翻译也不让模型翻译。join 同样不带 is_deleted/status（历史保留）。
+    -->
+    <select id="selectProjectDistribution" resultType="com.guarantee.analysis.vo.ProjectGroupVO">
+        SELECT
+            <choose>
+                <when test="dimension == 'PROJECT_TYPE'">
+                    MAX(p.project_type) AS groupCode, MAX(p.project_type) AS groupName
+                </when>
+                <otherwise>
+                    o.region_code AS groupCode, MAX(o.region_name) AS groupName
+                </otherwise>
+            </choose>
+            , COUNT(DISTINCT o.project_id)           AS projectCount
+            , COUNT(*)                               AS orderCount
+            , COALESCE(SUM(o.guarantee_amount), 0)   AS guaranteeAmount
+            , COALESCE(SUM(o.premium_amount), 0)     AS premiumAmount
+        FROM (
+            <include refid="orderSource"/>
+        ) o
+        LEFT JOIN project p ON p.id = o.project_id
+        GROUP BY
+        <choose>
+            <when test="dimension == 'PROJECT_TYPE'">
+                p.project_type
+            </when>
+            <otherwise>
+                o.region_code
+            </otherwise>
+        </choose>
+        ORDER BY `orderCount` DESC, groupCode ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 项目排行（REQ-BA-04 TOP）：按担保金额倒序；同样"历史保留"项目名与类型。 -->
+    <select id="selectProjectTop" resultType="com.guarantee.analysis.vo.ProjectRankVO">
+        SELECT
+            o.project_id                             AS projectId,
+            MAX(p.project_code)                      AS projectCode,
+            MAX(p.project_name)                      AS projectName,
+            MAX(p.project_type)                      AS projectType,
+            o.region_code                            AS regionCode,
+            MAX(o.region_name)                       AS regionName,
+            COUNT(*)                                 AS orderCount,
+            COALESCE(SUM(o.guarantee_amount), 0)     AS guaranteeAmount
+            , COALESCE(SUM(o.premium_amount), 0)     AS premiumAmount
+        FROM (
+            <include refid="orderSource"/>
+        ) o
+        LEFT JOIN project p ON p.id = o.project_id
+        GROUP BY o.project_id, o.region_code
+        ORDER BY `guaranteeAmount` DESC, o.project_id ASC
+        LIMIT #{limit}
+    </select>
 
 </mapper>

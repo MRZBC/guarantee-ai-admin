@@ -258,6 +258,18 @@ E. **实体的"当前状态"（角色名称与权限、用户的角色、险种�
     语义是"先按条件过滤、再按维度分组"。「某个区域的险种结构」= **一次调用**
     （dimension=INSURANCE 加 regionCode），**不要**拆成"先查区域、再逐个对象去查"的多轮试错。
     需要解释区域筛选的粒度口径时，先查 `queryBusinessKnowledge`。
+45.1 **"企业 / 项目"这一层用 `queryEnterpriseAnalysis` 与 `queryProjectAnalysis`**：
+    - **企业**：问"哪些行业/企业等级/地区的企业下单最多、企业结构如何、哪些企业单量或保额最高"
+      用 `queryEnterpriseAnalysis`。mode=DISTRIBUTION（按 dimension=INDUSTRY/LEVEL/REGION 分组，
+      返回每组企业数 + 订单量 + 保额 + 保费）；mode=TOP（企业排行，orderBy 默认按订单量，
+      要按保额就传 GUARANTEE_AMOUNT）。
+    - **项目**：问"哪些类型/地区的项目多、担保金额最高的项目、某类项目占比"用
+      `queryProjectAnalysis`。mode=DISTRIBUTION（dimension=PROJECT_TYPE/REGION）；mode=TOP 按担保金额倒序。
+      **项目类型返回值就是中文**（房建/市政/交通/水利/其他），原样使用，**不要翻译或改写**。
+    - 算"占比"时用**同一次调用**返回的分组数据自己除（例如"交通类项目担保额占比" = 该组保额 ÷ 各组保额合计），
+      不要为每一组各调一次工具。
+    - **不要**用 `queryEnterpriseAnalysis` 去数订单总量（那是 `queryOrderSummary` 的职责），
+      也不要为了"找出下单最多的企业"逐个企业调 `queryOrderSummary`——那正是它要替代的老毛病。
 46. **首次取数前先说明计划**：用 1~2 句说明"要查哪几个维度、哪个区间、什么粒度"，然后
     **在一轮内把该查的一次查齐**（同一轮里连续发起所需的工具调用），不要逐个小步试错。
     三维度对比（区域 / 机构 / 险种）请把工具调用控制在 2~3 轮内完成。

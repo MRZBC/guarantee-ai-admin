@@ -33,6 +33,7 @@ const EXPECTED_READONLY = [
   'getCurrentDate',
   'queryBusinessKnowledge',
   'queryDepartment',
+  'queryEnterpriseAnalysis',
   'queryInsuranceType',
   'queryMyProposals',
   'queryMyToolCalls',
@@ -41,6 +42,7 @@ const EXPECTED_READONLY = [
   'queryOrderSummary',
   'queryOrderTrend',
   'queryOrg',
+  'queryProjectAnalysis',
   'queryRole',
   'queryUser',
 ].sort();
@@ -108,7 +110,7 @@ describe('业务 MCP 网关 · stdio 协议（TEST-MCP-05）', () => {
     expect(typeof result.protocolVersion).toBe('string');
   });
 
-  it('tools/list 返回 13 个只读工具，与静态白名单逐名一致，且不含任何写工具', async () => {
+  it('tools/list 返回 15 个只读工具，与静态白名单逐名一致，且不含任何写工具', async () => {
     const stub = await startStub();
     const client = await startGateway({ baseUrl: stub.url });
     await client.initialize();
@@ -116,7 +118,7 @@ describe('业务 MCP 网关 · stdio 协议（TEST-MCP-05）', () => {
     const tools = await client.listTools();
 
     expect(tools.map((t) => t.name).sort()).toEqual(EXPECTED_EXPOSED);
-    expect(tools).toHaveLength(13);
+    expect(tools).toHaveLength(15);
 
     const forbidden = /(propose|create|update|delete|remove|disable|enable|execute|shell|command|raw_write|import|export)/i;
     for (const tool of tools) {
@@ -274,7 +276,7 @@ describe('业务 MCP 网关 · stdio 协议（TEST-MCP-05）', () => {
     const tools = await client.listTools();
 
     expect(tools.map((t) => t.name)).not.toContain(`${PREFIX}proposeOrgChange`);
-    expect(tools).toHaveLength(13);
+    expect(tools).toHaveLength(15);
     expect(client.stderr.join('')).toContain('已丢弃');
   });
 

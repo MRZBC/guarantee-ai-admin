@@ -73,6 +73,8 @@ class AiToolRegistryTest {
                 new OrderSummaryTool(mock(OrderStatisticsService.class)),
                 new OrderDistributionTool(mock(OrderAnalysisService.class)),
                 new OrderTrendTool(mock(OrderAnalysisService.class)),
+                new EnterpriseAnalysisTool(mock(OrderAnalysisService.class)),
+                new ProjectAnalysisTool(mock(OrderAnalysisService.class)),
                 new OrgQueryTool(mock(OrgService.class), mock(AiDataScopeResolver.class)),
                 // 部门不再挂机构：两个部门工具的构造器都不再需要 OrgService
                 new DepartmentQueryTool(mock(DepartmentService.class),
@@ -186,7 +188,8 @@ class AiToolRegistryTest {
         // Spring AI 通过反射枚举同一个类上的 @Tool 方法，**方法顺序不作保证**，
         // 断言固定顺序会产生"同样的代码这次过、下次挂"的假失败。
         assertThat(names).containsExactlyInAnyOrder(
-                "queryOrderSummary", "queryOrderDistribution", "queryOrderTrend", "getCurrentDate",
+                "queryOrderSummary", "queryOrderDistribution", "queryOrderTrend",
+                "queryEnterpriseAnalysis", "queryProjectAnalysis", "getCurrentDate",
                 "queryBusinessKnowledge");
     }
 

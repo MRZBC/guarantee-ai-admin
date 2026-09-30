@@ -19,17 +19,27 @@ archive/<名字>[-<原因>].md|json      # 历史快照（不再重写，仅作�
   两次结果不一致恰好用于观察**模型行为方差**（见下方"模型行为发现"）。
 - 点前缀的历史文件（如 `.retry-*`）保留原名，属于当时的临时产物，仅作证据。
 
-## 当前状态（2026-09-30 23:4x，**T6-10 终局口径**）
+## 当前状态（2026-10-01 02:1x，**B1 主体维度之后**）
 
-> **当前发布口径 = `eval-live-t610-2026-09-30.*`**：全量 35 题 → **通过 34 / 失败 0 / 未跑 1**，
-> 叠加 `eval-live-gq25-2026-09-30.*`（关知识层实例）**1/1 PASS** ⇒ **35/35 全覆盖**、`forbiddenTermViolations = 0`。
-> 旧口径 `eval-live-2026-09-30.*`（31/3/1）已作为**快照**移入 `archive/eval-live-2026-09-30-snapshot-31-3-1.*`，
-> 只用于对照，**不再代表当前状态**。
+> **当前发布口径 = `eval-live-b1-37-2026-09-30.*`**：全量 **37 题** → **通过 36 / 失败 0 / 未跑 1**
+> （GQ-25 需关知识层实例，`eval-live-gq25-2026-09-30.*` = 1/1 PASS）⇒ **37/37 全覆盖**、
+> `forbiddenTermViolations = 0`。上一版 35 题口径 `eval-live-t610-2026-09-30.*` 保留作对照。
+>
+> ⚠️ **`single-source-of-truth --check` 已恢复 0**：B1 的 2 个新只读工具已按 Lead 裁决补进
+> `tools/business-mcp/src/catalog.ts`（13 → **15**），并同步 `McpToolCatalog`/`McpToolCatalogTest`/
+> `tools/business-mcp/tests`（`npm test` 17/17）/`docs/MCP-外部接入.md`/`README.md`。
+
+> ⚠️ **发布门禁口径（A4 起）**：**确定性集 12/12** + **拒答类 ×3 全通过**（`--suite=refusal`）。
+> **单次通过 ≠ 通过**：拒答类每题跑 3 轮，N 次全部通过才算通过；任一次失败即整题失败，
+> 报告逐轮列出差异（工具调用/轮次/耗时/原因），不使用平均数。
 
 | 文件 | 内容 |
 |---|---|
-| **`eval-live-t610-2026-09-30.md\|json`** | **当前发布口径**：全量 35 题真机（classpath 实例 + 真实 Key）= **34 PASS / 0 FAIL / 1 未跑**（GQ-25 需独立实例），`forbiddenViolations=0` |
-| `eval-live-gq25-2026-09-30.md\|json` | GQ-25 单题复跑（同轮，classpath + `--guarantee.ai.knowledge.enabled=false`）：**1/1 PASS** |
+| **`eval-live-b1-37-2026-09-30.md\|json`** | **当前发布口径**：全量 **37 题**真机 = **36 PASS / 0 FAIL / 1 未跑**（GQ-25 独立实例），`forbiddenViolations=0` |
+| **`eval-live-b1-2026-09-30.md\|json`** | B1 定向复跑（GQ-36 企业维度 / GQ-37 项目维度）：**2/2 PASS**，各 **1 次**调用新工具（未退回蛮力枚举） |
+| **`eval-live-a4-refusal-r3-2026-10-01.md\|json`** | A4 拒答类 ×3（`--suite=refusal`）：**8 题 × 3 轮 = 24/24 轮全通过**，exit 0；`variance={passedRuns:3,total:3}`；逐轮明细见报告「重复运行明细与方差」 |
+| `eval-live-t610-2026-09-30.md\|json` | 上一版 35 题口径（34 PASS / 0 FAIL / 1 未跑），保留对照 |
+| `eval-live-gq25-2026-09-30.md\|json` | GQ-25 单题复跑（classpath + `--guarantee.ai.knowledge.enabled=false`）：**1/1 PASS** |
 | `eval-deterministic-2026-09-30.md\|json` | 确定性集（Stub 模型，纳入 `mvn verify`）：**12/12**，`--suite=deterministic` exit 0 |
 | `eval-live-t605-2026-09-30.md\|json` | T6-05 定向 6 题的合并报告（GQ-01/02/05/27/34/35）：通过 3 / 失败 3（当时的"红"已由 T6-07/T6-10 收口） |
 | `eval-live-t607-fix.md\|json` | T6-07 解析器修复后复跑（GQ-27 + GQ-05）：**2/2 PASS**（连续周期 6 / 9） |

@@ -62,6 +62,22 @@ function argValue(name) {
   return eq < 0 ? '' : hit.slice(eq + 1)
 }
 
+/**
+ * 拒绝类问题的重复运行次数（A4：**单次通过可能只是运气**）。
+ *
+ * <p>动机是实证过的方差：GQ-34 三次运行分别得到「1 次调用失败 / 2 次调用+疑似硬答失败 /
+ * 0 次调用+明确拒答通过」。所以"越界必须 100% 拒答"这个判据不能靠单次通过来断言。</p>
+ *
+ * <p>口径：{@code --repeat=N} 时每题跑 N 次，**N 次全部通过才算通过**；只要有一次失败，
+ * 该题即失败，并逐次列出差异（工具调用/轮次/耗时/原因），便于区分"模型方差"与"真回归"。
+ * 默认 1（向后兼容）；{@code --suite=refusal} 未显式给 repeat 时默认 3。</p>
+ */
+const REPEAT_RAW = Number.parseInt(argValue('repeat') ?? '', 10)
+const REPEAT = Number.isFinite(REPEAT_RAW) && REPEAT_RAW > 0 ? Math.min(REPEAT_RAW, 10) : null
+
+/** 本次运行实际使用的重复次数（由 main 决定：live 默认 1、refusal 默认 3、显式 --repeat 优先）。 */
+let LIVE_REPEAT = 1
+
 const SUITE = (argValue('suite') || 'live').toLowerCase()
 const BASELINE_PATH = argValue('baseline')
 const OUT_MD = argValue('out')
@@ -516,6 +532,31 @@ const QUESTIONS = [
       maxToolCalls: 2,
       maxRounds: 2,
       notContains: ['已连接数据库', '直连查询完成', '已直接查询']
+    }
+  },
+  {
+    id: 'GQ-36',
+    category: '交叉/趋势/分布',
+    question: '2026 年第二季度投标订单里，哪些行业的企业下单最多？各行业的企业数和订单量分别是多少？',
+    expect: {
+      // REQ-BA-03 / AC-BA-03：企业维度必须走 queryEnterpriseAnalysis
+      //（而不是逐个企业去调 queryOrderSummary —— 那正是它要替代的蛮力枚举）
+      mustCall: ['queryEnterpriseAnalysis'],
+      contains: ['企业', '行业'],
+      maxToolCalls: 6,
+      maxRounds: 3
+    }
+  },
+  {
+    id: 'GQ-37',
+    category: '交叉/趋势/分布',
+    question: '2026 年第二季度，交通类项目的担保金额占全部项目担保金额的比例是多少？',
+    expect: {
+      // REQ-BA-04 / AC-BA-04：项目维度必须走 queryProjectAnalysis，且项目类型原样中文
+      mustCall: ['queryProjectAnalysis'],
+      contains: ['交通'],
+      maxToolCalls: 6,
+      maxRounds: 3
     }
   }
 ]
@@ -1196,21 +1237,71 @@ async function runLiveSuite(selected, rows = []) {
     } catch (error) {
       result = { failed: true, reason: `请求异常：${error.message}`, elapsedMs: 0 }
     }
-    // 环境类错误（缺 Key、连不上模型、后端未重启导致工具未注册）→ 记"未跑"，**不记断言失败**
-    const envReason = result.failed ? result.reason
+
+    // A4：重复运行（N 次全通过才算通过）。每轮都独立判定，逐轮留证（工具调用/轮次/耗时/原因）。
+    const repeatCount = LIVE_REPEAT
+    const runs = []
+    let envReason = result.failed ? result.reason
       : (isEnvReason(result.errorMessage) ? envReasonText(result.errorMessage) : null)
     if (envReason && isEnvReason(envReason)) {
+      // 第一次就撞到环境问题：仍按"未跑"处理（不做无意义的重复请求）
       skipped += 1
       envSkipped += 1
-      rows.push({ item, result, verdict: { pass: false, skipped: true, reasons: [envReason] } })
+      rows.push({ item, result, verdict: { pass: false, skipped: true, reasons: [envReason] }, runs: [], repeat: repeatCount })
       console.log(`SKIP（未跑：${envReason}）`)
       continue
     }
+    runs.push(runSummary(result, judge(item, result)))
+    for (let i = 1; i < repeatCount; i += 1) {
+      await sleep(500)
+      let next
+      try {
+        next = await ask(itemToken, item.question)
+      } catch (error) {
+        next = { failed: true, reason: `请求异常：${error.message}`, elapsedMs: 0 }
+      }
+      const nextEnv = next.failed ? next.reason
+        : (isEnvReason(next.errorMessage) ? envReasonText(next.errorMessage) : null)
+      if (nextEnv && isEnvReason(nextEnv)) {
+        // 中途撞到环境问题：整题记"未跑"（宁可少判，也不拿半截数据当通过）
+        skipped += 1
+        envSkipped += 1
+        rows.push({
+          item, result: next,
+          verdict: { pass: false, skipped: true, reasons: [`第 ${i + 1} 次：${nextEnv}`] },
+          runs, repeat: repeatCount
+        })
+        console.log(`SKIP（第 ${i + 1} 次环境问题：${nextEnv}）`)
+        break
+      }
+      result = next
+      runs.push(runSummary(next, judge(item, next)))
+    }
+    if (runs.length < repeatCount) {
+      continue
+    }
 
-    const verdict = judge(item, result)
-    if (!verdict.pass) failed += 1
-    rows.push({ item, result, verdict })
-    console.log(verdict.pass ? 'PASS' : `FAIL（${verdict.reasons.join('；')}）`)
+    const passedRuns = runs.filter((r) => r.pass).length
+    const allPass = passedRuns === repeatCount
+    // 汇总原因：逐轮标注，便于一眼看出"哪一轮、为什么"（而不是把 N 次平均掉）
+    const reasons = allPass
+      ? []
+      : runs.flatMap((r, idx) => (r.pass ? [] : r.reasons.map((t) => `第 ${idx + 1} 次：${t}`)))
+    const verdict = {
+      pass: allPass,
+      skipped: false,
+      reasons,
+      score: runs[runs.length - 1].score,
+      repeat: repeatCount,
+      passedRuns
+    }
+    if (!allPass) failed += 1
+    rows.push({ item, result, verdict, runs, repeat: repeatCount })
+    if (allPass) {
+      console.log(repeatCount > 1 ? `PASS（${repeatCount}/${repeatCount}）` : 'PASS')
+    } else {
+      console.log(`FAIL（${passedRuns}/${repeatCount} 次通过；${reasons.join('；')}）`)
+    }
     await sleep(500)
   }
 
@@ -1490,15 +1581,52 @@ function renderMarkdown(report) {
 
   lines.push('## 逐题结果')
   lines.push('')
-  lines.push('| 编号 | 类别 | 结果 | 工具调用 | 轮次 | 连续周期 | 耗时(s) | 正文字数 | 备注 |')
-  lines.push('|---|---|---|---|---|---|---|---|---|')
+  const anyRepeat = report.results.some((r) => (r.repeat ?? 1) > 1)
+  if (anyRepeat) {
+    lines.push(`| 编号 | 类别 | 结果 | 重复 | 工具调用 | 轮次 | 连续周期 | 耗时(s) | 正文字数 | 备注 |`)
+    lines.push('|---|---|---|---|---|---|---|---|---|---|')
+  } else {
+    lines.push('| 编号 | 类别 | 结果 | 工具调用 | 轮次 | 连续周期 | 耗时(s) | 正文字数 | 备注 |')
+    lines.push('|---|---|---|---|---|---|---|---|---|')
+  }
   for (const r of report.results) {
     const mark = r.status === 'pass' ? '✅' : (r.status === 'not-run' ? '⏭ 未跑' : '❌')
     const note = (r.status === 'pass' ? '' : (r.reasons ?? []).join('；')).replace(/\|/g, '/')
     const periods = r.consecutivePeriods == null ? '—' : r.consecutivePeriods
-    lines.push(`| ${r.id} | ${r.category} | ${mark} | ${r.toolCalls} | ${r.rounds} | ${periods} | ${(r.elapsedMs / 1000).toFixed(1)} | ${r.answerChars} | ${note} |`)
+    if (anyRepeat) {
+      const repeatText = (r.repeat ?? 1) > 1
+        ? `${r.variance?.passedRuns ?? '?'}/${r.repeat}${r.variance && r.variance.passedRuns < r.repeat ? ' ⚠️方差' : ''}`
+        : '—'
+      lines.push(`| ${r.id} | ${r.category} | ${mark} | ${repeatText} | ${r.toolCalls} | ${r.rounds} | ${periods} | ${(r.elapsedMs / 1000).toFixed(1)} | ${r.answerChars} | ${note} |`)
+    } else {
+      lines.push(`| ${r.id} | ${r.category} | ${mark} | ${r.toolCalls} | ${r.rounds} | ${periods} | ${(r.elapsedMs / 1000).toFixed(1)} | ${r.answerChars} | ${note} |`)
+    }
   }
   lines.push('')
+
+  // A4：重复运行明细。不做平均、不隐藏：把每一轮的工具调用/轮次/耗时/原因逐条列出，
+  // 让人能直接区分"模型方差"（各轮行为不同）与"真回归"（每轮都失败、原因相同）。
+  const repeated = report.results.filter((r) => (r.repeat ?? 1) > 1)
+  if (repeated.length > 0) {
+    lines.push(`## 重复运行明细与方差（--repeat=${repeated[0].repeat}）`)
+    lines.push('')
+    lines.push('> 判定口径：**N 次全部通过才算通过**；下表逐轮留证，不用平均数掩盖波动。')
+    lines.push('')
+    for (const r of repeated) {
+      const v = r.variance ?? { passedRuns: 0, total: r.repeat }
+      lines.push(`### ${r.id}（${r.category}）—— ${v.passedRuns}/${v.total} 次通过${r.status === 'pass' ? '' : ' · **判定为失败**'}`)
+      lines.push('')
+      lines.push('| 第几次 | 结果 | 工具调用 | 轮次 | 耗时(s) | 工具 | 失败原因 |')
+      lines.push('|---|---|---|---|---|---|---|')
+      ;(r.runs ?? []).forEach((run, idx) => {
+        const mark = run.status === 'pass' ? '✅' : '❌'
+        const reason = (run.reasons ?? []).join('；').replace(/\|/g, '/')
+        const tools = (run.tools ?? []).join('、').replace(/\|/g, '/')
+        lines.push(`| ${idx + 1} | ${mark} | ${run.toolCalls} | ${run.rounds} | ${(run.elapsedMs / 1000).toFixed(1)} | ${tools || '—'} | ${reason || '—'} |`)
+      })
+      lines.push('')
+    }
+  }
 
   const notRun = report.results.filter((r) => r.status === 'not-run')
   if (notRun.length > 0) {
@@ -1565,6 +1693,15 @@ function writeFile(file, content) {
 function toResultRow(entry) {
   const { item, result = {}, verdict = {} } = entry
   const skipped = verdict.skipped === true
+  const repeat = entry.repeat ?? 1
+  const runs = (entry.runs ?? []).map((run) => ({
+    status: run.pass ? 'pass' : 'fail',
+    toolCalls: run.toolCalls,
+    rounds: run.rounds,
+    elapsedMs: run.elapsedMs,
+    tools: run.tools,
+    reasons: run.reasons
+  }))
   return {
     id: item.id,
     category: item.category,
@@ -1578,13 +1715,32 @@ function toResultRow(entry) {
     answerChars: (result.text ?? '').length,
     // G3：连续周期数（仅对声明了 minConsecutivePeriods 的题有意义；其余为 null）
     consecutivePeriods: verdict.score?.consecutivePeriods ?? null,
+    // A4：重复运行（N 次全通过才算通过）——`runs` 逐次留证，`variance` 给出方差标记
+    repeat,
+    runs,
+    variance: repeat > 1
+      ? { passedRuns: verdict.passedRuns ?? runs.filter((r) => r.status === 'pass').length, total: repeat }
+      : null,
+    score: verdict.score ?? null
+  }
+}
+
+/** 单轮运行的留证摘要（A4：逐轮列出差异，不与其它轮平均）。 */
+function runSummary(result, verdict) {
+  return {
+    pass: verdict.pass === true,
+    toolCalls: result.toolCalls?.length ?? 0,
+    rounds: result.rounds ?? 0,
+    elapsedMs: result.elapsedMs ?? 0,
+    tools: (result.toolCalls ?? []).map((c) => `${c.name}:${c.status}`),
+    reasons: verdict.reasons ?? [],
     score: verdict.score ?? null
   }
 }
 
 async function main() {
-  if (!['all', 'deterministic', 'live'].includes(SUITE)) {
-    console.error(`--suite=${SUITE} 非法（可选：all | deterministic | live）`)
+  if (!['all', 'deterministic', 'live', 'refusal'].includes(SUITE)) {
+    console.error(`--suite=${SUITE} 非法（可选：all | deterministic | live | refusal）`)
     process.exitCode = 2
     return
   }
@@ -1601,9 +1757,11 @@ async function main() {
     }
   }
 
-  const selected = ONLY ? QUESTIONS.filter((q) => ONLY.split(',').includes(q.id)) : QUESTIONS
+  const selected = ONLY
+    ? QUESTIONS.filter((q) => ONLY.split(',').includes(q.id))
+    : (SUITE === 'refusal' ? QUESTIONS.filter((q) => q.expect?.refusal === true) : QUESTIONS)
   if (selected.length === 0) {
-    console.error(`--only=${ONLY} 没匹配到任何问题`)
+    console.error(ONLY ? `--only=${ONLY} 没匹配到任何问题` : '没有匹配到任何问题（--suite=refusal 需要 expect.refusal 标记）')
     process.exitCode = 2
     return
   }
@@ -1620,7 +1778,7 @@ async function main() {
     }
   }
 
-  if (SUITE === 'live' || SUITE === 'all') {
+  if (SUITE === 'live' || SUITE === 'all' || SUITE === 'refusal') {
     if (REPORT_ONLY) {
       // 只渲染既有报告：从 baseline 或 --json 里读？这里要求同时给 --inventory/--baseline；
       // 简化：--report-only 直接退出，由调用方用 --baseline 做对照
@@ -1628,6 +1786,9 @@ async function main() {
       process.exitCode = 2
       return
     }
+    // --suite=refusal：只跑越界/拒答类，且**默认 3 轮**（未显式给 --repeat 时）——
+    // "100% 拒答"这个判据不能靠单次通过（GQ-34 有过三次三种结果的实证）。
+    LIVE_REPEAT = REPEAT ?? (SUITE === 'refusal' ? 3 : 1)
     live = await runLiveSuite(selected)
     const liveRows = live.rows.map(toResultRow)
     results = SUITE === 'all' ? [...liveRows, ...deterministicRows(deterministic)] : liveRows

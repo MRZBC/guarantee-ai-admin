@@ -484,7 +484,7 @@ record TimeRange(LocalDate startDate, LocalDate endDate, String description)
 
 ### 8.5.3 MCP / Evaluation / Observability（第五阶段）
 
-- **业务 MCP**：网关 `tools/business-mcp`（Node + stdio，**13 个只读工具**）+
+- **业务 MCP**：网关 `tools/business-mcp`（Node + stdio，**15 个只读工具**）+
   平台侧 `GET /api/ai/mcp/tools`、`POST /api/ai/mcp/tools/{name}`、`/api/system/mcp-tokens`（权限 `ai:mcp:read` / `ai:mcp:manage`）；
   **默认关闭**（`guarantee.ai.mcp.enabled=false`，yml 级、需重启）；接入说明见 `docs/MCP-外部接入.md`
 - **评测**：`docs/TEST-助手黄金问题集.md`（**35 条**，GQ-01~35）+ `scripts/ai-golden-questions.mjs`

@@ -106,6 +106,8 @@ public class AiToolRegistry {
     public AiToolRegistry(OrderSummaryTool orderSummaryTool,
                           OrderDistributionTool orderDistributionTool,
                           OrderTrendTool orderTrendTool,
+                          EnterpriseAnalysisTool enterpriseAnalysisTool,
+                          ProjectAnalysisTool projectAnalysisTool,
                           OrgQueryTool orgQueryTool,
                           DepartmentQueryTool departmentQueryTool,
                           UserQueryTool userQueryTool,
@@ -145,6 +147,12 @@ public class AiToolRegistry {
         // 同属订单只读域：页面侧的数据概览趋势接口同样只要求登录，因此同权限口径、
         // 不新增权限码（§5.1.6）。
         readTools.add(new ToolDescriptor(ToolGroup.ANALYSIS, orderTrendTool));
+        // 主体维度：企业（REQ-BA-03）与项目（REQ-BA-04）。
+        // 与订单分布/趋势**同域、同权限口径**：它们都是从同一批订单数据（orderSource 片段）
+        // 聚合出来的只读视角，页面侧对应的企业/项目接口只要求登录；
+        // 因此不新增权限码（REQ §5.1.6 的 Q-BA-03 仍待定，不在这里单方面收紧）。
+        readTools.add(new ToolDescriptor(ToolGroup.ANALYSIS, enterpriseAnalysisTool));
+        readTools.add(new ToolDescriptor(ToolGroup.ANALYSIS, projectAnalysisTool));
         readTools.add(new ToolDescriptor(ToolGroup.SYSTEM, orgQueryTool, Permissions.ORG_VIEW));
         readTools.add(new ToolDescriptor(ToolGroup.SYSTEM, departmentQueryTool, Permissions.DEPT_VIEW));
         readTools.add(new ToolDescriptor(ToolGroup.SYSTEM, userQueryTool, Permissions.USER_VIEW));
