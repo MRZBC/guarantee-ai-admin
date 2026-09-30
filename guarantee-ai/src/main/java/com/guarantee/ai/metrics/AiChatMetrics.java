@@ -1,5 +1,6 @@
 package com.guarantee.ai.metrics;
 
+import com.guarantee.common.security.AuditSourceContext;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -57,6 +58,46 @@ public class AiChatMetrics {
      * {@code ai.knowledge.retrieval}（计数）+ {@code ai.knowledge.retrieval.duration}（耗时）。</p>
      */
     public static final String KNOWLEDGE_RETRIEVAL_DURATION = "ai.knowledge.retrieval.duration";
+
+    // ------------------------------------------------------------------
+    // ai.proposals 的标签值（AC-MCP-07 / SYS-NF-08）
+    //
+    // 这些常量存在的原因（T6-06 修的坑）：`ai.proposals` 曾经**没有生产调用点**——
+    // 定义了 meter 与 `proposal(...)`，但没有任何地方调用，于是 /actuator/prometheus 上
+    // 连 HELP/TYPE 都没有（Micrometer 首次自增才注册）。状态与来源做成常量，
+    // 就是为了让"打点"这件事在 ProposalService 里显式可见、可被单测逐个状态断言。
+    //
+    // 状态取值与 ai_operation_proposal.status 的**终态**同值域，只有一个刻意改名：
+    //   DB 写 EXECUTED，指标写 CONFIRMED —— 指标的口径是"用户确认并执行成功"（SYS-NF-08 的确认率），
+    //   而 EXECUTED/PARTIAL 在指标里都算 CONFIRMED（部分成功也是"确认后执行过"）。
+    // ------------------------------------------------------------------
+
+    /** 提案创建（写工具生成，落库成功）。 */
+    public static final String PROPOSAL_CREATED = "CREATED";
+    /** 提案被确认并执行成功（对应 DB 的 EXECUTED / PARTIAL）。 */
+    public static final String PROPOSAL_CONFIRMED = "CONFIRMED";
+    /** 提案被用户拒绝。 */
+    public static final String PROPOSAL_REJECTED = "REJECTED";
+    /** 确认时校验不过（权限已变更 / 目标指纹不一致）→ 失效，未执行。 */
+    public static final String PROPOSAL_INVALIDATED = "INVALIDATED";
+    /** 超时未确认 → 过期。 */
+    public static final String PROPOSAL_EXPIRED = "EXPIRED";
+    /** 确认后执行失败（业务异常，已回滚）。 */
+    public static final String PROPOSAL_FAILED = "FAILED";
+
+    /**
+     * 提案事件的来源标签（枚举）。
+     *
+     * <p>取值与审计来源（{@code AuditSourceContext}）保持同一套词表，避免"审计说 AI、指标说别的"：</p>
+     * <ul>
+     *   <li>{@link #PROPOSAL_SOURCE_AI}：助手写工具发起（创建）；</li>
+     *   <li>{@link #PROPOSAL_SOURCE_WEB}：页面渠道发起（确认 / 拒绝 / 校验失效）；</li>
+     *   <li>{@link #PROPOSAL_SOURCE_SYSTEM}：系统定时清理（{@code expireOverdue}）导致的过期。</li>
+     * </ul>
+     */
+    public static final String PROPOSAL_SOURCE_AI = AuditSourceContext.AI;
+    public static final String PROPOSAL_SOURCE_WEB = AuditSourceContext.WEB;
+    public static final String PROPOSAL_SOURCE_SYSTEM = "SYSTEM";
 
     /** outcome 标签取值（与 {@link AiTurnMetric#OUTCOME_*} 同值域，避免两处口径漂移）。 */
     public static final String OUTCOME_SUCCESS = "success";
@@ -160,7 +201,16 @@ public class AiChatMetrics {
     // 提案 / 提示词发布 / 知识检索（跨阶段观测面）
     // ==================================================================
 
-    /** 提案状态计数（CREATED/CONFIRMED/REJECTED/EXPIRED/FAILED…）。 */
+    /**
+     * 提案状态计数（{@link #PROPOSAL_CREATED} / {@link #PROPOSAL_CONFIRMED} / …）。
+     *
+     * <p>调用点必须**在真实的状态流转处**（生成落库后 / 确认执行成功 / 拒绝 / 失效 / 过期），
+     * 而不是在查询或页面上补记：指标与 {@code ai_operation_proposal} 的状态必须同源，
+     * 否则"确认率"会被算成两次。</p>
+     *
+     * @param status {@link #PROPOSAL_CREATED} 等枚举值
+     * @param source {@link #PROPOSAL_SOURCE_AI} / {@link #PROPOSAL_SOURCE_WEB} / {@link #PROPOSAL_SOURCE_SYSTEM}
+     */
     public void proposal(String status, String source) {
         if (!enabled) {
             return;

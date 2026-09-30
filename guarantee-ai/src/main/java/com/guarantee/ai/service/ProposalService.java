@@ -2,6 +2,7 @@ package com.guarantee.ai.service;
 
 import com.guarantee.ai.entity.AiOperationProposal;
 import com.guarantee.ai.mapper.AiOperationProposalMapper;
+import com.guarantee.ai.metrics.AiChatMetrics;
 import com.guarantee.common.api.ResultCode;
 import com.guarantee.common.exception.BizException;
 import com.guarantee.common.security.AuditSourceContext;
@@ -9,6 +10,7 @@ import com.guarantee.common.security.SensitiveFieldMasker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -79,6 +81,17 @@ public class ProposalService {
     private final ObjectMapper objectMapper;
     private final ObjectProvider<List<ProposalExecutor>> executorsProvider;
 
+    /**
+     * 提案指标（AC-MCP-07）。
+     *
+     * <p>为 null 只出现在"旧签名的测试构造器"里：那些用例不装配 meter registry。
+     * 生产装配（Spring）走 {@link #ProposalService(Object, ...) 9 参构造器}，恒非 null ——
+     * 这正是 T6-06 修的坑：meter 定义了却没人调用，{@code /actuator/prometheus} 上
+     * 连 {@code ai.proposals} 的 HELP/TYPE 都没有。</p>
+     */
+    private final AiChatMetrics metrics;
+
+    @Autowired
     public ProposalService(AiOperationProposalMapper proposalMapper,
                            ProposalSecretStore secretStore,
                            OperationAuditService auditService,
@@ -86,7 +99,8 @@ public class ProposalService {
                            ProposalEventPublisher eventPublisher,
                            ProposalFailureRecorder failedRecorder,
                            ObjectMapper objectMapper,
-                           ObjectProvider<List<ProposalExecutor>> executorsProvider) {
+                           ObjectProvider<List<ProposalExecutor>> executorsProvider,
+                           AiChatMetrics metrics) {
         this.proposalMapper = proposalMapper;
         this.secretStore = secretStore;
         this.auditService = auditService;
@@ -95,6 +109,26 @@ public class ProposalService {
         this.failedRecorder = failedRecorder;
         this.objectMapper = objectMapper;
         this.executorsProvider = executorsProvider;
+        this.metrics = metrics;
+    }
+
+    /**
+     * 测试构造器：不登记提案指标。
+     *
+     * <p>保留它是为了让"指标出现之前写的"单元测试不必改签名（Spring 侧用带
+     * {@code @Autowired} 的 9 参构造器，不会走这里）。新写的测试请直接用 9 参构造器
+     * 并断言计数——否则又会出现"meter 没人调"这种只在真机上才暴露的洞。</p>
+     */
+    public ProposalService(AiOperationProposalMapper proposalMapper,
+                           ProposalSecretStore secretStore,
+                           OperationAuditService auditService,
+                           AiConversationService conversationService,
+                           ProposalEventPublisher eventPublisher,
+                           ProposalFailureRecorder failedRecorder,
+                           ObjectMapper objectMapper,
+                           ObjectProvider<List<ProposalExecutor>> executorsProvider) {
+        this(proposalMapper, secretStore, auditService, conversationService, eventPublisher,
+                failedRecorder, objectMapper, executorsProvider, null);
     }
 
     /** 提案生成的入参（由写工具构造）。 */
@@ -199,6 +233,10 @@ public class ProposalService {
                 entity.getId(), entity.getProposalNo(), draft.toolName(), draft.action(),
                 draft.targetType(), draft.targetId(), entity.getExpiresAt());
 
+        // 指标：提案创建（AC-MCP-07 / SYS-NF-08 的分母）。只统计**真落库的新提案**：
+        // 上面的"同会话同目标复用"分支没有产生新提案，重复计数会把确认率算小。
+        recordProposal(AiChatMetrics.PROPOSAL_CREATED, AiChatMetrics.PROPOSAL_SOURCE_AI);
+
         ProposalPayload payload = toPayload(entity, draft.preview(), draft.userText());
         // SSE 推送：若有活跃流，前端立即渲染确认卡
         eventPublisher.publishProposal(draft.conversationId(), com.guarantee.ai.vo.ChatStreamEvents.Proposal.from(payload));
@@ -277,6 +315,13 @@ public class ProposalService {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW, noRollbackFor = BizException.class)
     public ProposalPayload confirm(Long proposalId, ProposalExecutionContext context) {
+        /*
+          指标来源：本方法内的每一次状态流转（确认成功 / 执行失败 / 失效 / 过期）都归给
+          "发起这次确认的渠道"。默认是页面（AuditSourceContext 未压入时返回 WEB）；
+          若上层是助手驱动的执行路径，则为 AI —— 与既有审计的来源词表保持一致。
+          必须在方法开头取一次：下面的 try/finally 会把 AI 标记清掉。
+        */
+        String metricSource = AuditSourceContext.current();
         AiOperationProposal proposal = proposalMapper.selectById(proposalId);
         if (proposal == null) {
             throw BizException.notFound("提案不存在: " + proposalId);
@@ -291,7 +336,7 @@ public class ProposalService {
             throw new BizException(statusRejectionMessage(proposal));
         }
         if (proposal.getExpiresAt() != null && proposal.getExpiresAt().isBefore(LocalDateTime.now())) {
-            markExpired(proposal);
+            markExpired(proposal, metricSource);
             throw new BizException("提案已过期（有效期 " + VALID_MINUTES + " 分钟），请重新发起");
         }
         // SYS-C-04：按当前 token 的权限复核
@@ -347,6 +392,8 @@ public class ProposalService {
             appendResultMessage(proposal.getConversationId(),
                     "[变更结果] 执行失败：" + failureMessage
                             + (failureAuditId == null ? "" : "（审计编号 " + failureAuditId + "）"));
+            // 指标：确认后执行失败（已回滚、无半成品）。与"确认成功"同一个来源标签。
+            recordProposal(AiChatMetrics.PROPOSAL_FAILED, metricSource);
             return toPayload(proposalMapper.selectById(proposalId), readPreview(proposal), null);
         }
 
@@ -373,6 +420,10 @@ public class ProposalService {
         AiOperationProposal updated = proposalMapper.selectById(proposalId);
         log.info("提案执行完成 id={} no={} status={} auditId={}",
                 proposalId, proposal.getProposalNo(), finalStatus, auditId);
+        // 指标：确认并执行成功（DB 的 EXECUTED/PARTIAL 在指标口径里都算 CONFIRMED）。
+        // 与上面的 FAILED 分支互斥：一次确认只会记一个终态。
+        recordProposal(result.success() ? AiChatMetrics.PROPOSAL_CONFIRMED : AiChatMetrics.PROPOSAL_FAILED,
+                metricSource);
         return toPayload(updated, readPreview(updated), null);
     }
 
@@ -408,6 +459,8 @@ public class ProposalService {
             appendResultMessage(proposal.getConversationId(),
                     "[变更结果] 已拒绝，系统未做任何变更。（审计编号 " + auditId + "）");
         }
+        // 指标：被拒也计数（SYS-NF-08 的拒绝率；"拒绝"是一次真实的状态流转，不是失败）
+        recordProposal(AiChatMetrics.PROPOSAL_REJECTED, AuditSourceContext.current());
         return toPayload(proposalMapper.selectById(proposalId), readPreview(proposal), null);
     }
 
@@ -444,7 +497,8 @@ public class ProposalService {
             return 0;
         }
         for (AiOperationProposal proposal : overdue) {
-            markExpired(proposal);
+            // 来源固定为 SYSTEM：这是定时清理，不是任何人的页面操作
+            markExpired(proposal, AiChatMetrics.PROPOSAL_SOURCE_SYSTEM);
         }
         log.info("过期提案清理完成：{} 条", overdue.size());
         return overdue.size();
@@ -456,12 +510,15 @@ public class ProposalService {
         return secretStore.purgeExpired(LocalDateTime.now());
     }
 
-    private void markExpired(AiOperationProposal proposal) {
+    private void markExpired(AiOperationProposal proposal, String metricSource) {
         int claimed = proposalMapper.updateResult(proposal.getId(), "EXPIRED",
                 "提案已过期（有效期 " + VALID_MINUTES + " 分钟）", null, LocalDateTime.now(), null);
         if (claimed != 1) {
             return;
         }
+        // 指标：真正抢到 PENDING→EXPIRED 的那一次才算（过期率的分母）；
+        // 放在抢占之后、审计之前——重复清理不会重复计数。
+        recordProposal(AiChatMetrics.PROPOSAL_EXPIRED, metricSource);
         Long auditId = auditService.record(
                 new OperationAuditService.AuditEntry("AI", proposal.getAction(), proposal.getTargetType(),
                         proposal.getTargetId(), proposal.getTargetName(), null, null, "EXPIRED",
@@ -487,6 +544,21 @@ public class ProposalService {
         secretStore.purge(proposal.getId());
         conversationService.audit(proposal.getConversationId(), proposal.getUserId(), "PROPOSAL_CONFIRMED",
                 "proposalNo=" + proposal.getProposalNo() + " 校验未通过：" + reason, proposal.getTraceId());
+        // 指标：确认时校验不过（权限已变更等）→ 失效。这也是"确认率"分母里的一次终态。
+        recordProposal(AiChatMetrics.PROPOSAL_INVALIDATED, AuditSourceContext.current());
+    }
+
+    /**
+     * 提案状态计数（AC-MCP-07）。
+     *
+     * <p>只走 {@link AiChatMetrics#proposal(String, String)}；{@code metrics == null} 仅出现在
+     * "旧签名的测试构造器"里（生产装配恒非 null）。指标是内存态计数器，不参与事务，
+     * 也**不得**成为状态流转的前置条件——所以这里不做 try/catch 吞异常之外的事。</p>
+     */
+    private void recordProposal(String status, String source) {
+        if (metrics != null) {
+            metrics.proposal(status, source);
+        }
     }
 
     // ==================================================================
@@ -611,6 +683,8 @@ public class ProposalService {
         conversationService.audit(proposal.getConversationId(), proposal.getUserId(), "PROPOSAL_INVALIDATED",
                 "proposalNo=" + proposal.getProposalNo() + " 目标指纹不一致：" + FINGERPRINT_MISMATCH_REASON,
                 proposal.getTraceId());
+        // 指标：指纹不一致 → 失效（与"权限已变更"同一个状态标签，原因进审计不进标签）
+        recordProposal(AiChatMetrics.PROPOSAL_INVALIDATED, AuditSourceContext.current());
         throw new BizException(FINGERPRINT_MISMATCH_REASON);
     }
 
