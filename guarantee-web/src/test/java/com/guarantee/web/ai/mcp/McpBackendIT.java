@@ -46,7 +46,7 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
  * <ol>
  *   <li>凭据管理面（AC-MCP-02）：只有 {@code account_type=SERVICE} 的账号能签发；
  *       <b>HUMAN 账号必须被可读拒绝</b>；签发响应含明文；列表不含明文；撤销后立即 401；</li>
- *   <li>工具面（AC-MCP-03）：有 {@code ai:mcp:read} → 13 个只读工具（含
+ *   <li>工具面（AC-MCP-03）：有 {@code ai:mcp:read} → 15 个只读工具（含
  *       {@code queryBusinessKnowledge}）且无 {@code propose*}；无它 → 清单为空 + 调用 403；</li>
  *   <li>数据范围同源：{@code queryOrg} 的口径文本含 {@code DataScopeService} 对**同一账号**
  *       算出的范围描述（MCP 没有第二份范围判定）；</li>
@@ -67,7 +67,7 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
         })
 class McpBackendIT {
 
-    /** 覆盖 13 个只读工具所需要的全部权限（权限来自 Token，角色来自账号）。 */
+    /** 覆盖 15 个只读工具所需要的全部权限（权限来自 Token，角色来自账号）。 */
     private static final List<String> READ_PERMISSIONS = List.of(
             McpToolCatalog.PERMISSION_MCP_READ,
             "system:org:view", "system:dept:view", "system:user:view",
@@ -210,8 +210,8 @@ class McpBackendIT {
     // ==================================================================
 
     @Test
-    @DisplayName("有 ai:mcp:read：清单 = 13 个只读工具（含 queryBusinessKnowledge），无任何写工具")
-    void listToolsReturnsThirteenReadOnlyTools() {
+    @DisplayName("有 ai:mcp:read：清单 = 15 个只读工具（含 queryBusinessKnowledge 与企业/项目维度 2 个），无任何写工具")
+    void listToolsReturnsFifteenReadOnlyTools() {
         String token = issueViaService(READ_PERMISSIONS);
 
         ResponseEntity<Result<List<McpController.McpToolView>>> response = controller.tools(bearer(token));
@@ -221,7 +221,7 @@ class McpBackendIT {
         assertThat(names)
                 .as("与 Java 侧白名单逐名一致（白名单又与网关 catalog.ts 逐名一致）")
                 .containsExactlyInAnyOrderElementsOf(McpToolCatalog.readOnlyToolNames());
-        assertThat(names).hasSize(13).contains("queryBusinessKnowledge");
+        assertThat(names).hasSize(15).contains("queryBusinessKnowledge", "queryEnterpriseAnalysis", "queryProjectAnalysis");
         assertThat(names).noneMatch(name -> name.startsWith("propose"));
     }
 
