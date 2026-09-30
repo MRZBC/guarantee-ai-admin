@@ -239,19 +239,19 @@ java -jar guarantee-web/target/guarantee-ai-admin.jar --server.port=8088
 > **行业维度合计 == 地区维度合计 == 150000**；项目类型 5 个中文枚举）、**事务内软删 + ROLLBACK** 证明企业名"历史保留"且零污染、
 > 用**运行时真实 SQL + 生产改写器**做机制证明并给出反证、真机 GQ-36/37 **各 3 轮全过**。
 
-**最终构建（Lead 与 verifier 各独立跑一次，数字完全一致）**：`mvn -B verify` **BUILD SUCCESS 8/8**，单测 **629** / 集成 **121**（**1 条如实跳过**）；`vue-tsc` / `vite build` exit 0；SSOT `--check` exit 0（**750 / 108 类 / stale=false**）。
+**最终构建（Lead 与 verifier 各独立跑一次，数字完全一致）**：`mvn -B verify` **BUILD SUCCESS 8/8**，单测 **632** / 集成 **121**（**0 跳过**）= 753；`vue-tsc` / `vite build` exit 0；SSOT `--check` exit 0（**753 / 108 类 / stale=false**）。
 
-**未闭环项（10 条，verifier 列，均已知且有理由）**
-1. **AC-BA-04 占比 0.02 pp 由模型自行除法**（我算 22.31% / 模型答 22.29%）→ 建议服务端直接给 `share` 字段；
-2. **GQ-36/37 的判据不含数值/占比断言**（验证员手工补核）→ 建议把"数值与页面一致"固化成断言；
-3. `ai_tokens_total` 真机数据非 verifier 亲采（无 Key 时该计数器不注册；Lead 已在你实例上实测过）；
-4. "历史保留"探针 IT **永久跳过**（演示数据无停用/软删企业）→ 建议把"事务内软删 + ROLLBACK"固化进 IT；
-5. GQ-35 话术偶发"先答后拒"/重复拒绝（**不违反** AC-BA-07）；
-6. **拒答门禁在手动 Job3**（不进定时）——`--suite=refusal` 依赖真模型；
-7. 前端 chunk 偏大（StatCards 570 KB / index 1.27 MB）；
-8. `ProposalNumberGuard` 形态逃逸、`DataSourceClaimGuard` 行中提及（登记不修，单测钉住）；
-9. **并发构建流程**：未持 `maven.lock` 的构建会污染共享库 IT 夹具（本轮已发生并被处置）；
-10. `reports/*` 跑评测即被重写（设计使然）。
+> 数字演进：617/114（T6）→ 629/121（T7，1 跳过）→ **632/121（R 轮，0 跳过）**——"跳过"从 1 降到 0 是因为 R2 把历史保留探针 IT 改成了**事务内造样本 + 回滚**，不再因演示数据缺样本而跳过。
+
+**未闭环项（10 → 8 条；原 10 项已全部处理，见 §十一）**
+1. **单值 0.02 pp 级占比漂移在"合计"断言下不可检出**（服务端 share 已下发 + IT 逐值比对兜底）；
+2. `percentShareTable` 的**子集搜索**存在"巧合凑满 100%"的理论绕过（已知取舍，如实登记）；
+3. `vendor-element-plus` 约 1.07 MiB 单块仍 > 500 KiB，且 `chunkSizeWarningLimit=1500` 把警告掩盖了；
+4. 拒答"逐句话术质量"属模型行为（本轮只验判据 3/3 与占比引用）；
+5. **真机/拒答门禁在 CI 为手动 + 需 Key**（定时需显式打开 `vars.EVAL_LIVE_ON_SCHEDULE`）；
+6. `DataSourceClaimGuard` 只判行首（刻意，登记不修，单测钉住）；
+7. 无 Key 时 `ai_tokens_total` 不注册（设计使然，已说明）；
+8. `reports/eval-*` 不再跟踪后，**要固化结果必须显式归档**到 `reports/archive/`。
 
 ---
 
@@ -266,3 +266,24 @@ java -jar guarantee-web/target/guarantee-ai-admin.jar --server.port=8088
 | **B1 M2.3 企业/项目维度** | `queryEnterpriseAnalysis` / `queryProjectAnalysis` + 4 条聚合 SQL + 4 VO + 提示词路由 45.1 + GQ-36/37 | 真机 GQ-36/37 **各 1 次调用新工具即 PASS**；全量 37 题 36/0/1；口径三条（企业名历史保留 / 项目类型中文透传 / 准入六条）均有机制级证据 |
 | **B3 既有库分区重命名** | 脚本从 `RENAME PARTITION`（**MySQL 8.0 不存在**）改为 1:1 `REORGANIZE`；共享库实际执行 | 执行前 36/36 名字不符 → 执行后 **0 不符**、边界值多重集差异 0、**逐分区行数差异 0**、总行数 **2623 不变**、`pmax` 未动；Lead 独立用精确 `COUNT(*)` 复核（`p202609`=2623） |
 | 联动 | MCP 白名单 **13 → 15**（两个新只读工具，按既有先例经 MCP 暴露） | `npm test` 17/17、`McpToolCatalogTest` 6/6、`McpBackendIT` 8/8、SSOT `--check` exit 0 |
+
+---
+
+## 十一、R 收口轮（用户指定：把剩余 10 项未闭环都处理掉）
+
+**结果：10 项全部处理，未闭环收窄到 8 条**（剩下的是固有取舍/模型行为，见 §九）。最终独立验证：`docs/TEST-收口复验-第八批.md`（快照 `131197e`）。
+
+| 原未闭环项 | 处理 | 验证（由 verifier 独立复现） |
+|---|---|---|
+| ① AC-BA-04 占比由模型自行除法 | **服务端下发 `share`**（最大余数法归一，分类合计**恰 100.00**）+ 提示词"占比直接引用返回值" | 反射直调 `sharesOf` 得 `[22.31,20.77,20.09,19.00,17.83]`，与 SQL 手算 **0.00 pp** 偏差；**3 次裸 SSE** 正文占比恒为服务端值，上一批的 **22.29 一次未出现** |
+| ② GQ-36/37 无数值/占比断言 | 新增 `percentShareTable`（±0.1 pp、≥3 项、**子集搜索**防假红）+ 5 组反证 | 自建 9 组用例：**错 0.5/2 pp 必红**；真机 GQ-36/37 各 **3/3**。局限两条已登记（单值 0.02 pp 测不出、巧合凑 100 的理论绕过） |
+| ③ `ai_tokens_total` 非 verifier 亲采 | verifier **自己起实例亲采** | 发问前 `ai_*` 序列 0 行 → 实测 `input=19048 / output=144`，与 `ai_turn_metric` **逐字段一致**；用完即停、端口释放、jar 未锁 |
+| ④ 历史保留探针 IT 永久跳过 | 改成 **事务内造样本 + 回滚**（软删一家企业 → 断言仍在榜单 + 对照查询反证 → `TestTransaction` 回滚） | IT **7/0（不再 Skipped）**；整仓 verify **0 跳过**；库内零污染（3000/0/0/0） |
+| ⑤ GQ-35 话术偶发重复拒绝 | 提示词补"**拒绝只说一次、不要先说'我这就去做'**" | 真机 `--repeat=3`：GQ-31/34/35 **9/9**、禁用术语 0 |
+| ⑥ 拒答门禁只在手动 Job3 | CI 加**显式 opt-in**：`vars.EVAL_LIVE_ON_SCHEDULE == 'true'` 时定时也跑（默认关） | `if:` 表达式与 7 行真值表核对通过；**仍明确标注未在 CI 执行过** |
+| ⑦ 前端 chunk 偏大 | `vite.config.ts` 拆分（仅拆已知重依赖） | `index` 1273.33 → **61.80 KiB**、`StatCards` 570.25 → 2.46 KiB、`vendor-echarts` **移出首屏 preload**；如实说明首屏总字节接近（收益是缓存粒度） |
+| ⑧ 编号守卫形态逃逸 | `CANDIDATE_PATTERN` + `canonical()` 两段式：**比对用归一值、删除用原文 span** | 17 形态矩阵：**识别 17/17、真编号不被误删 17/17、假编号移除 17/17**；verifier 发现的 `·`(U+00B7) 缺口已修并复测 |
+| ⑨ 并发构建污染 IT 夹具 | 新增 `scripts/mvn-locked.ps1`（取锁 → 透传 mvn → `finally` 释放；>20 分钟判陈旧可抢占） | 三路径实测：他人锁→**exit 3 且不删他人锁**；无锁→取跑释；陈旧锁→告警抢占；README 增"多人共库必读"一行 |
+| ⑩ `reports/*` 跑评测即变脏 | `reports/eval-*` 改为**不跟踪**（`.gitignore` + `git rm --cached`），`README.md`/`archive/**` 保留；关键报告**显式固化**为 `archive/*-baseline.*` | `git check-ignore` 命中；`reports/` 下 eval-* 跟踪数 **0**，`archive/**` 仍跟踪 **46** 个文件 |
+
+**回归**：`mvn -B verify` **BUILD SUCCESS 8/8**（单测 **632** / 集成 **121** / **0 跳过**）；前端 `vue-tsc` + `vite build` exit 0；SSOT `--check` exit 0。**43 条 AC 仍为 43 / 0 / 0**——本轮改动**没有导致退化**，阶段二证据反而更强。
