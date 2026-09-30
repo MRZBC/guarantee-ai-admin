@@ -487,7 +487,12 @@ CREATE TABLE IF NOT EXISTS ai_knowledge_item (
 4. `KnowledgeClaimGuard` 做成**无状态工具类**（不做 `@Component`），避免给多阶段共用的 `AiChatService` 构造器加参；
 5. 知识条目正文会被 `SanitizingToolCallback` 压成单行（既有安全机制），断言按"空白归一后相等"。
 
-**验证反馈闭环**：验证员发现"伪造来源行的 Markdown 装饰变体不被剥离"（AC-RAG-05 曾判不成立）→ 已修（**12/12 变体**剥离+纠正，含独立复现），并补 6 个反例测试。同类既有缺陷在 `DataSourceClaimGuard` 上**只登记不修**（见 `TASKS.md`）。
+**对称修复与残留边界（2026-09-30 晚，T6-01）**
+
+6. **`DataSourceClaimGuard` 的 Markdown 装饰绕过：已修（对称化）**——剥离正则与 `claimsDataSource` 判定改为**同一套 `DECORATION` 规则**（与 `KnowledgeClaimGuard` 逐字同源），9 个变体（粗体/斜体/列表/引用/标题/代码/表格/嵌套列表/全角冒号前空格）逐个得到"识别 + 剥离 + 零工具时纠正"；反证做了两种：跑 `HEAD` 缺陷版源码（`variants=9 claim=0 stripped=0`）与临时改回窄式（2 条断言红）。测试 11 → **14** 条。
+7. **`ProposalNumberGuard` 的"形态规避"：登记不修（中低）**——`ProposalNoFormat.PATTERN = \bOP\d{8,}\b` 是**刻意的 token 级形态定义**：20 种写法实测 10 识别/10 存活；**Markdown 装饰不是绕过点**（`**OP…**`、`- OP…`、`> OP…`、`` `OP…` `` 都能移除），存活的是"7 位以下 / 小写 / 全角 / `OP-…` / `OP …` / 零宽字符 / 词边界被破坏"。**放宽必须先做归一化比对**（提取侧与白名单比对侧都用归一值，移除仍用原文 span），否则模型**如实回显**真编号的小写/分段形态反而会被误删——那是方向相反的新风险，收益不抵风险。边界已**钉成测试**（`ProposalNumberGuardTest` 的 20 例对照表），将来做归一化时该测试会红，倒逼同步更新。建议方案：零宽/空白剥离 + 全角转半角 + 大写归一 + 分隔符归一。
+
+**验证反馈闭环**：验证员发现"伪造来源行的 Markdown 装饰变体不被剥离"（AC-RAG-05 曾判不成立）→ 已修（**12/12 变体**剥离+纠正，含独立复现），并补 6 个反例测试；**同类问题的 `DataSourceClaimGuard` 已在 T6-01 对称修复**（见上方第 6 条，含两种反证）。
 
 ## 15. 变更记录
 

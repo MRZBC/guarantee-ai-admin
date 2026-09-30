@@ -66,6 +66,74 @@ class DataSourceClaimGuardTest {
     }
 
     // ------------------------------------------------------------------
+    // Markdown 装饰变体：与 KnowledgeClaimGuard 对齐（T6-01 / D-A）
+    // ------------------------------------------------------------------
+
+    /**
+     * 绕过反例：前 6 个来自独立验证（窄式正则对它们既不剥离也不纠正），后 3 个是同类扩展。
+     *
+     * <p>与知识来源守卫（12 个变体）同源：同一件事的两个面必须用同一套装饰容忍规则。</p>
+     */
+    private static final List<String> DECORATED_VARIANTS = List.of(
+            "**口径：订单统计 · 粗体**",
+            "- 口径：订单统计 · 列表",
+            "> 口径：订单统计 · 引用",
+            "口径 ：订单统计 · 冒号前有空格",
+            "**口径**: 订单统计 · 标签后置粗体",
+            "`口径：订单统计 · 行内代码`",
+            "## 口径：订单统计 · 标题",
+            "| 口径：订单统计 · 表格 |",
+            "  * 口径: 订单统计 · 嵌套列表半角");
+
+    @Test
+    @DisplayName("装饰变体一律识别为「声明口径」（判定同步放宽）")
+    void detectsDecoratedDataSourceLines() {
+        for (String variant : DECORATED_VARIANTS) {
+            String answer = "结论如下。\n" + variant + "\n以上。";
+
+            assertThat(DataSourceClaimGuard.claimsDataSource(answer))
+                    .as("必须识别为「声明口径」：%s", variant).isTrue();
+            assertThat(guard.correctionFor(answer, false))
+                    .as("零工具调用时必须触发纠正：%s", variant).isPresent();
+            // 执行过工具不纠正（引用错误 ≠ 编造），但剥离照旧——两条判定用的是同一套规则
+            assertThat(guard.correctionFor(answer, true))
+                    .as("执行过工具不纠正：%s", variant).isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("装饰变体一律被剥离：整行移除且不动正文其余部分")
+    void stripsDecoratedDataSourceLines() {
+        for (String variant : DECORATED_VARIANTS) {
+            String answer = "结论如下。\n" + variant + "\n以上。";
+
+            assertThat(DataSourceClaimGuard.stripDataSourceLines(answer))
+                    .as("必须剥离：%s", variant)
+                    .doesNotContain("订单统计")
+                    .contains("结论如下。")
+                    .contains("以上。");
+        }
+    }
+
+    @Test
+    @DisplayName("行首锚点仍在：行中出现的「口径」不判定、不剥离（哪怕带装饰）")
+    void decoratedMentionsMidLineAreStillIgnored() {
+        List<String> prose = List.of(
+                "以上数据我们按同一口径统计，不含已删除记录。",
+                "如果你指的是另一个口径：请说明时间范围。",
+                "以上数据我们按**口径**统计，不含已删除记录。",
+                "- 本节说明的是统计口径，不是数据来源。");
+        for (String text : prose) {
+            assertThat(DataSourceClaimGuard.claimsDataSource(text))
+                    .as("行中提及不得判定为声明：%s", text).isFalse();
+            assertThat(DataSourceClaimGuard.stripDataSourceLines(text))
+                    .as("行中提及不得剥离：%s", text).isSameAs(text);
+            assertThat(guard.correctionFor(text, false))
+                    .as("行中提及不得触发纠正：%s", text).isEmpty();
+        }
+    }
+
+    // ------------------------------------------------------------------
     // 口径的唯一出口：剥离模型自写行 + 服务端生成页脚
     // ------------------------------------------------------------------
 

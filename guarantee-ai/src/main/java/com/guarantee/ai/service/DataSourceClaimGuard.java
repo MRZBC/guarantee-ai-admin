@@ -26,9 +26,14 @@ import java.util.regex.Pattern;
  * ② 正文出现形如 {@code 口径：…} 的独立行。两条同时成立时不存在"如实回答"的可能，
  * 误报率远低于按话术猜测的 {@link ProposalClaimGuard}。因此这里可以比它更果断。</p>
  *
- * <p><b>已知边界（不隐瞒）</b>：只匹配**行首**的口径声明（允许前置空白）。若模型把口径行
- * 混在句子中间（如"以上按口径：xxx 统计"）则不会命中——宁可漏报，也不要误伤
+ * <p><b>已知边界（不隐瞒）</b>：只匹配**行首**的口径声明（允许前置空白与 Markdown 装饰）。
+ * 若模型把口径行混在句子中间（如"以上按口径：xxx 统计"）则不会命中——宁可漏报，也不要误伤
  * "我们按同一口径统计"这类正当表述。</p>
+ *
+ * <p><b>与"知识来源行"守卫保持对称</b>（{@code KnowledgeClaimGuard}）：两者是同一件事的两个面
+ * （服务端才是产出口），装饰容忍规则必须一致。曾经只有知识侧做了装饰容忍，口径侧停留在窄式
+ * 正则，于是模型换个写法（{@code **口径：…**}、{@code - 口径：…}…）就能把假口径留在正文里
+ * ——这是"同源逻辑两处实现必然漂移"的又一次实证。</p>
  *
  * <p><b>口径的产出已上收到服务端</b>：提示词不再要求模型写口径行，改由
  * {@link #footer(List)} 用本轮真实执行的工具返回值生成、{@link #stripDataSourceLines(String)}
@@ -49,19 +54,38 @@ public class DataSourceClaimGuard {
             "（系统提示：本轮没有调用任何数据工具，因此没有任何口径；正文里那行「口径：」"
                     + "不是系统回显，已由系统移除。请勿据此认为数据有来源。如需真实数据，请重新提问。）";
 
-    /** 口径行的前缀。后端的两个生成点用的都是全角冒号，这里两种都收。 */
+    /** 口径行的前缀（全角冒号）。后端的两个生成点用的都是这个形态。 */
     private static final String PREFIX_FULL_WIDTH = "口径：";
 
-    private static final String PREFIX_HALF_WIDTH = "口径:";
+    /**
+     * Markdown 装饰前缀/后缀（与 {@code KnowledgeClaimGuard} 同一套）：列表/引用/标题/表格符、
+     * 行内代码、强调符。
+     *
+     * <p><b>为什么必须容忍</b>：真机复现的绕过就是"换个写法"——
+     * {@code **口径：…**}、{@code - 口径：…}、{@code > 口径：…}、{@code 口径 ：…}、
+     * {@code **口径**: …}、{@code `口径：…`}。窄式正则（只认裸行）对它们既不剥离也不纠正，
+     * 假口径会留在正文里并落库。</p>
+     */
+    private static final String DECORATION = "(?:[-*+>|#]|`{1,3}|\\*{1,2}|_{1,2})";
 
     /**
-     * 口径行的整行匹配（行首 + 前后空白 + 行尾换行）。
+     * 口径行的整行匹配（行首 + 可选装饰 + 「口径」+ 可选装饰 + 可选空白 + 冒号 + 行尾换行）。
      *
      * <p>用 {@code MULTILINE} 而不是按 {@code \R} 切分再拼回：切分/拼回会顺手改写换行符，
      * 让"没改动"的正文也被判定为改动，进而触发一次无谓的 reset 重发。</p>
      */
-    private static final Pattern DATA_SOURCE_LINE =
-            Pattern.compile("^[ \\t]*口径[：:][^\\r\\n]*(?:\\R|$)", Pattern.MULTILINE);
+    private static final Pattern DATA_SOURCE_LINE = Pattern.compile(
+            "^[ \\t]*" + DECORATION + "*[ \\t]*口径[ \\t]*(?:" + DECORATION + ")*[ \\t]*[：:][^\\r\\n]*(?:\\R|$)",
+            Pattern.MULTILINE);
+
+    /**
+     * 是否出现"声明口径"的行首标记（与 {@link #DATA_SOURCE_LINE} 同一套装饰容忍规则）。
+     *
+     * <p>两者共用一套规则是刻意的：判定与剥离若不同源，就会出现"被判定为编造却没有剥离"
+     * （或反过来）的中间态。</p>
+     */
+    private static final Pattern CLAIM_LINE = Pattern.compile(
+            "(?m)^[ \\t]*" + DECORATION + "*[ \\t]*口径[ \\t]*(?:" + DECORATION + ")*[ \\t]*[：:]");
 
     /**
      * 判断是否需要追加纠正提示。
@@ -86,21 +110,15 @@ public class DataSourceClaimGuard {
     /**
      * 正文是否包含形如 {@code 口径：…} 的独立行。
      *
-     * <p>按行判定且要求**行首**（允许缩进）：后端追加的口径行就是独占一行、
-     * 行首即"口径："，照抄它的模型也会落在行首。行中出现的一律不算，
-     * 以免误伤"我们按同一口径统计"这类正常表述。</p>
+     * <p>按行判定且要求**行首**（允许缩进与 Markdown 装饰）：后端追加的口径行就是独占一行、
+     * 行首即"口径："，照抄它的模型也会落在行首；模型改用 {@code **口径：…**} 之类写法同样算。
+     * 行中出现的一律不算，以免误伤"我们按同一口径统计"这类正常表述。</p>
      */
     static boolean claimsDataSource(String answer) {
         if (answer == null || answer.isBlank()) {
             return false;
         }
-        for (String line : answer.split("\\R")) {
-            String trimmed = line.strip();
-            if (trimmed.startsWith(PREFIX_FULL_WIDTH) || trimmed.startsWith(PREFIX_HALF_WIDTH)) {
-                return true;
-            }
-        }
-        return false;
+        return CLAIM_LINE.matcher(answer).find();
     }
 
     /**
