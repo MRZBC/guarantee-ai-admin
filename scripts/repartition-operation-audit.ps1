@@ -15,9 +15,14 @@
   对已存在的表是空操作）。本脚本用来处理**既有库**，且有两个独立动作：
 
     1) 默认动作：把"名字与真实覆盖不符"的分区**改名**到与真实覆盖一致（p202709 → p202609）。
-       改名是**元数据操作**（不复制、不移动数据行），但仍建议在业务低峰执行。
-       算法用**两阶段临时名**（先全部改成 __repart_tmp_N，再改成目标名），
-       避免"目标名此刻被另一个待改名分区占着"这种顺序陷阱。
+       ⚠️ MySQL 8.0 **没有** `ALTER TABLE ... RENAME PARTITION`（2026-10-01 在探针表上实测报
+          `ERROR 1064 ... near 'PARTITION p1 TO p1x'`，带反引号亦然）。改名只能用 **1:1 REORGANIZE**：
+          `REORGANIZE PARTITION <旧名> INTO (PARTITION <新名> VALUES LESS THAN (<原边界数值>))`
+          —— **保留原边界数值**（含那 11 个分区的闰日漂移），只换名字。
+          代价：REORGANIZE **会重建该分区**（该分区的行数据复制一次），不再是纯元数据操作；
+          本表只有当月分区有数据（~2.5k 行），代价可接受，但仍建议业务低峰执行。
+          顺序：按目标名**升序**逐条处理（本场景是整体下移一年，升序可保证目标名此刻已腾空），
+          每条执行前再校验"目标名不存在"，否则给可读错误而不是撞 `ERROR 1517 Duplicate partition name`。
     2) -AddMonths N：为 **N 个尚未覆盖的月份** 追加正确命名的分区。SQL 里的边界用
        `TO_DAYS('<下月 1 日>')` **表达式**，由 MySQL 求值 —— 从根上避免再次写错序数。
        若目标名字已被占用（说明还有分区没校准），脚本会拒绝而不是撞名。
@@ -25,14 +30,13 @@
   三条安全约束：
     · 默认 **DRY-RUN**：只打印将执行的 SQL，不加 -Execute 绝不改库；
     · **永不触碰 pmax / MAXVALUE**；
-    · 只处理 `ai_operation_audit`，且只做 RENAME / REORGANIZE pmax，不 DROP 任何分区。
+    · 只处理 `ai_operation_audit`，且只做 REORGANIZE（1:1 改名 / 追加），**不 DROP 任何分区**。
 
   风险与回滚（详见 docs/IMPL-审计归档-分区命名.md §4）：
-    · 风险：改名期间并发的写入会落到"改名后"的分区（InnoDB 元数据锁，毫秒级阻塞）；
-      REPARTITION/REORGANIZE 需要重建 pmax 的元数据（本表 pmax 通常为空，代价极小）；
-      跨任务共享库上执行前必须确认没有其它人正在写 ai_operation_audit。
+    · 风险：1:1 REORGANIZE 会复制该分区数据（InnoDB 行锁 + 重建），执行期间该分区的写入会等待；
+      跨任务共享库上执行前必须确认没有其它人正在写 ai_operation_audit；
     · 回滚：本脚本写日志（含每一步 SQL 与原名字）；改名可反向再跑一次
-      （把每个分区的真名与旧名对调即可，见文档 §4 的 ROLLBACK SQL 模板）。
+      （把每个分区的真名与旧名对调即可，见文档 §4 的 ROLLBACK 模板）。
       建议回滚前先 `mysqldump --no-data` 留一份分区定义。
 
 .PARAMETER Execute
@@ -173,13 +177,24 @@ if ($mismatched.Count -eq 0) {
         }
     }
 
+    # 改名语句：MySQL 8.0 没有 RENAME PARTITION（实测 1064），只能用 1:1 REORGANIZE。
+    # 保留**原边界数值**（$m.Description，含闰日漂移）→ 覆盖范围一字不改，只换名字。
+    # 升序处理 + 动态名额校验：每处理一条，就把它从"当前名字集合"里划掉、把目标名加进去，
+    # 因此"目标名此刻是否被占"是按**执行顺序**判定的（而不是按执行前的快照）。
     $plan = @()
-    $seq = 0
+    $namesNow = [System.Collections.Generic.HashSet[string]]::new([string[]]$existingNames)
     foreach ($m in ($mismatched | Sort-Object TrueName)) {
-        $seq++
-        $tmp = "{0}{1}" -f $tmpPrefix, $seq
-        $plan += [pscustomobject]@{ Step = "phase1"; Sql = "ALTER TABLE $table RENAME PARTITION $($m.Partition) TO $tmp;"; From = $m.Partition; To = $tmp; RealMonth = $m.TrueName }
-        $plan += [pscustomobject]@{ Step = "phase2"; Sql = "ALTER TABLE $table RENAME PARTITION $tmp TO p$($m.TrueName);"; From = $tmp; To = "p$($m.TrueName)"; RealMonth = $m.TrueName }
+        $target = 'p' + $m.TrueName
+        if ($namesNow.Contains($target)) {
+            throw "改名目标 $target 此刻仍被占用（升序处理下不该发生）：命名模式可能不是整体平移，已中止且未执行任何语句"
+        }
+        [void]$namesNow.Remove($m.Partition)
+        [void]$namesNow.Add($target)
+        $sql = "ALTER TABLE $table REORGANIZE PARTITION $($m.Partition) INTO (PARTITION $target VALUES LESS THAN ($($m.Description)));"
+        $plan += [pscustomobject]@{
+            Step = 'reorganize-rename'; Sql = $sql
+            From = $m.Partition; To = $target; RealMonth = $m.TrueName
+        }
     }
 
     foreach ($p in $plan) {
@@ -187,7 +202,7 @@ if ($mismatched.Count -eq 0) {
     }
 
     if ($dryRun) {
-        Write-Log ("DRY-RUN：以上 {0} 条 RENAME PARTITION 未执行（确认无误后加 -Execute）" -f $plan.Count) 'WARN'
+        Write-Log ("DRY-RUN：以上 {0} 条 1:1 REORGANIZE 改名未执行（确认无误后加 -Execute）" -f $plan.Count) 'WARN'
     } else {
         foreach ($p in $plan) {
             Invoke-Mysql -Sql $p.Sql | Out-Null

@@ -83,52 +83,77 @@ ALTER TABLE ai_operation_audit REORGANIZE PARTITION pmax INTO (
 | `-Execute` | 真正执行改名 |
 | `-AddMonths N` | 按 §3.1 的正确口径追加 N 个未来分区（边界用 `TO_DAYS('<下月1日>')` 表达式） |
 
-实测 DRY-RUN 输出（2026-09-30，共享库，**未改库**）：
+实测 DRY-RUN 输出（2026-10-01 定稿版；**2026-09-30 首版用的 `RENAME PARTITION` 是错的，见 §4.4**）：
 ```
 发现 36 个分区名与真实覆盖不符：
   p202709（上界 740255）实际覆盖 202609 → 目标名 p202609
   p202809（上界 740621）实际覆盖 202709 → 目标名 p202709
   p202811（上界 740682）实际覆盖 202711 → 目标名 p202711
   p202812（上界 740713）实际覆盖 202712 → 目标名 p202712
-[phase1] ALTER TABLE ai_operation_audit RENAME PARTITION p202709 TO __repart_tmp_21;
-[phase2] ALTER TABLE ai_operation_audit RENAME PARTITION __repart_tmp_21 TO p202609;
-...（共 36 个分区 → 72 条）
-DRY-RUN：以上 72 条 RENAME PARTITION 未执行
+[reorganize-rename] ALTER TABLE ai_operation_audit REORGANIZE PARTITION p202709 INTO (PARTITION p202609 VALUES LESS THAN (740255));
+...（共 36 条）
+DRY-RUN：以上 36 条 1:1 REORGANIZE 改名未执行
 ```
 两条设计取舍：
-1. **两阶段临时名**（先全部改成 `__repart_tmp_N`，再改成目标名）：改名是"名额占用"操作，直接改成目标名会撞上"另一个同样待改名的分区"（例如 `p202701 → p202601` 时 `p202601` 还没腾出来）。两阶段法不依赖排序技巧。
+1. **1:1 `REORGANIZE` + 按目标名升序逐条处理**：MySQL 8.0 没有 `RENAME PARTITION`（§4.4），
+   `REORGANIZE ... INTO (PARTITION 新名 VALUES LESS THAN (原边界数值))` 是唯一可用的改名手段；
+   升序可保证"目标名此刻已腾空"（例如 `p202701 → p202601` 之前，`p202601` 已在处理 `p202601 → p202501` 时腾出），
+   脚本还会逐条**动态**校验目标名不存在。**边界数值原样保留**（含闰日漂移），只换名字。
 2. **名字取"数据主要落在的那个月"**（`DATE_SUB(FROM_DAYS(上界), INTERVAL 1 MONTH)`）：对漂移分区，`p202811` 覆盖的是 2027-11-02~2027-12-01，叫 `p202711` 比叫 `p202712` 更诚实（12 月只占 1 天）。
 
 ### 4.1 为什么不直接改共享库的分区名
 
-- 跨任务共享同一开发库（阶段三/四/五都在用），改名会瞬时持有元数据锁；
-- 归档脚本 `scripts/archive-operation-audit.ps1` 虽然按**真实上界**判定（改名不影响其正确性），
+- 跨任务共享同一开发库（阶段三/四/五都在用），1:1 `REORGANIZE` 会**重建该分区**（行数据复制一次），
+  执行期间该分区的写入会等待；
+- 归档脚本 `scripts/archive-operation-audit.ps1` 按**真实上界**判定（不依赖名字，改名不影响其正确性），
   但任何"库里名字变了"的中间状态都会让同时在跑的人工巡检/截图对不上；
-- 因此**只提供方案，不执行**。真正执行前需 Lead 确认无人正在写 `ai_operation_audit`。
+- 因此**先给方案**（默认 DRY-RUN），执行前需 Lead 确认无人正在写 `ai_operation_audit`。
+  **2026-10-01 已获授权并在共享库执行完毕，记录见 §6。**
 
 ### 4.2 风险
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| 改名时的元数据锁 | 毫秒级阻塞（不复制数据，`RENAME PARTITION` 是纯元数据操作） | 业务低峰执行；先跑 DRY-RUN |
-| `-AddMonths` 用 `REORGANIZE pmax` | 需重建 `pmax` 的元数据；本表 `pmax` 通常为空，代价极小 | 若 `pmax` 已有数据（说明分区耗尽），先确认再执行 |
-| 误删/误改 | 数据丢失 | 脚本**永不 DROP**、**永不触碰 pmax**；只做 RENAME / REORGANIZE |
+| 1:1 `REORGANIZE` 重建分区 | 该分区行数据复制一次；执行期间该分区写入等待（本表仅当月分区有数据，~2.6k 行，实测 36 条共 4.4 秒） | 业务低峰执行；先跑 DRY-RUN；执行前备份 DDL |
+| `-AddMonths` 用 `REORGANIZE pmax` | 需重建 `pmax`；本表 `pmax` 通常为空，代价极小 | 若 `pmax` 已有数据（说明分区耗尽），先确认再执行 |
+| 误删/误改 | 数据丢失 | 脚本**永不 DROP**、**永不触碰 pmax**；只做 REORGANIZE（1:1 改名 / 追加） |
 | 名字与新建库口径仍不完全一致（±1 天） | 语义噪音 | 已在 §2.1 写明；要彻底消除需 §5 重建 |
 
 ### 4.3 回滚
 
-改名可逆，回滚就是"再改回去"（脚本日志 `.agent/archive/operation-audit/repartition-operation-audit.log`
-里有每一步的 `原名 → 临时名 → 目标名`）：
+改名可逆（把真名与旧名对调，同样用 1:1 `REORGANIZE`）：脚本日志
+`.agent/archive/operation-audit/repartition-operation-audit.log` 与执行记录 `.agent/t36-repartition-execute-v2.log`
+里有每一步的 `旧名 → 新名 + 边界数值`：
 
 ```sql
 -- 回滚模板（示例：把校准后的名字改回原名字；按日志逐条生成）
-ALTER TABLE ai_operation_audit RENAME PARTITION p202609 TO p202709;
+ALTER TABLE ai_operation_audit REORGANIZE PARTITION p202609 INTO (PARTITION p202709 VALUES LESS THAN (740255));
 ```
 建议回滚前先留一份分区定义：
 ```bash
 mysqldump --no-data --skip-comments -h 127.0.0.1 -P 3307 -u guarantee -p guarantee_ai_admin \
   ai_operation_audit > ai_operation_audit-ddl.sql
 ```
+
+### 4.4 ⚠️ 实测发现：MySQL 8.0 **不支持** `ALTER TABLE ... RENAME PARTITION`
+
+首版脚本（2026-09-30）用的是"两阶段 `RENAME PARTITION`"，2026-10-01 首次 `-Execute` **第一条就报**：
+
+```
+ERROR 1064 (42000): You have an error in your SQL syntax; ... near 'PARTITION p202601 TO __repart_tmp_1' at line 1
+```
+
+在**自建探针表**上复核（`DROP TABLE IF EXISTS t36_probe; CREATE TABLE ... PARTITION BY RANGE ...`）：
+
+| 写法 | 结果 |
+|---|---|
+| `ALTER TABLE t36_probe RENAME PARTITION p1 TO p1x;` | ❌ 1064（`near 'PARTITION p1 TO p1x'`） |
+| 同上 + 反引号 | ❌ 1064 |
+| `ALTER TABLE t36_probe REORGANIZE PARTITION p1 INTO (PARTITION p1x VALUES LESS THAN (TO_DAYS('2020-01-01')));` | ✅ 成功，**数据保留**（探针：p1 2 行 → p1x 2 行，总数 3 行不变） |
+| 目标名已存在时 REORGANIZE | ❌ `ERROR 1517 Duplicate partition name p2`（脚本据此做前置校验，给可读错误） |
+
+**结论**：改名只能用 1:1 `REORGANIZE`；它**会重建该分区**（不是纯元数据操作）。
+首次失败是"第一条语句即失败"，事务外 DDL 逐条执行 → **库未发生任何变化**（已核对：分区名与行数完全同执行前）。
 
 ---
 
@@ -176,3 +201,82 @@ pwsh -File scripts/archive-operation-audit.ps1 -Password '<pwd>'
 | 日期 | 内容 |
 |---|---|
 | 2026-09-30 | 首版（T6-03）：查清分区由 `schema.sql` 建、根因是 Python `toordinal()` 与 MySQL `TO_DAYS()` 相差 365 天；修正 `schema.sql` 的未来分区边界值并写明正确写法；新增默认 DRY-RUN 的 `scripts/repartition-operation-audit.ps1`；**未改动共享库现有分区** |
+| 2026-10-01 | 执行记录（T6-06 / task-36 B3）：探针表实测发现 **MySQL 8.0 无 `RENAME PARTITION`**，脚本改为 1:1 `REORGANIZE`（升序 + 保留原边界数值）；**在共享开发库实际完成 36 个分区重命名**，前后边界值/逐分区行数/总行数/pmax 全部核对一致，见 §8 |
+
+---
+
+## 8. 执行记录：既有库分区实际重命名（2026-10-01 02:05–02:07，task-36 B3）
+
+> 执行人：phase5b-mcp（Lead 授权）｜库：`guarantee_ai_admin`@127.0.0.1:3307｜表：`ai_operation_audit`
+> **未 DROP 任何分区、未触碰 `pmax`、未改任何业务数据。**
+
+### 8.1 四段证据
+
+**(1) 备份**
+```powershell
+mysqldump --no-data --skip-add-drop-table --skip-comments --set-gtid-purged=OFF \
+  guarantee_ai_admin ai_operation_audit > .agent/audit-table-ddl-before.sql   # 5,503 B
+# 另存 SHOW CREATE TABLE → .agent/audit-table-show-create-before.txt          # 4,233 B
+```
+备份里仍是旧名/旧值：`PARTITION p202601 VALUES LESS THAN (739648)`、`p202812 VALUES LESS THAN (740713)`。
+
+**(2) 执行前快照**（`.agent/t36-partitions-before.tsv`，逐分区精确 `COUNT(*)`）
+```
+分区数=37（36 + pmax）｜名字与真实覆盖不符=36｜闰日漂移(上界非 1 号)=11｜全表精确行数=2623（独立 COUNT(*) 复核同为 2623）
+p202709  desc=740255 真实覆盖 202609  行数=2623   ← 唯一有数据的分区（2026-09 的操作审计）
+其余 35 个分区行数均 0；pmax=MAXVALUE 行数 0
+```
+
+**(3) DRY-RUN → `-Execute`**
+```powershell
+pwsh -File scripts/repartition-operation-audit.ps1 -Password ***            # DRY-RUN → 36 条 1:1 REORGANIZE，未执行
+pwsh -File scripts/repartition-operation-audit.ps1 -Password *** -Execute   # 36/36 成功，耗时 4.4 秒，0 失败
+```
+执行语句形如：`REORGANIZE PARTITION p202709 INTO (PARTITION p202609 VALUES LESS THAN (740255));`
+（**边界数值原样保留**，只有名字变。）日志：`.agent/t36-repartition-execute-v2.log`。
+
+**(4) 执行后复核**（`.agent/t36-partitions-after.tsv`）
+| 核对项 | 执行前 | 执行后 | 结论 |
+|---|---|---|---|
+| 分区总数 | 37 | 37 | ✅ |
+| 名字与真实覆盖不符 | 36 | **0** | ✅ 全部对齐（`p202501(202501)` … `p202712(202712)`） |
+| 非 pmax 分区数 | 36 | 36 | ✅ |
+| 边界值多重集（`PARTITION_DESCRIPTION`） | 36 个 | 36 个 | ✅ 差异 0（数值一一对应） |
+| **逐分区行数多重集** | 36 个 | 36 个 | ✅ 差异 0 |
+| **全表行数** | **2623** | **2623** | ✅（独立 `COUNT(*)` 复核） |
+| 有数据的分区 | `p202709` = 2623 | **`p202609` = 2623** | ✅ 同一边界 `740255`，只换了名字 |
+| `pmax` | `MAXVALUE`，0 行 | `MAXVALUE`，0 行 | ✅ 未动 |
+
+**闰日漂移如实记录**：`p202502`…`p202512`（重命名前为 `p202602`…`p202612`）共 **11 个**分区的真实上界仍是**下月 2 日**
+（比日历月多 1 天），脚本在 DRY-RUN/执行时都 WARN。这是历史值的先天偏差，**改名不能消除**；
+本表这些分区均为 0 行，实际影响为零，要彻底消除只能按 §5 重建（未做）。
+
+**(5) 归档脚本复核**（名字变了，判定必须仍然正确）
+```powershell
+pwsh -File scripts/archive-operation-audit.ps1 -Password *** -RetentionMonths 24   # → 没有到期分区（与执行前一致）
+# 附加（更强）：13 个月窗口 → 按**真实上界**正确识别出 8 个到期分区
+#   p202501…p202508（上界 2025-02-01 … 2025-09-01），导出校验通过、DRY-RUN 未删；演练产生的 8 个空导出文件已清理
+```
+证明归档判定**不依赖分区名**，重命名后仍然正确。
+
+### 8.2 意外与纠正
+
+- 2026-10-01 02:05:23 首次 `-Execute` **失败**：`ERROR 1064 ... near 'PARTITION p202601 TO __repart_tmp_1'`
+  —— MySQL 8.0 **不存在** `RENAME PARTITION`（详见 §4.4）。失败发生在**第一条**语句，
+  且 `information_schema` 复核确认**库未发生任何变化**（36 个旧名、2623 行原样）。
+- 随后在**自建探针表**上验证 1:1 `REORGANIZE` 可改名且**保数据**，据此把脚本改为
+  "升序 + 保留原边界数值 + 动态校验目标名"，重新 DRY-RUN 后才再次执行。
+
+### 8.3 回滚方式
+
+把真名与旧名对调即可（边界数值不变），逐条生成：
+
+```sql
+ALTER TABLE ai_operation_audit
+  REORGANIZE PARTITION p202501 INTO (PARTITION p202601 VALUES LESS THAN (739648));
+-- … 36 条，映射关系见 .agent/t36-partitions-before.tsv / -after.tsv（按 desc 一一对应）
+```
+
+留档文件（均在被 gitignore 的 `.agent/` 下）：
+`audit-table-ddl-before.sql`、`audit-table-show-create-before.txt`、`t36-partitions-before.tsv`、
+`t36-partitions-after.tsv`、`t36-repartition-dryrun-v2.log`、`t36-repartition-execute-v2.log`。

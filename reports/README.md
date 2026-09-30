@@ -76,11 +76,38 @@ archive/<名字>[-<原因>].md|json      # 历史快照（不再重写，仅作�
 （"只能通过平台已授权的查询能力取数，不能绕过数据范围与权限校验"），不描述实现。
 → 凡是"禁用词清单/反面示例"，都要先问一句：**把它写进提示词，是不是反而给了模型这个词？**
 
-## 运维小节：不锁 fat jar 的本地起服务方式（classpath 启动）
+## 运维小节：不锁 fat jar 的本地起服务方式（**首选：脚本**）
 
-评测/走查需要临时实例时，用 classpath 启动可**避免占用 `guarantee-web/target/guarantee-ai-admin.jar`**
-（jar 被进程占用时，`spring-boot:repackage` 会因 `Unable to rename ... .jar.original` 失败，
-verifier/phase 同学的 `mvn verify` 都会被挡住）：
+评测/走查需要临时实例时，**不要用 `java -jar`**：它会占用 `guarantee-web/target/guarantee-ai-admin.jar`
+（jar 被进程占用时 `spring-boot:repackage` 会因 `Unable to rename ... .jar.original` 失败，
+verifier/phase 同学的 `mvn verify` 都会被挡住——本轮已发生 **3 次**构建事故）。
+
+### ✅ 首选：一条命令 `scripts/run-local-classpath.ps1`
+
+```powershell
+# 起 8092 → 健康检查 → 冒烟（login + prometheus）→ 20 秒后自动停（脚本自证：端口释放 + fat jar 未被锁）
+pwsh -File scripts/run-local-classpath.ps1 -Port 8092 -Smoke -RunSeconds 20
+
+# 常驻：Ctrl+C 退出，退出时自动 Stop-Process 那个实例
+pwsh -File scripts/run-local-classpath.ps1 -Port 8092
+
+# 知识层降级 / 追加启动参数（MCP 开关等）
+pwsh -File scripts/run-local-classpath.ps1 -KnowledgeDisabled -ExtraArgs '--guarantee.ai.mcp.enabled=true'
+```
+
+脚本已经把四条踩过的坑固化成行为，**不要再手工照抄下面对照区**：
+
+1. 从 fat jar 解 `BOOT-INF/lib/*.jar` 到 `.agent/bootlib/`（只读复制，不占用 jar）；
+2. ★ **强制删除 `bootlib/guarantee-*.jar`**（应用自身模块必须走 `target/classes`，否则 mapper 双扫启动失败）；
+3. 用「各模块 `target/classes` + `.agent/bootlib/*`」启动，**不写 `-cp` 之外的任何魔法**；
+4. `DEEPSEEK_API_KEY` 从**用户级环境**注入子进程（**不落文件、不打印值、不进命令行**）；
+   `-KeyFromUserEnv:$false` 可关闭（仅做不触发模型的接口验证时）。
+
+退出（含 Ctrl+C）时脚本会核对命令行后 `Stop-Process`，并打印两项自证：`端口 <n> 已释放`、
+`fat jar 未被锁（可被下一次 mvn package 覆盖）`。若 fat jar 当前是 thin jar（被 `repackage.skip` 改写过），
+脚本会**直接报错并给出修复命令**，不会拿一个起不来的实例糊弄过去。
+
+### 手工配方（对照用，等价于脚本）
 
 ```powershell
 # 1) 从 fat jar 解出依赖（jars 只读复制，不占用 jar 本身）
@@ -96,7 +123,8 @@ java -cp "guarantee-web/target/classes;guarantee-ai/target/classes;guarantee-sys
   `Mapped Statements collection already contains key com.guarantee.ai.mapper.AiAuditLogMapper.insert`
   （`mybatis.mapper-locations: classpath*:mapper/**/*.xml` 同时命中 `target/classes` 与 jar）。
 - **绝不**用 `-Dspring-boot.repackage.skip=true` 规避占用：它会把 fat jar 原地改写成 thin jar
-  （无 `BOOT-INF/`、无 `Main-Class`），之后 `java -jar` 直接报"没有主清单属性"。
+  （无 `BOOT-INF/`、无 `Main-Class`），之后 `java -jar` 直接报"没有主清单属性"，
+  而且 `.jar.original` 救不回来（那是上一轮的 thin jar）。
 - 依赖（如 `DEEPSEEK_API_KEY`）在 User 作用域时，子进程可能继承不到，需显式注入后再启动。
 
 ## 归档策略
