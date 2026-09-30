@@ -147,6 +147,7 @@ class ProposalNumberGuardTest {
                 "OP-" + tail,                             // 半角连字符
                 "OP " + tail,                             // 空格
                 "OP\u200b" + tail,                        // 零宽空格
+                "OP\u00b7" + tail,                        // 间隔号 ·（javadoc 里声明支持的分隔符；曾被漏在扫描字符类外）
                 "_" + fake,                               // 词边界被下划线破坏
                 fake + "X");                              // 词边界被字母破坏
         for (String form : escapedForms) {
@@ -188,7 +189,8 @@ class ProposalNumberGuardTest {
                 "OP-" + tail,
                 "OP " + tail,
                 "ＯＰ" + tail,
-                "OP\u200b" + tail);
+                "OP\u200b" + tail,
+                "OP\u00b7" + tail);                      // 间隔号 ·（补进扫描字符类后仍必须不误删）
         for (String echo : echoes) {
             ProposalNumberGuard.Result result =
                     ProposalNumberGuard.sanitize("待确认提案：" + echo + "，15 分钟内有效。", trusted);

@@ -53,7 +53,7 @@ public final class ProposalNoFormat {
      * <p>扫描出来只是"候选"：是否真算编号由 {@link #isProposalNumberShape} 用归一值判定。</p>
      */
     public static final Pattern CANDIDATE_PATTERN = Pattern.compile(
-            "[OoＯｏ][PpＰｐ][\\s\\u200B\\u200C\\u200D\\uFEFF\\-‐‑‒–—_]*"
+            "[OoＯｏ][PpＰｐ][\\s\\u200B\\u200C\\u200D\\uFEFF\\-‐‑‒–—_\\u00B7]*"
                     + "[0-9０-９](?:[\\s\\u200B\\u200C\\u200D\\uFEFF\\-‐‑‒–—_·]*[0-9０-９]){7,}");
 
     /**
