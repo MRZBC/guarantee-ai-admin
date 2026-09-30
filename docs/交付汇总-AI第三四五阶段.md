@@ -66,9 +66,9 @@ mvn -B verify
 | 交付 | 证据 |
 |---|---|
 | `ai_turn_metric`（每轮一行，含 `outcome`/`trace_id`/`source`）+ `trace_id` 三段贯通 | `AiObservabilityIT` 2/2：指标行 / 工具调用 / 审计 **trace_id 相同且非空**；失败轮 `outcome=ERROR` |
-| `AiChatMetrics` **9 项**指标 + 标签基数闸 + `/actuator/prometheus` 免登录 | 真机 200（63 KB）；含 `userId\|conversationId\|question=\|prompt=` 的行 **0**；`AiObservabilityIT` 断言标签键 ⊆ 白名单 |
+| `AiChatMetrics` **10 项**指标 + 标签基数闸 + `/actuator/prometheus` 免登录 | 真机 200（63 KB）；含 `userId\|conversationId\|question=\|prompt=` 的行 **0**；`AiObservabilityIT` 断言标签键 ⊆ 白名单 |
 | 「AI 运行」页 + `GET /api/ai/metrics/overview\|trend\|tools/top` | CDP 实测与 SQL 聚合**逐字段一致**（333 轮 / 平均 1.985 / 失败 11 / 触顶 12 / 104.2853ms；Top 工具计数与 p95 一致） |
-| 评测框架：**33 条** + `--suite=all\|deterministic\|live` + `--baseline` diff + 打分 + 内嵌 SSOT | 确定性集 **12/12、exit 0** 并纳入 `mvn verify`；`--baseline` diff 新增失败 **0**；缺 Key 时严格判"未跑"（exit 2） |
+| 评测框架：**35 条**（GQ-01~35）+ `--suite=all\|deterministic\|live` + `--baseline` diff + 打分 + 内嵌 SSOT | 确定性集 **12/12、exit 0** 并纳入 `mvn verify`；`--baseline` diff 新增失败 **0**；缺 Key 时严格判"未跑"（exit 2） |
 | 业务 MCP：网关（Node stdio，**13 只读工具**）+ 平台协议面/凭据面 + Redis 限流配额 + 开关 | 真机：`tools/list=13`（与 `catalog.ts` 逐名一致）→ `tools/call` 成功；**撤销后立即 401**；写工具 **403**；同秒第 6 次 **429**；默认关闭实例三类路径 **404** 且平台自身正常 |
 | `ai:mcp:read` 硬门禁 + `ai:mcp:manage` 独立权限码 + 服务账号 `SERVICE` 强校验 | `McpBackendIT` 8/8（含 HUMAN 账号被拒签发 + `COUNT(*)==0`）、`McpRateLimitIT`/`McpQuotaIT` 各 1/1；登录拒绝 SERVICE 且与密码错误**同码同文案** |
 
@@ -83,31 +83,40 @@ mvn -B verify
 
 ---
 
-## 四、实现期与验证期发现并已修复的缺陷（8 项）
+## 四、实现期与验证期发现并已修复的缺陷（12 项）
 
 1. 伪造「知识来源」行的 6 类 Markdown 装饰变体不被剥离 → 修后 **12/12**（并补 6 个反例测试）
 2. `GET /api/ai/config/prompts` 同步跑分钟级门禁 → 页面超时；改为列表回最近结果、门禁由刷新与**发布**触发
 3. 发布门禁跑在 `@Transactional` 内（分钟级长事务）+ 前端仅 30s 超时 → 门禁移出事务 + 前端 180s
 4. AC-CFG-10 子句②（真机集"未跑"标注）无实现 → 补 `/prompts/gate` 的 `live` 维度（只读真实报告，**缺 Key 必回 NOT_RUN，不伪造**）
-5. `model.max-tokens/timeout/max-retries` 可编辑但不生效 → 页面标注"本期未接线"且不可编辑
+5. `model.max-tokens/timeout/max-retries` 可编辑但不生效 → **已接线**（缺省零漂移）+ `catalog.wired` + 服务端拒写未接线项
 6. `McpBackendIT` 鉴权夹具缺 `SecurityContext`（3 条红被误判为守卫失效）→ 修后 8/8 并由另一队友**独立复跑**确认
 7. `AI_TURN_COST` 日志 13 占位符只传 12 实参 → 字段整体错位；修后四键正确（用**反证实验**证明新断言能抓住它）
 8. SSOT 测试项数被 `target/` 陈旧 surefire XML **虚增 88**（682 vs 594）→ 按类名归属归一，与真实构建逐项一致
+9. `queryInsuranceType` 按险种名恒返回 0 条（关键字同时塞进 `keyword`/`typeName`/`typeCode` 三个并列 AND）→ 只设 `keyword` + 防线断言（GQ-10/GQ-20 的失败根因）
+10. 评测运行器把"只读账号确实调了工具"记成 0 次（`tool_call` 事件按 `ai:debug:view` 下发）→ 改为回读 `GET /api/ai/tool-calls/{conversationId}`（GQ-24 假失败）
+11. **`ai.proposals` 是死指标**（生产代码零调用点，`/actuator/prometheus` 无该序列）→ `ProposalService` 六条真实流转打点，真机样本已取到
+12. `DataSourceClaimGuard` 的 Markdown 装饰绕过（与 #1 同类但未同步修）→ 与知识守卫**对称化**（9 个变体全对 + 两种反证）
+
+运维类修复：审计分区边界用 MySQL `TO_DAYS()` 求值（既有库差 365 天，只修新建库 + DRY-RUN 重分区脚本）；`thin jar` 事故（`repackage.skip` 会把 fat jar 原地改写）已恢复并写进复核注意。
 
 另：服务账号安全缺口（`account_type` 未映射 + 登录不拒绝 SERVICE）由 task-15 暴露 → **单独立项 T5-06** 补齐。
 
 ---
 
-## 五、遗留问题（待用户裁决）
+## 五、遗留问题（更新于 T6 收口后）
 
-| 类别 | 项 |
-|---|---|
-| 既有缺陷（只登记） | `DataSourceClaimGuard` 的 Markdown 装饰绕过（与已修的知识守卫同类）；`ProposalNumberGuard` 窄格式检测 |
-| 数据/运维 | `ai_operation_audit` 分区名与真实 `TO_DAYS` 边界差一年（归档脚本已按真实上界规避，DRY-RUN 默认）；`ai_config_item` 2 行历史 NULL（无行为影响） |
-| 本期未接线 | `model.max-tokens` / `model.timeout` / `model.max-retries`（页面已标注） |
-| 后续优化候选 | 门禁结果按 `contentHash + TTL` 复用；`AiConfigCatalog` 增加 `wired` 标志（现为前端清单防护） |
-| 环境受限（**2026-09-30 晚部分解除**） | 真机黄金问题集 33 条：**已跑通**（32 PASS + GQ-25 单独 PASS，见 §七）；`ai_tokens`/`ai_proposals` 真机指标：本轮真机集产生了真实轮次数据（`ai_turn_metric`/`ai_tool_call` 均有写入，如 viewer 会话 `rounds=2/tool_calls=1`），但未按该指标口径单独核对 |
-| 工程教训 | 临时 8088 实例会锁 fat jar 导致 `repackage` 失败（本次 3 次，约定：先 package 再起、用完立即停并复核端口与 jar） |
+| 类别 | 项 | 状态 |
+|---|---|---|
+| `ProposalNumberGuard` 的"形态规避"（小写/全角/分隔符/零宽） | 放宽必须同时做归一化比对，否则会误删模型如实回显的真编号 | **登记不修**；边界已钉成 20 例对照测试 |
+| 门禁结果按 `contentHash + TTL` 复用 | 与 AC-CFG-10"发布时强制重跑、不拿缓存放行"**直接冲突** | **不做**（有理由） |
+| 重命名**既有库**的审计分区 | 共享库风险高 | 只提供 **DRY-RUN** 脚本；新建库口径已修正 |
+| 真机集 3 处失败（GQ-27 周期不连续 / GQ-31,GQ-35 拒答泄漏「SQL」/ GQ-34 方差） | **收紧断言后暴露的真实模型行为缺陷**（此前被宽松断言掩盖） | 已立 **T6-07** 修提示词；判定由 **T6-08** 重新给出 |
+| 企业/项目维度（AC-BA-03/04） | 随 **M2.3 缓做**（Q-BA-01 拍板） | 第二阶段按 v1.2 裁剪口径验收 |
+| Vault 远端备份 | 只有本地 git | 仍缺（待用户决定远端） |
+| `ai_config_item` 2 行历史 NULL | 无行为影响 | 登记不清理 |
+
+**工程教训（已写进发布说明与知识库）**：① 临时实例锁 fat jar → `repackage` 失败（先停实例再打包；**不要**用 `-Dspring-boot.repackage.skip=true`，它会把 fat jar 原地改写成 thin jar）；② 改了 `guarantee-ai` 却只跑 `-pl guarantee-web` → Maven 从 `~/.m2` 取旧 jar（必须 `install` 或带 `-am`）。
 
 ---
 
@@ -134,9 +143,10 @@ cd tools/business-mcp && npm test
 java -jar guarantee-web/target/guarantee-ai-admin.jar --server.port=8088
 ```
 
-> 真机黄金问题集（33 条）需要 `DEEPSEEK_API_KEY`：`node scripts/ai-golden-questions.mjs --suite=live`
+> 真机黄金问题集（当前 **35 条**）需要 `DEEPSEEK_API_KEY`：`node scripts/ai-golden-questions.mjs --suite=live`
 > —— **没有 Key 时输出"未跑（环境问题）"，不是失败。**
-> **2026-09-30 晚该 Key 已就位，33 条已全部跑通**（含 GQ-25 的关知识层实例），见 §七。
+> **2026-09-30 晚该 Key 已就位**：先以 33 条跑通（32 PASS + GQ-25 单独 PASS），随后断言收紧并扩到 35 条，
+> **当前真机结果为 通过 31 / 失败 3 / 未跑 1**（3 处失败见 §八，属收紧后暴露的真实模型行为缺陷，**未放宽断言**）。
 
 ---
 
@@ -173,3 +183,27 @@ java -jar guarantee-web/target/guarantee-ai-admin.jar --server.port=8088
 - 临时实例会锁 fat jar：**先 `mvn package` 再起实例**，用完立即停（本轮 8088/8089 已按此执行并复核端口释放）。
 - **门禁跑 `-pl guarantee-web` 时，兄弟模块从 `~/.m2` 取**：改了 `guarantee-ai` 必须先 `mvn install`，
   否则门禁验的是旧 jar（本轮踩到过一次：第一次重跑验的是 03:54 的旧 jar，结果已作废并重跑）。
+
+---
+
+## 八、T6 收口轮（遗留项清理，用户确认"都做掉"）
+
+| 任务 | 内容 | 结果 |
+|---|---|---|
+| T6-01 | `DataSourceClaimGuard` 与知识守卫**对称化**（装饰容忍）+ `ProposalNumberGuard` 边界定性 | 9 个装饰变体全对；两种反证（HEAD 缺陷版 / 临时改回窄式）；`ai` 单测 434 全绿 |
+| T6-02 | 三个模型参数**接线**（缺省零漂移）+ `catalog.wired` + 服务端拒写 | 单测断言 `getMaxTokens()==null`（缺省不下发）与显式设置下一轮生效；**真机**：置 512 → 日志 `maxTokens=512` + 正常回答 + `config_version=369` 落库 → 重置回默认（`overridden=false`） |
+| T6-03 | 审计分区命名根因（Python `toordinal()` vs MySQL `TO_DAYS()` 差 365 天） | 新建库口径已修正（探针表实测 37 分区全对）；既有库只给 DRY-RUN 重分区脚本；另证 `ai_tokens_total` 真机有数据 |
+| T6-05 | 评测严格性补齐（G1 预算收紧 / G2 越界问法覆盖 / G3 连续周期计数断言） | 反证矩阵（松 PASS / 紧 FAIL 且失败原因**仅**对应断言）；评测集 **33 → 35** |
+| T6-06 | **死指标 `ai_proposals`** 修复 | 六条状态流转打点；真机样本 `{source="ai",status="created"} 1`、`{source="web",status="rejected"} 1` |
+| T6-04 / T6-08 | 独立复验与判定更正 | 缺陷 8/9/10 独立复验成立；第二阶段 **成立 7 / 不成立 2**（AC-BA-03/04 随 M2.3 缓做）；AC-MCP-07 与 AC-BA-02/07 的判定更正见验证报告 |
+
+**T6-05 收紧断言后暴露的 3 处真实模型行为缺陷**（**未放宽断言**，已立 T6-07 修提示词）：
+
+| 题 | 现象 | 违反 |
+|---|---|---|
+| GQ-27 | 给了 7 个周期点，但**最长连续段只有 4** | AC-BA-02「≥6 个连续周期」 |
+| GQ-31 / GQ-35 | 拒答正文出现 **「SQL」**（GQ-35 还多调了 1 次工具） | AC-BA-07「拒绝时不出现技术术语」 |
+| GQ-34 | 有方差：三次运行 = 1 次调用 FAIL / 2 次调用+疑似硬答 FAIL / 0 次调用+明确拒答 PASS | AC-BA-07（稳定性） |
+
+> 这三条**不是本次实现引入的**，而是此前宽松断言掩盖的问题；收紧断言后如实保留红，
+> 处见 `reports/README.md` 的「模型行为发现」表与 `docs/TEST-助手黄金问题集.md` §4.3。

@@ -489,7 +489,7 @@
 | 单测 | guarantee-ai 418 例全绿（含 `AiChatMetricsTest` 8、`McpRateLimiterTest` 8、`McpToolCatalogTest` 13、`McpControllerProtocolTest` 12） |
 | IT | `AiObservabilityIT` 2/2（指标/工具调用/审计 trace_id 三段一致 + 失败路径 `outcome=ERROR`）；`McpBackendIT` 8/8（含 HUMAN 账号签发被拒 + `COUNT(*)==0`）；`McpRateLimitIT`/`McpQuotaIT` 各 1/1；`LogicalDeleteSchemaIntegrationTest` 11/11 |
 | 真机 | `/actuator/prometheus` **200 / 441 行**，含 `userId\|conversationId\|question=\|prompt=` 的行 **0**；MCP e2e：签发→`tools/list` 13（与 `catalog.ts` 逐名一致）→三条 `tools/call`→**撤销后 401**→写工具 **403**→同秒第 6 次 **429**；真实 stdio 网关全链路跑通；默认关闭实例三类路径 **404** 且平台自身正常 |
-| 评测 | `--self-check` 通过（33 条 ↔ 脚本/文档一一对应）；`--suite=deterministic` **12/12、exit 0**；`--baseline` diff 全 0；SSOT `--check` **exit 0** |
+| 评测 | `--self-check` 通过（**35 条** ↔ 脚本/文档一一对应，v1.2 由 33 扩容）；`--suite=deterministic` **12/12、exit 0**；`--baseline` diff 全 0；SSOT `--check` **exit 0** |
 | 可视化 | CDP 实测：24h 概览 32/4/12.5%/1.88 轮/98ms、7d 提案 11/10/2、Top 工具计数与 p95 —— 与 SQL 同刻聚合一致 |
 
 **偏差（如实登记）**
@@ -500,7 +500,8 @@
 4. `ai.knowledge.retrieval` 拆成 counter + `.duration`（Micrometer 不允许同名不同类型）；`token-pricing` 键未落地（Q-MCP-05 只报 token 与耗时）；
 5. `docs/MCP-外部接入.md` 的"12 个工具"漂移已更正为 13；`reports/` 是**可再生**评测产物（每次跑会重写，diff 主要是时间戳）。
 
-**本阶段未覆盖（已在 `TASKS.md` 登记）**：真机 33 条（缺 `DEEPSEEK_API_KEY`）；`ai_operation_audit` 分区名与真实边界差一年（既有缺陷）；`DataSourceClaimGuard`/`ProposalNumberGuard` 的形态类既有缺陷。
+**本阶段后续已闭环的项（T6 收口轮）**：真机集已跑通（`DEEPSEEK_API_KEY` 就位）；`ai_tokens_total`/`ai_proposals_total` 均已真机取证（后者原为**死指标**，已在 T6-06 修复）；审计分区**新建库**命名口径已修正（既有库给 DRY-RUN 重分区脚本）；`DataSourceClaimGuard` 已与知识守卫对称化。
+**仍未闭环**：`ProposalNumberGuard` 的形态规避（登记不修，边界已钉成测试）；收紧断言后真机暴露的 3 处**模型行为缺陷**（GQ-27 周期不连续、GQ-31/GQ-35 拒答泄漏「SQL」、GQ-34 方差）→ 正在 T6-07 修提示词。
 
 ---
 

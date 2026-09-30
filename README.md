@@ -7,7 +7,7 @@
 
 - **第三阶段 · RAG → 业务知识**：18 条业务知识真源（Markdown）+ 幂等导入 + `queryBusinessKnowledge` 检索工具 + 服务端「知识来源」行（模型自写的会被剥离）
 - **第四阶段 · AI 配置化 + 确认 + 审计**：模型/提示词/能力开关可在「系统管理 → AI 配置」页调整（**不重新打包**，改动经 DB 配置快照在下一个请求生效）；提示词版本化（草稿/发布/回滚 + 发布门禁）；写操作提案与审计链路 + 指纹闭环 + 审计归档脚本
-- **第五阶段 · MCP → Evaluation → Observability**：业务 MCP（只读、默认关闭、Token 鉴权、限流配额）、自动评测（33 条黄金问题，确定性集纳入 `mvn verify`）、观测（`/actuator/prometheus` + `ai_turn_metric` + 「AI 运行」页）
+- **第五阶段 · MCP → Evaluation → Observability**：业务 MCP（只读、默认关闭、Token 鉴权、限流配额）、自动评测（**35 条**黄金问题，确定性集纳入 `mvn verify`）、观测（`/actuator/prometheus` + `ai_turn_metric` + 「AI 运行」页）
 
 **仍未排期**（刻意不做）：多模型路由、Agent Planner、跨会话长期记忆、LangChain4j、MQ、Grafana 大屏、OTel 导出。
 
@@ -487,7 +487,7 @@ record TimeRange(LocalDate startDate, LocalDate endDate, String description)
 - **业务 MCP**：网关 `tools/business-mcp`（Node + stdio，**13 个只读工具**）+
   平台侧 `GET /api/ai/mcp/tools`、`POST /api/ai/mcp/tools/{name}`、`/api/system/mcp-tokens`（权限 `ai:mcp:read` / `ai:mcp:manage`）；
   **默认关闭**（`guarantee.ai.mcp.enabled=false`，yml 级、需重启）；接入说明见 `docs/MCP-外部接入.md`
-- **评测**：`docs/TEST-助手黄金问题集.md`（**33 条**）+ `scripts/ai-golden-questions.mjs`
+- **评测**：`docs/TEST-助手黄金问题集.md`（**35 条**，GQ-01~35）+ `scripts/ai-golden-questions.mjs`
   （`--suite=all|deterministic|live`、`--baseline=<file>`）；确定性集由 `EvaluationDeterministicIT` 承载并纳入 `mvn verify`
 - **观测**：`/actuator/prometheus`（免登录，仅内网/白名单）+ `ai_turn_metric`（每轮问答一行，含 trace_id）+
   `系统管理 → AI 运行` 页
@@ -601,7 +601,7 @@ sh scripts/setup-git.sh              # Linux / macOS / Git Bash
 | SSE 与 Spring Security | 必须放行 `DispatcherType.ASYNC`，否则异步派发时会因上下文已清理而抛 `Access Denied` 并截断事件流（已在 `SecurityConfig` 中处理）。 |
 | 前端 | 使用 hash 路由（`createWebHashHistory`），避免静态部署需要 history fallback。 |
 | 权限 | 登录态与权限编码已下发，前端按菜单展示；第一阶段未在接口上开启 `@PreAuthorize` 细粒度拦截。 |
-| 真实模型验证 | `DEEPSEEK_API_KEY` 就位后**已做端到端实测**：真机黄金问题集 33 条全部跑通（主实例 32/32 PASS，GQ-25 在 `guarantee.ai.knowledge.enabled=false` 实例 PASS；2026-09-30 晚），报告 `reports/eval-live-2026-09-30.md`。工具链路由仍由 `AiToolChainIT`（Stub 模型）确定性验证；未配 Key 时的行为也已实测为「明确报错、不编造数据」。 |
+| 真实模型验证 | `DEEPSEEK_API_KEY` 就位后**已做端到端实测**：真机黄金问题集先以 33 条跑通（主实例 32/32 PASS + GQ-25 在 `guarantee.ai.knowledge.enabled=false` 实例 PASS），随后**断言收紧并扩到 35 条**，当前真机结果 **通过 31 / 失败 3 / 未跑 1**——3 处失败是收紧后暴露的**真实模型行为缺陷**（拒答正文泄漏「SQL」、趋势周期不连续、一处方差），**未放宽断言**，正在按 `task-29` 修提示词。报告 `reports/eval-live-2026-09-30.md`、`reports/README.md`。工具链路由仍由 `AiToolChainIT`（Stub 模型）确定性验证；未配 Key 时的行为也已实测为「明确报错、不编造数据」。 |
 | 前端运行验证 | 前端 `npm run build` 通过（vue-tsc 类型检查 + 打包）；SSE 客户端已按后端实测事件协议对齐。但本次开发会话的沙箱禁止 Node 监听端口（`listen EACCES`），**未能启动 Vite dev server 做浏览器实测**；在你自己的终端里 `npm run dev` 可正常启动。 |
 
 ---
