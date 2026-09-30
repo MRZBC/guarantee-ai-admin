@@ -601,7 +601,7 @@ sh scripts/setup-git.sh              # Linux / macOS / Git Bash
 | SSE 与 Spring Security | 必须放行 `DispatcherType.ASYNC`，否则异步派发时会因上下文已清理而抛 `Access Denied` 并截断事件流（已在 `SecurityConfig` 中处理）。 |
 | 前端 | 使用 hash 路由（`createWebHashHistory`），避免静态部署需要 history fallback。 |
 | 权限 | 登录态与权限编码已下发，前端按菜单展示；第一阶段未在接口上开启 `@PreAuthorize` 细粒度拦截。 |
-| 真实模型验证 | 本机未提供 `DEEPSEEK_API_KEY`，因此**真实模型**的问答未做端到端实测；工具链路由 `AiToolChainIT`（Stub 模型）确定性验证，未配 Key 时的行为也已实测为「明确报错、不编造数据」。 |
+| 真实模型验证 | `DEEPSEEK_API_KEY` 就位后**已做端到端实测**：真机黄金问题集 33 条全部跑通（主实例 32/32 PASS，GQ-25 在 `guarantee.ai.knowledge.enabled=false` 实例 PASS；2026-09-30 晚），报告 `reports/eval-live-2026-09-30.md`。工具链路由仍由 `AiToolChainIT`（Stub 模型）确定性验证；未配 Key 时的行为也已实测为「明确报错、不编造数据」。 |
 | 前端运行验证 | 前端 `npm run build` 通过（vue-tsc 类型检查 + 打包）；SSE 客户端已按后端实测事件协议对齐。但本次开发会话的沙箱禁止 Node 监听端口（`listen EACCES`），**未能启动 Vite dev server 做浏览器实测**；在你自己的终端里 `npm run dev` 可正常启动。 |
 
 ---

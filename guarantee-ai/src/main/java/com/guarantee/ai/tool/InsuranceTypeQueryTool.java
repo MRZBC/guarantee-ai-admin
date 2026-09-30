@@ -76,9 +76,20 @@ public class InsuranceTypeQueryTool {
 
         int effectiveLimit = clampLimit(limit);
         InsuranceTypeDto.Query query = new InsuranceTypeDto.Query();
+        /*
+          只设 keyword，**绝不**把同一个词同时塞进 typeName / typeCode。
+
+          Mapper 的 queryWhere 里这三个是**并列的 AND 条件**（InsuranceTypeMapper.xml#queryWhere），
+          同时给值会生成：
+              AND type_name LIKE '%X%' AND type_code LIKE '%X%' AND (type_name LIKE '%X%' OR type_code LIKE '%X%')
+          而"投标保函（标准）"这类**名称关键字永远不可能出现在编码**（TENDER_STD）里 → 恒 0 条；
+          反向同理。真机事故（2026-09-30 GQ-10 / GQ-20）：按名称查险种返回 0 条，模型只能换短词
+          再试一次（依旧 0 条），最后兜底 category=TENDER 才拿到数据，白烧 3 次工具调用 / 4 轮，
+          直接撞破"≤3 轮"的轮次预算，也让回答多绕了两圈。
+
+          keyword 在 Mapper 里本身就是"名称 OR 编码"的模糊词，是这里唯一该设的字段。
+        */
         query.setKeyword(keyword);
-        query.setTypeName(keyword);
-        query.setTypeCode(keyword);
         query.setCategory(category);
         query.setStatus(status);
         query.setIncludeDeleted(Boolean.TRUE.equals(includeDeleted));

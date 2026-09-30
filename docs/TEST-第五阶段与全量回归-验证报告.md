@@ -304,6 +304,7 @@ GET  /api/ai/mcp/tools（撤销后）        -> HTTP 401 code=401  "MCP Token �
 |---|---|---|
 | 2026-09-30 | v1.0 | 首版：AC-MCP-01~13 逐条三态（**成立 12 / 不成立 1 / 无法验证 0**）、TEST-MCP-01~08 状态、跨阶段回归（阶段三红线与黄金断言 / 阶段四缺省一致性 / SSE / health）、对抗式检查、8 项缺陷与副作用、未跑项清单。验证快照 = HEAD `817d74c`（04:34:18）；真机证据包含**真实 stdio 网关对真机后端**的 initialize/tools/list/tools/call、真机 MCP 协议面 401/403/429/撤销、真机 prometheus 与 `/actuator/health`、失败轮三段 traceId 对照；`--suite=live` 未跑（缺 `DEEPSEEK_API_KEY`）。 |
 | 2026-09-30 | v1.1 | **追加"复验记录"**（见下节）：针对 `023c07d` 的 SSOT 计数归一、`AI_TURN_COST` 日志对齐、失败轮版本回填三处做定向复核。**AC-MCP-12 由"不成立"改判「成立」**（快照 `66a5163` 已把 REQ 三处 12→13 更正，SSOT 计数与一次全新 `mvn verify` 逐项一致）。原报告 1–305 行未改动。 |
+| 2026-09-30 | v1.2 | **追加"复验记录（真机集全量跑通）"**（见文末）：`DEEPSEEK_API_KEY` 就位后真机黄金问题集首次跑通 —— 主实例 **32/32 PASS**、GQ-25 在关知识层实例单独 PASS（**33/33 全覆盖**）；发布门禁确定性集 `BUILD SUCCESS` + IT 12/12。原"未跑（缺 Key）"项全部消解。原报告与 v1.1 节未改动。 |
 
 ---
 
@@ -383,3 +384,33 @@ GET  /api/ai/mcp/tools（撤销后）        -> HTTP 401 code=401  "MCP Token �
 > 第五阶段：**成立 13 / 不成立 0 / 无法验证 0**（AC-MCP-12 由不成立改判成立）
 > 第四阶段：原报告 **成立 10 / 不成立 1 / 无法验证 0**（AC-CFG-10 已消解；AC-CFG-06 仍为"不成立（按字面）"，属已批准决策，待文档收窄）
 > 第三阶段：**成立 5 / 不成立 0 / 无法验证 4**（真机黄金问题集未跑，缺 Key）
+
+---
+
+# 复验记录（v1.2，2026-09-30 晚）—— 真机集全量跑通，原"未跑（缺 Key）"项全部消解
+
+> 本节**追加**在原报告与 v1.1 复验节之后，**不修改**既往章节。触发原因：本机 `DEEPSEEK_API_KEY`
+> （Windows 用户级环境变量）确认就位且有效（直连 `api.deepseek.com` 成功）。
+
+| 项 | 内容 |
+|---|---|
+| 复验快照 | HEAD `27a66a7` + 本次修复（`InsuranceTypeQueryTool` 只设 `keyword`；评测运行器工具记账改回读 `GET /api/ai/tool-calls/{id}`；提示词规则 43 增补"多对象对比"归口） |
+| 真机集（原 §未跑项 1） | 8088 临时实例（新构建 + Key）：**通过 32/32、失败 0、未跑 1**；未跑项 GQ-25 在 8089（`--guarantee.ai.knowledge.enabled=false` + `GOLDEN_KNOWLEDGE_DISABLED=1`）单独 **PASS** → **33/33 全覆盖** |
+| 基线 diff | 相对 before-fix 基线：新增失败 **0**、新修复 **4**（GQ-10 / GQ-20 / GQ-24 / GQ-29）、仍失败 0；`passRate 0.875 → 1`、`rounds.avg 1.8 → 1.7` |
+| 确定性集（发布门禁） | `mvn -B -pl guarantee-web -Dit.test=EvaluationDeterministicIT verify` → **BUILD SUCCESS**、IT **12/12**、脚本 exit 0（**注意：本轮先把新代码 `mvn install` 进本地仓库再跑**——首次重跑时门禁从 `~/.m2` 取到的是 03:54 的旧 `guarantee-ai` jar，该结果已作废） |
+| 单测（本次新增） | `InsuranceTypeQueryToolTest` **4/4**（含"`typeName`/`typeCode` 必须留空"的防线断言） |
+| 证据 | `reports/eval-live-2026-09-30.json\|md`、`reports/eval-live-gq25-2026-09-30.json`、`reports/eval-deterministic-2026-09-30.json\|md`、`.agent/fix-*.log` |
+
+**跨阶段回归（对照本报告 §4）**
+
+| 回归项 | 本次结果 |
+|---|---|
+| 阶段二 GQ-01~15 真机复跑 | **全部 PASS**（原为"未跑"） |
+| 阶段三知识类 GQ-16~GQ-25 | GQ-16~GQ-24 **PASS**；GQ-25 在关知识层实例 **PASS** |
+| SSE 事件集合 / `/actuator/health` | 未变；health = `{"status":"UP"}` |
+| 数值与权威来源一致（AC-MCP-09 相关） | 全量 33 条 `口径正确率 = 1`、`引用完整率 = 1`、`禁用术语违规 = 0` |
+
+**本次修复的三项缺陷**（详见 `docs/TEST-第三阶段-验证报告.md` §10）：险种名称搜索恒 0 条（缺陷 8）、
+只读账号工具记账假失败（缺陷 9）、提示词多对象对比路由缺口（缺陷 10）。
+
+> 阶段状态汇总口径（**v1.2 更新，数字口径已更正**）：阶段三 **成立 9 / 不成立 0 / 无法验证 0**（AC-RAG-01~09）；阶段四 **成立 12 / 0 / 0**（AC-CFG-01~12）；阶段五 **成立 13 / 0 / 0**（AC-MCP-01~13）→ 合计 **34 / 0 / 0**。

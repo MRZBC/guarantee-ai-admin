@@ -296,17 +296,36 @@ M2.3（企业/项目维度）按决策缓做，重新拾起的触发条件见需
 > 上面第二条同时是 **AC-RAG-08** 的真实库证据：改真源文件 → **不重新打包**（资源随启动重读）
 > → 新版本可被检索、来源行版本号变化、导入留痕可查。
 
-**真机 25 条**：**未跑**。原因：本机没有 `DEEPSEEK_API_KEY`，无法调用真实模型。
-不需要 Key 的确定性证据见 `guarantee-web` 的 `KnowledgeRetrievalIT`（Stub ChatModel + 真实 MySQL）。恢复方式：
+**真机 25 条**：**2026-09-30 晚已跑通**（原 v1.0 的"未跑"记录保留在本节末尾）。
+
+### 2026-09-30 晚 · 真机集首次跑通（33/33 全覆盖）
+
+| 项 | 结果 |
+|---|---|
+| 全量真机集（8088 临时实例，新构建 + Key，`--suite=live`） | **通过 32/32**，失败 0，未跑 1（GQ-25 按设计需另起实例）；`rounds.avg=1.7`、口径正确率 1.0、引用完整率 1.0、禁用术语违规 0 |
+| GQ-25（8089，`--guarantee.ai.knowledge.enabled=false` + `GOLDEN_KNOWLEDGE_DISABLED=1`） | **PASS**（如实说明知识层不可用；不出现来源行与工具名） |
+| 基线 diff（对 before-fix 基线） | 新增失败 **0**、新修复 **4**（GQ-10 / GQ-20 / GQ-24 / GQ-29）、仍失败 0 |
+| 发布门禁（确定性集） | `mvn ... -Dit.test=EvaluationDeterministicIT verify` **BUILD SUCCESS**、IT **12/12**、脚本 exit 0 |
+| 报告 | `reports/eval-live-2026-09-30.json\|md`（主报告，目标 8088）、`reports/eval-live-gq25-2026-09-30.json`（GQ-25） |
+
+**运行器同步修复（缺陷 9，见 `docs/TEST-第三阶段-验证报告.md` §10）**：工具调用记账从"只认 SSE `tool_call` 事件"
+改为**回读服务端权威记录** `GET /api/ai/tool-calls/{conversationId}`（`conversationId` 取自 `meta` 事件；
+该接口只需 `ai:chat` 且校验会话归属）。原因：`tool_call` 事件按 `ai:debug:view` 权限下发，而 GQ-24 按设计
+用**只读账号**提问 → 流里一个工具事件都没有，"工具确实调了"被记成 0 次，报告会给出"模型没走新能力"的错误结论
+（实测：流里 0 个事件，库里 `queryBusinessKnowledge/SUCCESS`、`rounds=2`）。SSE 事件仅作接口失败时的回落。
+
+**关闭知识层实例的起法**（GQ-25 专用；实例会锁 fat jar，先 package 再起、用完立即停）：
 
 ```bash
-# 1) 起后端（需 DEEPSEEK_API_KEY 有效）
-# 2) 全量 33 条
-node scripts/ai-golden-questions.mjs --suite=live
-# 3) 降级那一条：把 guarantee.ai.knowledge.enabled 置 false 重启后端后
-GOLDEN_KNOWLEDGE_DISABLED=1 node scripts/ai-golden-questions.mjs --only=GQ-25
+java -jar guarantee-web/target/guarantee-ai-admin.jar --server.port=8089 --guarantee.ai.knowledge.enabled=false
+GOLDEN_KNOWLEDGE_DISABLED=1 BASE_URL=http://localhost:8089 node scripts/ai-golden-questions.mjs --suite=live --only=GQ-25
 ```
 
+> **历史记录（v1.0，2026-09-30 凌晨）**：当时本机没有 `DEEPSEEK_API_KEY`，真机 25 条**未跑**；
+> 不需要 Key 的确定性证据见 `guarantee-web` 的 `KnowledgeRetrievalIT`（Stub ChatModel + 真实 MySQL）。
+> 恢复方式（已按此执行）：起后端（Key 有效）→ `node scripts/ai-golden-questions.mjs --suite=live` →
+> 降级那一条把 `guarantee.ai.knowledge.enabled` 置 false 重启后端后 `GOLDEN_KNOWLEDGE_DISABLED=1 ... --only=GQ-25`。
+>
 > 阶段二 GQ-01~15 的断言（含 `mustCall` / 调用上限 / 内部术语）**未改动**；
 > 迁移只影响提示词文本，脚本侧仅新增尾部标记 `\n\n知识来源：` 的识别（把服务端来源行排除在"模型正文"之外）。
 
@@ -324,7 +343,8 @@ GOLDEN_KNOWLEDGE_DISABLED=1 node scripts/ai-golden-questions.mjs --only=GQ-25
 | 打分 | 通过率 1.0、口径正确率 1.0、引用完整率 1.0、禁用术语违规 0、轮次 2/2/2、耗时 avg 0.1s |
 | 基线 diff | 以自身 JSON 为基线重跑（`--report-only`）→ 新增失败 0、新修复 0、指标变化 0，退出码 0 |
 | 真机集 | `--suite=live --only=GQ-07,GQ-16`：数据基线 ✅（总订单量 150000，区间 2025-01-01 ~ 2026-09-30）；**GQ-07 PASS**（真实模型 + 真实数据）；**GQ-16 未跑**——运行中的 8081 实例还是旧构建，模型按新提示词调用 `queryBusinessKnowledge` 时服务端报 `No ToolCallback found`。脚本按**环境问题**分类（退出码 2）并给出可操作原因"后端可能未重启到最新代码（工具未注册）"，**不记为断言失败** |
-| 真机集全量 | **未跑**：本机没有 `DEEPSEEK_API_KEY`，且 8081 实例未重启到最新代码 |
+| 真机集全量 | **2026-09-30 晚已跑通（33/33 覆盖）**：8088 新构建 + Key → **32/32 通过**，GQ-25 在 8089 关知识层实例单独 PASS；详见 §4.1「真机集首次跑通」。原 v1.0 状态「未跑：本机没有 `DEEPSEEK_API_KEY`，且 8081 实例未重启到最新代码」已被本次复验取代 |
+| 基线 diff（真机） | 对 before-fix 基线：新增失败 **0**、新修复 **4**（GQ-10/20/24/29）、仍失败 0；`passRate` 0.875 → **1** |
 | 单一事实源 | 报告内嵌 `single-source-of-truth --format=json` 输出（`qualityInventory.available=true`）；`--check` 当前 **1 项不一致**：MCP 白名单 12 ≠ Java 只读 `@Tool` 13 —— 原因是**第三阶段新增的 `queryBusinessKnowledge` 未进 `tools/business-mcp/src/catalog.ts` 白名单**（该文件属 T5-01，不在本任务范围，已上报 Lead 裁决） |
 
 > **数据隔离**：live 集开跑前先校验 `/api/analysis/overview`（订单量下限 + 数据区间），

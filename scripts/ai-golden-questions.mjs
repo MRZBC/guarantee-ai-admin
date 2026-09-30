@@ -543,6 +543,41 @@ async function tokenFor(user, secret) {
   return tokenCache.get(key)
 }
 
+/**
+ * 回读某会话的工具调用明细（**服务端权威记录**）。
+ *
+ * 为什么不能只看 SSE：`tool_call` 事件是按权限下发的——没有 `ai:debug:view` 的账号
+ * 在流里**一个工具事件都收不到**（AiChatService#stream 里 filter 掉了，防内部工具名外泄）。
+ * 黄金问题集 GQ-24 恰恰要求用只读账号（VIEWER）提问，于是"工具确实调了"被记成"0 次调用"，
+ * 报告给出"模型又退回旧工具蛮力枚举"的**错误结论**（2026-09-30 实测：流里 0 个事件，
+ * 库里 queryBusinessKnowledge/SUCCESS 一条，rounds=2）。
+ *
+ * `/api/ai/tool-calls/{conversationId}` 只要 `ai:chat` 权限且校验会话归属，普通账号可读自己的会话。
+ *
+ * @returns {Promise<Array|null>} 成功返回工具调用数组（可能为空）；失败返回 null（调用方回落到 SSE 事件）
+ */
+async function fetchPersistedToolCalls(token, conversationId) {
+  if (conversationId == null) return null
+  // 空结果重试一次：done 事件与工具明细落库之间可能差一拍（极短竞态）
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const res = await fetch(`${BASE}/api/ai/tool-calls/${conversationId}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
+      })
+      if (!res.ok) return null
+      const rows = (await res.json())?.data
+      if (!Array.isArray(rows)) return null
+      if (rows.length > 0 || attempt === 1) {
+        return rows.map((row) => ({ name: row.toolName, status: row.status, durationMs: row.durationMs }))
+      }
+    } catch {
+      return null
+    }
+    await sleep(250)
+  }
+  return []
+}
+
 /** 调一次对话，解析 SSE，返回统计与最终正文（正确处理 reset 语义）。 */
 async function ask(token, question) {
   const started = Date.now()
@@ -567,9 +602,14 @@ async function ask(token, question) {
   let rounds = 0
   let done = false
   let errorMessage = null
+  let conversationId = null
 
   const handle = (event, data) => {
     switch (event) {
+      case 'meta':
+        // 后续用它回读服务端权威的工具调用明细（见 fetchPersistedToolCalls）
+        conversationId = data?.conversationId ?? null
+        break
       case 'delta':
         text += data?.content ?? ''
         break
@@ -626,6 +666,10 @@ async function ask(token, question) {
     /* 已结束 */
   }
 
+  // 工具调用以服务端记录为准；拿不到才回落到 SSE 事件（见 fetchPersistedToolCalls 的说明）
+  const persistedTools = await fetchPersistedToolCalls(token, conversationId)
+  const effectiveTools = persistedTools ?? toolCalls
+
   return {
     failed: false,
     text,
@@ -633,10 +677,10 @@ async function ask(token, question) {
     // 口径行/数据摘要由服务端生成、内容直接取自工具返回值，那里出现编码属于
     // dataSource 的问题（例如 GQ-10 抓到的「险种类别：TENDER」），不是模型违规。
     prose: proseOf(text),
-    toolCalls,
+    toolCalls: effectiveTools,
     // 轮次口径与前端一致：每发生一次 reset 代表"有一轮带工具调用的前言被丢弃"，
     // 再加最后一轮正文；没有工具调用时就是 1 轮
-    rounds: toolCalls.length === 0 ? 0 : rounds + 1,
+    rounds: effectiveTools.length === 0 ? 0 : rounds + 1,
     done,
     errorMessage,
     elapsedMs: Date.now() - started

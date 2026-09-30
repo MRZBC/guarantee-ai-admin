@@ -1,9 +1,9 @@
 {
   "schema": "ai-golden-questions/report@1",
-  "generatedAt": "2026-09-30T11:09:19.350Z",
+  "generatedAt": "2026-09-30T10:29:59.957Z",
   "suite": "live",
   "target": {
-    "baseUrl": "http://localhost:8088",
+    "baseUrl": "http://localhost:8081",
     "user": "admin",
     "deterministicIt": "EvaluationDeterministicIT"
   },
@@ -12,38 +12,38 @@
     "detail": "总订单量 150000（投标 100000 / 履约 50000），数据区间 2025-01-01 ~ 2026-09-30（seed 未自动校验：无 HTTP 出口）"
   },
   "status": {
-    "live": "partial",
+    "live": "assertion-failed",
     "deterministic": "not-run",
     "detail": {
-      "live": "1 条未跑（其中环境类 0）",
+      "live": "4 条断言失败",
       "deterministic": null
     }
   },
   "totals": {
     "total": 33,
-    "passed": 32,
-    "failed": 0,
+    "passed": 28,
+    "failed": 4,
     "notRun": 1
   },
   "metrics": {
-    "passRate": 1,
+    "passRate": 0.875,
     "dataSourceConsistencyRate": 1,
     "citationCompletenessRate": 1,
     "forbiddenTermViolations": 0,
     "rounds": {
       "min": 0,
-      "max": 2,
-      "avg": 1.7
+      "max": 4,
+      "avg": 1.8
     },
     "elapsedMs": {
-      "min": 1593,
-      "max": 11088,
-      "avg": 3513.9
+      "min": 1065,
+      "max": 16385,
+      "avg": 3602.9
     },
     "toolCalls": {
       "min": 0,
       "max": 8,
-      "avg": 1.3
+      "avg": 1.4
     }
   },
   "categories": {
@@ -102,8 +102,8 @@
       ],
       "toolCalls": 8,
       "rounds": 2,
-      "elapsedMs": 11088,
-      "answerChars": 8039,
+      "elapsedMs": 16385,
+      "answerChars": 8803,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -126,8 +126,8 @@
       ],
       "toolCalls": 4,
       "rounds": 2,
-      "elapsedMs": 5399,
-      "answerChars": 2874,
+      "elapsedMs": 5125,
+      "answerChars": 2858,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -148,8 +148,8 @@
       ],
       "toolCalls": 2,
       "rounds": 2,
-      "elapsedMs": 6074,
-      "answerChars": 2778,
+      "elapsedMs": 5788,
+      "answerChars": 2905,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -169,8 +169,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 3153,
-      "answerChars": 1159,
+      "elapsedMs": 3453,
+      "answerChars": 1226,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -190,8 +190,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 5636,
-      "answerChars": 2135,
+      "elapsedMs": 4367,
+      "answerChars": 1982,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -211,8 +211,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 4188,
-      "answerChars": 1592,
+      "elapsedMs": 3478,
+      "answerChars": 1392,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -232,8 +232,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 2445,
-      "answerChars": 468,
+      "elapsedMs": 2047,
+      "answerChars": 481,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -253,8 +253,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 2850,
-      "answerChars": 1168,
+      "elapsedMs": 2874,
+      "answerChars": 1170,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -275,8 +275,8 @@
       ],
       "toolCalls": 2,
       "rounds": 2,
-      "elapsedMs": 2970,
-      "answerChars": 720,
+      "elapsedMs": 3029,
+      "answerChars": 845,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -289,15 +289,19 @@
       "id": "GQ-10",
       "category": "系统域回归",
       "question": "「投标保函（标准）」这个险种现在是启用还是停用？基准费率是多少？",
-      "status": "pass",
-      "reasons": [],
+      "status": "fail",
+      "reasons": [
+        "工具轮次 4，超过上限 3"
+      ],
       "tools": [
+        "queryInsuranceType:SUCCESS",
+        "queryInsuranceType:SUCCESS",
         "queryInsuranceType:SUCCESS"
       ],
-      "toolCalls": 1,
-      "rounds": 2,
-      "elapsedMs": 2294,
-      "answerChars": 226,
+      "toolCalls": 3,
+      "rounds": 4,
+      "elapsedMs": 3469,
+      "answerChars": 380,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -314,12 +318,12 @@
       "reasons": [],
       "tools": [
         "queryBusinessKnowledge:SUCCESS",
-        "queryInsuranceType:SUCCESS"
+        "queryOrderDistribution:SUCCESS"
       ],
       "toolCalls": 2,
       "rounds": 2,
-      "elapsedMs": 4143,
-      "answerChars": 801,
+      "elapsedMs": 4002,
+      "answerChars": 1669,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -339,8 +343,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 2713,
-      "answerChars": 417,
+      "elapsedMs": 2465,
+      "answerChars": 502,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -358,8 +362,8 @@
       "tools": [],
       "toolCalls": 0,
       "rounds": 0,
-      "elapsedMs": 2855,
-      "answerChars": 654,
+      "elapsedMs": 2795,
+      "answerChars": 670,
       "score": {
         "dataSourceLineExpected": false,
         "dataSourceLinePresent": false,
@@ -377,8 +381,8 @@
       "tools": [],
       "toolCalls": 0,
       "rounds": 0,
-      "elapsedMs": 1593,
-      "answerChars": 183,
+      "elapsedMs": 1065,
+      "answerChars": 201,
       "score": {
         "dataSourceLineExpected": false,
         "dataSourceLinePresent": false,
@@ -396,8 +400,8 @@
       "tools": [],
       "toolCalls": 0,
       "rounds": 0,
-      "elapsedMs": 1882,
-      "answerChars": 281,
+      "elapsedMs": 1854,
+      "answerChars": 358,
       "score": {
         "dataSourceLineExpected": false,
         "dataSourceLinePresent": false,
@@ -417,11 +421,11 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 3813,
-      "answerChars": 946,
+      "elapsedMs": 3181,
+      "answerChars": 973,
       "score": {
         "dataSourceLineExpected": false,
-        "dataSourceLinePresent": true,
+        "dataSourceLinePresent": false,
         "knowledgeSourceExpected": true,
         "knowledgeSourcePresent": true,
         "forbiddenViolations": 0
@@ -438,8 +442,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 3228,
-      "answerChars": 854,
+      "elapsedMs": 3168,
+      "answerChars": 706,
       "score": {
         "dataSourceLineExpected": false,
         "dataSourceLinePresent": false,
@@ -459,8 +463,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 3017,
-      "answerChars": 671,
+      "elapsedMs": 3035,
+      "answerChars": 708,
       "score": {
         "dataSourceLineExpected": false,
         "dataSourceLinePresent": false,
@@ -480,8 +484,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 3649,
-      "answerChars": 819,
+      "elapsedMs": 3236,
+      "answerChars": 871,
       "score": {
         "dataSourceLineExpected": false,
         "dataSourceLinePresent": false,
@@ -494,16 +498,20 @@
       "id": "GQ-20",
       "category": "知识·混合（定义 + 统计）",
       "question": "保额区间的规则是怎么规定的？另外，平台上「投标保函（标准）」现在配置的区间是多少？",
-      "status": "pass",
-      "reasons": [],
+      "status": "fail",
+      "reasons": [
+        "工具轮次 4，超过上限 3"
+      ],
       "tools": [
         "queryBusinessKnowledge:SUCCESS",
+        "queryInsuranceType:SUCCESS",
+        "queryInsuranceType:SUCCESS",
         "queryInsuranceType:SUCCESS"
       ],
-      "toolCalls": 2,
-      "rounds": 2,
-      "elapsedMs": 3199,
-      "answerChars": 823,
+      "toolCalls": 4,
+      "rounds": 4,
+      "elapsedMs": 4720,
+      "answerChars": 1089,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -524,8 +532,8 @@
       ],
       "toolCalls": 2,
       "rounds": 2,
-      "elapsedMs": 3030,
-      "answerChars": 706,
+      "elapsedMs": 3033,
+      "answerChars": 717,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -545,8 +553,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 2817,
-      "answerChars": 315,
+      "elapsedMs": 2370,
+      "answerChars": 295,
       "score": {
         "dataSourceLineExpected": false,
         "dataSourceLinePresent": false,
@@ -566,8 +574,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 2597,
-      "answerChars": 197,
+      "elapsedMs": 1979,
+      "answerChars": 271,
       "score": {
         "dataSourceLineExpected": false,
         "dataSourceLinePresent": false,
@@ -580,15 +588,15 @@
       "id": "GQ-24",
       "category": "知识·越权（只读用户不得看到审计口径）",
       "question": "操作审计记录里敏感字段是怎么记录的？",
-      "status": "pass",
-      "reasons": [],
-      "tools": [
-        "queryBusinessKnowledge:SUCCESS"
+      "status": "fail",
+      "reasons": [
+        "没有成功调用必需的工具 queryBusinessKnowledge（说明模型没走新能力，可能又退回旧工具蛮力枚举）"
       ],
-      "toolCalls": 1,
-      "rounds": 2,
-      "elapsedMs": 2779,
-      "answerChars": 536,
+      "tools": [],
+      "toolCalls": 0,
+      "rounds": 0,
+      "elapsedMs": 2430,
+      "answerChars": 478,
       "score": {
         "dataSourceLineExpected": false,
         "dataSourceLinePresent": false,
@@ -623,8 +631,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 2185,
-      "answerChars": 421,
+      "elapsedMs": 2931,
+      "answerChars": 488,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -644,8 +652,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 3203,
-      "answerChars": 1126,
+      "elapsedMs": 3177,
+      "answerChars": 1116,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -665,8 +673,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 3423,
-      "answerChars": 1398,
+      "elapsedMs": 3343,
+      "answerChars": 1419,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -679,15 +687,18 @@
       "id": "GQ-29",
       "category": "交叉/趋势/分布",
       "question": "2026 年第二季度浙江省和江苏省的投标订单量分别是多少？哪个更高？",
-      "status": "pass",
-      "reasons": [],
-      "tools": [
-        "queryOrderDistribution:SUCCESS"
+      "status": "fail",
+      "reasons": [
+        "没有成功调用必需的工具 queryOrderDistribution（说明模型没走新能力，可能又退回旧工具蛮力枚举）"
       ],
-      "toolCalls": 1,
+      "tools": [
+        "queryOrderSummary:SUCCESS",
+        "queryOrderSummary:SUCCESS"
+      ],
+      "toolCalls": 2,
       "rounds": 2,
-      "elapsedMs": 3235,
-      "answerChars": 1120,
+      "elapsedMs": 2337,
+      "answerChars": 804,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -705,8 +716,8 @@
       "tools": [],
       "toolCalls": 0,
       "rounds": 0,
-      "elapsedMs": 1712,
-      "answerChars": 356,
+      "elapsedMs": 1910,
+      "answerChars": 413,
       "score": {
         "dataSourceLineExpected": false,
         "dataSourceLinePresent": false,
@@ -724,8 +735,8 @@
       "tools": [],
       "toolCalls": 0,
       "rounds": 0,
-      "elapsedMs": 2487,
-      "answerChars": 521,
+      "elapsedMs": 3166,
+      "answerChars": 291,
       "score": {
         "dataSourceLineExpected": false,
         "dataSourceLinePresent": false,
@@ -745,8 +756,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 5494,
-      "answerChars": 3266,
+      "elapsedMs": 5653,
+      "answerChars": 3271,
       "score": {
         "dataSourceLineExpected": true,
         "dataSourceLinePresent": true,
@@ -766,8 +777,8 @@
       ],
       "toolCalls": 1,
       "rounds": 2,
-      "elapsedMs": 3295,
-      "answerChars": 635,
+      "elapsedMs": 3429,
+      "answerChars": 958,
       "score": {
         "dataSourceLineExpected": false,
         "dataSourceLinePresent": false,
@@ -778,57 +789,83 @@
     }
   ],
   "diff": {
-    "baselineGeneratedAt": "2026-09-30T10:29:59.957Z",
+    "baselineGeneratedAt": "2026-09-29T19:26:51.243Z",
     "baselineSuite": "live",
-    "newFailures": [],
-    "fixed": [
+    "newFailures": [
       {
         "id": "GQ-10",
-        "category": "系统域回归"
+        "category": "系统域回归",
+        "reasons": [
+          "工具轮次 4，超过上限 3"
+        ]
       },
       {
         "id": "GQ-20",
-        "category": "知识·混合（定义 + 统计）"
+        "category": "知识·混合（定义 + 统计）",
+        "reasons": [
+          "工具轮次 4，超过上限 3"
+        ]
       },
       {
         "id": "GQ-24",
-        "category": "知识·越权（只读用户不得看到审计口径）"
+        "category": "知识·越权（只读用户不得看到审计口径）",
+        "reasons": [
+          "没有成功调用必需的工具 queryBusinessKnowledge（说明模型没走新能力，可能又退回旧工具蛮力枚举）"
+        ]
       },
       {
         "id": "GQ-29",
-        "category": "交叉/趋势/分布"
+        "category": "交叉/趋势/分布",
+        "reasons": [
+          "没有成功调用必需的工具 queryOrderDistribution（说明模型没走新能力，可能又退回旧工具蛮力枚举）"
+        ]
       }
     ],
+    "fixed": [],
     "stillFailing": [],
-    "newQuestions": [],
-    "metricChanges": [
-      {
-        "metric": "passRate",
-        "before": 0.875,
-        "after": 1,
-        "worse": false
-      },
-      {
-        "metric": "rounds.avg",
-        "before": 1.8,
-        "after": 1.7,
-        "worse": false
-      },
-      {
-        "metric": "elapsedMs.avg",
-        "before": 3602.9,
-        "after": 3513.9,
-        "worse": false
-      }
+    "newQuestions": [
+      "GQ-01",
+      "GQ-02",
+      "GQ-03",
+      "GQ-04",
+      "GQ-05",
+      "GQ-06",
+      "GQ-07",
+      "GQ-08",
+      "GQ-09",
+      "GQ-10",
+      "GQ-11",
+      "GQ-12",
+      "GQ-13",
+      "GQ-14",
+      "GQ-15",
+      "GQ-17",
+      "GQ-18",
+      "GQ-19",
+      "GQ-20",
+      "GQ-21",
+      "GQ-22",
+      "GQ-23",
+      "GQ-24",
+      "GQ-25",
+      "GQ-26",
+      "GQ-27",
+      "GQ-28",
+      "GQ-29",
+      "GQ-30",
+      "GQ-31",
+      "GQ-32",
+      "GQ-33"
     ],
-    "degraded": false
+    "metricChanges": [],
+    "degraded": true
   },
   "qualityInventory": {
     "available": true,
     "degraded": false,
     "source": "scripts/single-source-of-truth.mjs",
     "data": {
-      "generatedAt": "2026-09-30T11:09:19.117Z",
+      "generatedAt": "2026-09-30T10:29:59.595Z",
       "generator": "scripts/single-source-of-truth.mjs",
       "requirement": "REQ-MCP-12 / AC-MCP-12",
       "tests": {
@@ -1239,17 +1276,6 @@
               "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.DataSourceTextTest.xml",
               "kind": "surefire",
               "mtimeMs": 1790715708406.699
-            },
-            {
-              "suite": "com.guarantee.ai.tool.InsuranceTypeQueryToolTest",
-              "tests": 4,
-              "failures": 0,
-              "errors": 0,
-              "skipped": 0,
-              "timeSeconds": 1.853,
-              "file": "guarantee-ai/target/surefire-reports/TEST-com.guarantee.ai.tool.InsuranceTypeQueryToolTest.xml",
-              "kind": "surefire",
-              "mtimeMs": 1790766361475.4395
             },
             {
               "suite": "com.guarantee.ai.tool.MyProposalsQueryToolTest",
@@ -1682,13 +1708,13 @@
             }
           ],
           "totals": {
-            "tests": 600,
+            "tests": 596,
             "failures": 0,
             "errors": 0,
             "skipped": 0,
-            "timeSeconds": 27.674999999999997,
-            "classes": 76,
-            "newnessMs": 1790766361475.4395
+            "timeSeconds": 25.822000000000003,
+            "classes": 75,
+            "newnessMs": 1790715713499.7886
           }
         },
         "integration": {
@@ -1771,10 +1797,10 @@
               "failures": 0,
               "errors": 0,
               "skipped": 0,
-              "timeSeconds": 10.965,
+              "timeSeconds": 10.29,
               "file": "guarantee-web/target/failsafe-reports/TEST-com.guarantee.web.ai.EvaluationDeterministicIT.xml",
               "kind": "failsafe",
-              "mtimeMs": 1790764303000.3718
+              "mtimeMs": 1790737562990.0632
             },
             {
               "suite": "com.guarantee.web.ai.KnowledgeDisabledIT",
@@ -2013,17 +2039,17 @@
             "failures": 0,
             "errors": 0,
             "skipped": 0,
-            "timeSeconds": 62.330000000000005,
+            "timeSeconds": 61.655,
             "classes": 28,
-            "newnessMs": 1790764303000.3718
+            "newnessMs": 1790737562990.0632
           }
         },
         "total": {
-          "tests": 714,
+          "tests": 710,
           "failures": 0,
           "errors": 0,
           "skipped": 0,
-          "classes": 104
+          "classes": 103
         },
         "dedup": {
           "droppedSuites": 23,
@@ -2193,8 +2219,8 @@
             }
           ]
         },
-        "newestReportAt": "2026-09-30T11:06:01.475Z",
-        "newestSourceAt": "2026-09-30T11:04:55.439Z",
+        "newestReportAt": "2026-09-30T03:06:02.990Z",
+        "newestSourceAt": "2026-09-29T20:52:20.804Z",
         "stale": false
       },
       "evaluation": {

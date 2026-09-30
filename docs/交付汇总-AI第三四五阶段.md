@@ -7,6 +7,7 @@
 | 需求真源 | `docs/REQ-第三阶段-RAG业务知识.md` / `docs/REQ-第四阶段-AI配置与确认审计.md` / `docs/REQ-第五阶段-MCP评测与可观测.md`（三份均 **v1.1**，§0 决策按用户确认全部照建议执行） |
 | 独立验证 | `docs/TEST-第三阶段-验证报告.md`、`docs/TEST-第四阶段-验证报告.md`（含 v1.1 复验 + v1.2 最终确认）、`docs/TEST-第五阶段与全量回归-验证报告.md`（含 v1.1 复验） |
 | 最终结论 | **29 成立 / 0 不成立 / 4 无法验证**（4 条全部因本机无 `DEEPSEEK_API_KEY`） |
+| 最终结论（2026-09-30 晚更新） | **34 条 AC 全部成立 / 0 不成立 / 0 无法验证** —— 原 4 条「无法验证」随 `DEEPSEEK_API_KEY` 就位解除阻塞：真机黄金问题集 **32/32 PASS + GQ-25 在关知识层实例 PASS（33/33 题全覆盖）**。详见 §七 |
 
 ---
 
@@ -105,7 +106,7 @@ mvn -B verify
 | 数据/运维 | `ai_operation_audit` 分区名与真实 `TO_DAYS` 边界差一年（归档脚本已按真实上界规避，DRY-RUN 默认）；`ai_config_item` 2 行历史 NULL（无行为影响） |
 | 本期未接线 | `model.max-tokens` / `model.timeout` / `model.max-retries`（页面已标注） |
 | 后续优化候选 | 门禁结果按 `contentHash + TTL` 复用；`AiConfigCatalog` 增加 `wired` 标志（现为前端清单防护） |
-| 环境受限 | 真机黄金问题集 33 条与 `ai_tokens`/`ai_proposals` 真机指标：**缺 `DEEPSEEK_API_KEY`** |
+| 环境受限（**2026-09-30 晚部分解除**） | 真机黄金问题集 33 条：**已跑通**（32 PASS + GQ-25 单独 PASS，见 §七）；`ai_tokens`/`ai_proposals` 真机指标：本轮真机集产生了真实轮次数据（`ai_turn_metric`/`ai_tool_call` 均有写入，如 viewer 会话 `rounds=2/tool_calls=1`），但未按该指标口径单独核对 |
 | 工程教训 | 临时 8088 实例会锁 fat jar 导致 `repackage` 失败（本次 3 次，约定：先 package 再起、用完立即停并复核端口与 jar） |
 
 ---
@@ -135,3 +136,40 @@ java -jar guarantee-web/target/guarantee-ai-admin.jar --server.port=8088
 
 > 真机黄金问题集（33 条）需要 `DEEPSEEK_API_KEY`：`node scripts/ai-golden-questions.mjs --suite=live`
 > —— **没有 Key 时输出"未跑（环境问题）"，不是失败。**
+> **2026-09-30 晚该 Key 已就位，33 条已全部跑通**（含 GQ-25 的关知识层实例），见 §七。
+
+---
+
+## 七、2026-09-30 晚 · 真机集复验 + 三项缺陷修复
+
+### 7.1 复验结论
+
+| 项 | 结果 |
+|---|---|
+| 真机黄金问题集（33 条） | **32/32 PASS** + GQ-25 在 `--guarantee.ai.knowledge.enabled=false` 实例单独 **PASS** = **33/33 全覆盖**（原「4 条无法验证」全部转成立） |
+| 基线 diff | 新增失败 **0**、**新修复 4**（GQ-10 / GQ-20 / GQ-24 / GQ-29）、仍失败 0；`passRate 0.875 → 1`、`rounds.avg 1.8 → 1.7` |
+| 发布门禁（确定性集） | `mvn -B -pl guarantee-web -Dit.test=EvaluationDeterministicIT verify` → **BUILD SUCCESS** + IT **12/12** + 脚本 exit 0 |
+| 单测 | 新增 `InsuranceTypeQueryToolTest` **4/4** |
+| 全量验收（`mvn -B verify`，本次） | **BUILD SUCCESS**：单测 **600**（common 7 / system 120 / auth 28 / order 2 / analysis 6 / **guarantee-ai 426** / web 11）、集成 **114**（web 113 / analysis 1）、合计 **714**，**0 失败**；`node scripts/single-source-of-truth.mjs --check` **exit 0**。§一 的 596/114/710 是**冻结快照**口径，差额 4 = 本轮新增的 `InsuranceTypeQueryToolTest` |
+| 阶段三态汇总（更新口径） | 阶段三 **成立 9 / 不成立 0 / 无法验证 0**（AC-RAG-01~09）；阶段四 **12 / 0 / 0**（AC-CFG-01~12）；阶段五 **13 / 0 / 0**（AC-MCP-01~13）→ **合计 34 成立 / 0 不成立 / 0 无法验证**。<br>**口径更正**：本节曾写"阶段四 11 / 合计 33"，是把 AC-CFG-10 消解与 AC-CFG-06 改判两次变更**少算一次**；阶段四报告正文逐条列的是 12 条（01/02/03/04/05/06/07/08/09/10/11/12），以 **34** 为准。 |
+
+证据：`reports/eval-live-2026-09-30.json|md`（目标 8088）、`reports/eval-live-gq25-2026-09-30.json`（目标 8089）、
+`reports/eval-deterministic-2026-09-30.json|md`；历史报告归档在 `reports/archive/`
+（`*-notrun` = 缺 Key 版，`*-before-fix` = 4 条失败版）。
+
+### 7.2 本轮修复的三项缺陷（均为既有实现/工具问题，非本轮引入）
+
+| # | 缺陷 | 影响 | 修法 |
+|---|---|---|---|
+| 8 | `queryInsuranceType` 按**险种名称**搜索恒返回 0 条：同一个关键字被同时写进 `keyword`/`typeName`/`typeCode`，而 `InsuranceTypeMapper.xml#queryWhere` 三者是**并列 AND** → SQL 等价于 `type_name LIKE %X% AND type_code LIKE %X%`，恒假 | 助手问「某险种现在是什么状态/费率」时先查空、换短词仍空、只能兜底 `category` → 白烧 3 次调用 4 轮（**GQ-10 / GQ-20 的失败根因**）；线上所有"按险种名提问"都会多绕两圈 | 工具改为只设 `keyword`（Mapper 里 `keyword` 本身就是"名称 OR 编码"模糊词）；新增 `InsuranceTypeQueryToolTest` 4 条，含"`typeName`/`typeCode` 必须留空"的防线断言 |
+| 9 | 评测运行器把"只读账号**确实调了**工具"记成 0 次：`tool_call` SSE 事件按 `ai:debug:view` 权限下发，VIEWER 账号收不到 | GQ-24 **假失败**（实质断言"不得泄漏 `KB-SYSTEM-0010`"其实通过；库里 `queryBusinessKnowledge/SUCCESS`、`rounds=2`） | 运行器回读 `GET /api/ai/tool-calls/{conversationId}`（只需 `ai:chat` + 会话归属校验），SSE 事件仅作回落 |
+| 10 | 提示词规则 43 只点名"贡献最大 / 变化最大"，「A 和 B **分别是多少 / 哪个更高**」这类**多对象对比**没有归口 | 模型把两个省拆成两次 `queryOrderSummary`（结论虽对，但调用次数随对象数增长）→ GQ-29 失败 | 规则 43 增补触发词与反例：多对象对比 → **一次** `queryOrderDistribution`（`dimension=REGION` + `regionCode` 过滤）；`queryOrderSummary` 只用于全局总量/单一对象 |
+
+详见 `docs/TEST-第三阶段-验证报告.md` §10（缺陷 8/9/10）。
+
+### 7.3 运维提示（本轮踩到的两个坑）
+
+- **8081 是用户 IDEA 实例，仍是旧代码**：本轮修复只在临时实例上验证过，需**从 IDEA 重启**才在 8081 生效。
+- 临时实例会锁 fat jar：**先 `mvn package` 再起实例**，用完立即停（本轮 8088/8089 已按此执行并复核端口释放）。
+- **门禁跑 `-pl guarantee-web` 时，兄弟模块从 `~/.m2` 取**：改了 `guarantee-ai` 必须先 `mvn install`，
+  否则门禁验的是旧 jar（本轮踩到过一次：第一次重跑验的是 03:54 的旧 jar，结果已作废并重跑）。

@@ -285,8 +285,41 @@
 
 > `.agent/` 已在 `.gitignore` 中；上述脚本与日志仅作验证取证，不属于交付物。
 
-## 10. 变更记录
+## 10. 复验记录（2026-09-30 晚）：真机集阻塞解除，原 4 条「无法验证」转成立
+
+> **前置条件变化**：本机 `DEEPSEEK_API_KEY`（Windows 用户级环境变量，`HKCU\Environment`）已就位且实测有效
+> （直连 `api.deepseek.com` 成功；8081/8088 实例的 `model.api-key-ref.configured=true`）。
+> 真机黄金问题集**首次真实跑通**：33 条中 **32 条 PASS**，唯一未跑项 GQ-25 按设计在
+> `--guarantee.ai.knowledge.enabled=false` 的实例上**单独跑通**（证据 `reports/eval-live-gq25-2026-09-30.json`）。
+> 主报告：`reports/eval-live-2026-09-30.json|md`（目标 `http://localhost:8088`，新构建、带 Key）。
+> 本节只补"原先未跑"的部分，§1~§9 的历史结论不改。
+
+| 原未跑 / 无法验证项 | 本次覆盖方式 | 结果 |
+|---|---|---|
+| AC-RAG-01「给出正确区间」 | GQ-20（保额区间知识 + 险种配置，同轮两类工具） | **PASS** |
+| AC-RAG-02「提示词迁出该段后仍能答对」 | GQ-16 / GQ-17 / GQ-18 / GQ-19（知识·定义） | **PASS** |
+| AC-RAG-03「空结果时模型如实说未收录」 | GQ-22 / GQ-23 | **PASS** |
+| AC-RAG-04「两类页脚同轮都在」 | GQ-20 / GQ-21（知识 + 统计） | **PASS** |
+| AC-RAG-05 子项「正文不出现工具名/参数名/内部编码」 | 全量 33 条 `forbiddenViolations = 0`（`FORBIDDEN_TECH_TERMS` 逐条检查） | **PASS** |
+| AC-RAG-07 子项「明确说明知识层不可用」 | GQ-25（8089 关知识层实例，`GOLDEN_KNOWLEDGE_DISABLED=1`） | **PASS** |
+| AC-RAG-09 子项「阶段二 GQ-01~15 真机复跑」 | 同一份报告 GQ-01~GQ-15 全部 PASS | **PASS** |
+
+**口径声明（与原报告不冲突）**：§1 的「成立 5 / 不成立 0 / 无法验证 4」是 **v1.0 快照**下的三态。
+按本次证据，这 4 条 AC 的阻塞条件（缺 Key）已解除、对应断言全部通过 → **v1.1 口径：成立 9 / 不成立 0 / 无法验证 0**。
+其中 AC-RAG-01 的「区间数值与页面一致」仍是**结构性断言**（脚本校验"知识来源行 + 口径行 + 关键词"，
+不做数值逐字比对），数值一致性沿用 §3.1 的人工核对方法——这一点不因本次复验而升级。
+
+### 本次复验发现并修复的 3 项（均为既有实现/工具问题，非本次引入）
+
+| # | 问题 | 影响 | 处置 | 证据 |
+|---|---|---|---|---|
+| 8 | `queryInsuranceType` 按**险种名称**搜索恒返回 0 条：工具把同一个关键字同时写进 `keyword` / `typeName` / `typeCode`，而 `InsuranceTypeMapper.xml#queryWhere` 三者是**并列 AND** → SQL 等价于 `type_name LIKE %X% AND type_code LIKE %X%`，名称关键字永远不可能出现在编码里 | 助手问「某险种现在是什么状态/费率」时先查空 → 换短词仍空 → 只能兜底 `category=TENDER` 才拿到数据，白烧 3 次调用 4 轮（**GQ-10 / GQ-20 的直接失败原因**）；线上任何"按险种名提问"都会多绕两圈 | 工具改为**只设 `keyword`**（Mapper 里 `keyword` 本身就是"名称 OR 编码"模糊词）；新增 `InsuranceTypeQueryToolTest` 4 条，含"`typeName`/`typeCode` 必须留空"的防线断言 | HTTP 直测：`typeName=X&typeCode=X` → `total=0`，`keyword=X` → `total=1`；修后 GQ-10 / GQ-20 PASS，`rounds.avg` 1.8 → 1.7 |
+| 9 | 评测运行器把"只读账号**确实调了**工具"记成 0 次：`tool_call` SSE 事件按 `ai:debug:view` 权限下发，VIEWER 账号收不到 → GQ-24 被误判为"模型退回旧工具蛮力枚举" | 真机报告出现**假失败**（实质断言"不得泄漏 `KB-SYSTEM-0010`"其实通过，库里 `queryBusinessKnowledge/SUCCESS`、`rounds=2`） | 运行器改为回读 `GET /api/ai/tool-calls/{conversationId}`（只需 `ai:chat` + 会话归属校验），SSE 事件仅作回落 | 修后 GQ-24 PASS |
+| 10 | 提示词路由缺口：「A 和 B **分别是多少 / 哪个更高**」这类**多对象对比**没有明确归口（规则 43 原文只点名"贡献最大 / 变化最大"） | 模型把两个省拆成两次 `queryOrderSummary`（结论虽对，但调用次数随对象数增长）→ GQ-29 失败 | 规则 43 增补触发词与反例：多对象对比 → **一次** `queryOrderDistribution`（`dimension=REGION` + `regionCode` 过滤），并写明 `queryOrderSummary` 只用于全局总量/单一对象 | 修后 GQ-29 PASS；确定性门禁 `BUILD SUCCESS`、`EvaluationDeterministicIT` 12/12 |
+
+## 11. 变更记录
 
 | 日期 | 版本 | 说明 |
 |---|---|---|
 | 2026-09-30 | v1.0 | 首版：AC-RAG-01~09 逐条三态（成立 5 / 不成立 0 / 无法验证 4）、TEST-RAG-01~08 状态、对抗式检查、事实声明核对、缺陷与处置、未跑项清单。验证基于 HEAD `d419b8e`，真机证据取自 8088 临时实例与 MySQL 3307 只读查询；真机黄金问题集 25 条未跑（缺 `DEEPSEEK_API_KEY`）。 |
+| 2026-09-30 | v1.1 | 复验：`DEEPSEEK_API_KEY` 就位，真机黄金问题集跑通（32 PASS + GQ-25 在关知识层实例单独 PASS）→ **原 4 条「无法验证」转成立（成立 9 / 不成立 0 / 无法验证 0）**。同步记录本次发现并修复的 3 项：险种名称搜索恒 0 条（缺陷 8）、只读账号工具记账假失败（缺陷 9）、多对象对比路由缺口（缺陷 10）。证据 `reports/eval-live-2026-09-30.json\|md`、`reports/eval-live-gq25-2026-09-30.json`。 |
