@@ -35,6 +35,8 @@ public record EnterpriseAnalysisToolResult(
         String endDate,
         /** 回显的区域编码（未过滤时为 null） */
         String regionCode,
+        /** 占比基线：ORDER_COUNT（订单量）——DISTRIBUTION 模式下 share = 该组订单量占该维度合计的百分比 */
+        String shareBase,
         /** 分组明细或排行明细，按订单量/保额倒序 */
         List<EnterpriseItem> items,
         ToolResultMeta meta) {
@@ -50,6 +52,8 @@ public record EnterpriseAnalysisToolResult(
             long orderCount,
             BigDecimal guaranteeAmount,
             BigDecimal premiumAmount,
+            /** 服务端算好的订单量占比（百分比 2 位小数；分类合计=100.00）。模型必须直接引用，不要自己除 */
+            BigDecimal share,
             /** 行业（仅 TOP 有意义） */
             String industry,
             /** 等级 AAA/AA/A/BBB（仅 TOP 有意义） */

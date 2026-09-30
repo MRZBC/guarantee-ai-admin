@@ -125,7 +125,7 @@ public class ProjectAnalysisTool {
                 items.add(new ProjectAnalysisToolResult.ProjectItem(
                         row.getGroupCode(), row.getGroupName(), row.getProjectCount(),
                         row.getOrderCount(), zeroIfNull(row.getGuaranteeAmount()),
-                        zeroIfNull(row.getPremiumAmount()), row.getGroupCode(), row.getGroupName()));
+                        zeroIfNull(row.getPremiumAmount()), zeroIfNull(row.getShare()), row.getGroupCode(), row.getGroupName()));
             }
         } else {
             List<ProjectRankVO> rows = orderAnalysisService.projectTop(criteria, size);
@@ -134,7 +134,7 @@ public class ProjectAnalysisTool {
                 items.add(new ProjectAnalysisToolResult.ProjectItem(
                         row.getProjectCode(), row.getProjectName(), 0L,
                         row.getOrderCount(), zeroIfNull(row.getGuaranteeAmount()),
-                        zeroIfNull(row.getPremiumAmount()), row.getProjectType(), row.getRegionName()));
+                        zeroIfNull(row.getPremiumAmount()), BigDecimal.ZERO, row.getProjectType(), row.getRegionName()));
             }
         }
 
@@ -152,7 +152,7 @@ public class ProjectAnalysisTool {
                 start == null ? null : start.toString(),
                 end == null ? null : end.toString(),
                 regionCode == null || regionCode.isBlank() ? null : regionCode.trim(),
-                items, meta);
+                "GUARANTEE_AMOUNT", items, meta);
     }
 
     /** 口径文本：不含工具名与英文参数名（REQ-BA-05 第 2 条）。 */
@@ -161,6 +161,9 @@ public class ProjectAnalysisTool {
         Map<String, Object> parts = new LinkedHashMap<>();
         parts.put("mode", mode == Mode.DISTRIBUTION ? "分组分布" : "项目排行（按担保金额）");
         parts.put("dimension", DIMENSION_NAMES.getOrDefault(dim.name(), dim.name()));
+        if (mode == Mode.DISTRIBUTION) {
+            parts.put("占比口径", "按担保金额");
+        }
         parts.put("orderType", ORDER_TYPE_NAMES.getOrDefault(orderType, orderType));
         parts.put("startDate", start == null ? null : start.toString());
         parts.put("endDate", end == null ? null : end.toString());

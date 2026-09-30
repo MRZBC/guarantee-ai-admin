@@ -29,4 +29,12 @@ public class ProjectGroupVO {
     private BigDecimal guaranteeAmount = BigDecimal.ZERO;
 
     private BigDecimal premiumAmount = BigDecimal.ZERO;
+
+    /**
+     * 服务端算好的**担保金额占比**（百分比，2 位小数；按维度归一）。
+     *
+     * <p>基线口径是担保金额（"某类项目的担保额占比"就是这么问的）——与订单量占比是两个不同的数，
+     * 所以由服务端下发，而不是让模型自己挑一个分母。</p>
+     */
+    private BigDecimal share = BigDecimal.ZERO;
 }

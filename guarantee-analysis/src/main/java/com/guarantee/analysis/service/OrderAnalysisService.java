@@ -17,6 +17,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
@@ -112,6 +115,56 @@ public class OrderAnalysisService {
         return criteria == null ? new AnalysisCriteria() : criteria;
     }
 
+    /**
+     * 按维度归一化占比（百分比、2 位小数），**合计正好 100.00**。
+     *
+     * <p>为什么不让模型自己除：实测同一批数据"人工算 22.31% / 模型答 22.29%"，
+     * 0.02pp 漂移且无法判定谁对。这里用**最大余数法**：先按万分位向下取整，
+     * 再把剩下的万分位补给它的小数部分最大的那几组——既无浮点累积误差，
+     * 也不会出现"99.99 / 100.01"这种无法判定的尾差。</p>
+     *
+     * <p>包可见是**故意的**：单测直接覆盖它，不用起数据库。</p>
+     */
+    static List<BigDecimal> sharesOf(List<BigDecimal> values) {
+        int n = values.size();
+        List<BigDecimal> shares = new ArrayList<>(n);
+        BigDecimal total = BigDecimal.ZERO;
+        for (BigDecimal value : values) {
+            total = total.add(value == null ? BigDecimal.ZERO : value);
+        }
+        if (total.signum() <= 0) {
+            for (int i = 0; i < n; i += 1) {
+                shares.add(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+            }
+            return shares;
+        }
+        long[] basis = new long[n];
+        BigDecimal[] fraction = new BigDecimal[n];
+        long used = 0;
+        for (int i = 0; i < n; i += 1) {
+            BigDecimal value = values.get(i) == null ? BigDecimal.ZERO : values.get(i);
+            BigDecimal exact = value.multiply(BigDecimal.valueOf(10000))
+                    .divide(total, 6, RoundingMode.HALF_UP);
+            BigDecimal floor = exact.setScale(0, RoundingMode.FLOOR);
+            basis[i] = floor.longValue();
+            fraction[i] = exact.subtract(floor);
+            used += basis[i];
+        }
+        long remainder = 10000 - used;
+        Integer[] order = new Integer[n];
+        for (int i = 0; i < n; i += 1) {
+            order[i] = i;
+        }
+        Arrays.sort(order, (a, b) -> fraction[b].compareTo(fraction[a]));
+        for (long k = 0; k < remainder && n > 0; k += 1) {
+            basis[order[(int) (k % n)]] += 1;
+        }
+        for (int i = 0; i < n; i += 1) {
+            shares.add(BigDecimal.valueOf(basis[i]).movePointLeft(2));
+        }
+        return shares;
+    }
+
     // ------------------------------------------------------------------
     // REQ-BA-03 / REQ-BA-04：企业与项目维度（M2.3）
     // ------------------------------------------------------------------
@@ -128,14 +181,19 @@ public class OrderAnalysisService {
         List<EnterpriseGroupVO> list = orderAnalysisMapper.selectEnterpriseDistribution(
                 safe(criteria), EnterpriseDimension.normalize(dimension).name(),
                 normalizeLimit(limit, DEFAULT_ENTERPRISE_LIMIT));
-        list.forEach(row -> {
+        // 占比基线 = 订单量（"哪些行业的企业下单最多"）；按返回的分组做最大余数归一 ⇒ 合计 100.00
+        List<BigDecimal> shares = sharesOf(list.stream()
+                .map(row -> BigDecimal.valueOf(row.getOrderCount())).toList());
+        for (int i = 0; i < list.size(); i += 1) {
+            EnterpriseGroupVO row = list.get(i);
+            row.setShare(shares.get(i));
             if (row.getGuaranteeAmount() == null) {
                 row.setGuaranteeAmount(BigDecimal.ZERO);
             }
             if (row.getPremiumAmount() == null) {
                 row.setPremiumAmount(BigDecimal.ZERO);
             }
-        });
+        }
         return list;
     }
 
@@ -164,14 +222,20 @@ public class OrderAnalysisService {
         List<ProjectGroupVO> list = orderAnalysisMapper.selectProjectDistribution(
                 safe(criteria), ProjectDimension.normalize(dimension).name(),
                 normalizeLimit(limit, DEFAULT_PROJECT_LIMIT));
-        list.forEach(row -> {
+        // 占比基线 = 担保金额（"某类项目的担保额占比"就是这么问的）
+        List<BigDecimal> shares = sharesOf(list.stream()
+                .map(row -> row.getGuaranteeAmount() == null ? BigDecimal.ZERO : row.getGuaranteeAmount())
+                .toList());
+        for (int i = 0; i < list.size(); i += 1) {
+            ProjectGroupVO row = list.get(i);
+            row.setShare(shares.get(i));
             if (row.getGuaranteeAmount() == null) {
                 row.setGuaranteeAmount(BigDecimal.ZERO);
             }
             if (row.getPremiumAmount() == null) {
                 row.setPremiumAmount(BigDecimal.ZERO);
             }
-        });
+        }
         return list;
     }
 

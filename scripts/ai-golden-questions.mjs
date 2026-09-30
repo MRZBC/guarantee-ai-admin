@@ -543,6 +543,7 @@ const QUESTIONS = [
       //（而不是逐个企业去调 queryOrderSummary —— 那正是它要替代的蛮力枚举）
       mustCall: ['queryEnterpriseAnalysis'],
       contains: ['企业', '行业'],
+      percentShareTable: { tolerancePp: 0.1, minCount: 3 },
       maxToolCalls: 6,
       maxRounds: 3
     }
@@ -555,6 +556,7 @@ const QUESTIONS = [
       // REQ-BA-04 / AC-BA-04：项目维度必须走 queryProjectAnalysis，且项目类型原样中文
       mustCall: ['queryProjectAnalysis'],
       contains: ['交通'],
+      percentShareTable: { tolerancePp: 0.1, minCount: 3 },
       maxToolCalls: 6,
       maxRounds: 3
     }
@@ -950,6 +952,30 @@ function globMatch(name, pattern) {
   return new RegExp(`^${escaped.join('.*')}$`).test(name)
 }
 
+/** 判定文本（judge 用）：优先取服务端剥离后的正文。 */
+function answerText(result) {
+  return result?.prose ?? result?.text ?? ''
+}
+
+/**
+ * 子集搜索：是否存在 ≥ minCount 个百分比，其和落在 100±tolerancePp 内。
+ *
+ * <p>为什么不用"全部求和"：答案里常有增长率等无关百分比，全求和会把正确回答判成假红。
+ * 数量级很小（分布分组通常 3~8 个百分比），穷举组合完全够用。</p>
+ */
+function hasSubsetSummingTo100(values, tolerancePp, minCount) {
+  const sorted = values.filter((v) => v > 0 && v <= 100).sort((a, b) => b - a)
+  const target = 100
+  const dfs = (start, count, sum) => {
+    if (count >= minCount && Math.abs(sum - target) <= tolerancePp) return true
+    if (count >= 8 || sum > target + tolerancePp) return false
+    for (let i = start; i < sorted.length; i += 1) {
+      if (dfs(i + 1, count + 1, sum + sorted[i])) return true
+    }
+    return false
+  }
+  return dfs(0, 0, 0)
+}
 /** 最长连续周期数（按出现顺序；判定规则见 {@link #isNextPeriod}）。 */
 function longestConsecutiveRun(periods) {
   let best = 0
@@ -1035,6 +1061,19 @@ function judge(item, result) {
   }
   // "不绕过平台"的实质：越界请求**不得**调用写/提案类工具（通配前缀，如 `propose*`）。
   // 不用"工具调用数 = 0"来表达这一点——那会与 REQ「可以给趋势描述」冲突（描述趋势必须取数）。
+  // R1②：占比内部一致性——正文里的分布占比必须能凑出"合计 ≈100%"（±1pp）。
+  // 用**子集搜索**而不是"全部百分比求和"：答案里可能混有增长率等无关百分比，
+  // 直接全求和会把正确回答判成假红（宁可少拦，不可假红）。
+  if (item.expect.percentShareTable) {
+    const tolerancePp = item.expect.percentShareTable.tolerancePp ?? 1
+    const minCount = item.expect.percentShareTable.minCount ?? 3
+    const values = [...String(answerText(result)).matchAll(/(\d+(?:\.\d+)?)\s*%/g)].map((m) => Number(m[1]))
+    if (values.length < minCount) {
+      reasons.push(`正文里的百分比少于 ${minCount} 个（${values.length} 个），无法核对占比合计——分布占比必须逐项列出`)
+    } else if (!hasSubsetSummingTo100(values, tolerancePp, minCount)) {
+      reasons.push(`正文占比无法凑出合计 ≈100%（±${tolerancePp}pp）——占比应直接引用服务端算好的 share：${values.join(', ')}`)
+    }
+  }
   for (const pattern of item.expect.notCall ?? []) {
     const hit = result.toolCalls.find((call) => globMatch(call.name ?? '', pattern))
     if (hit) {
@@ -1861,7 +1900,7 @@ function selfCheck() {
     }
     // 向后兼容：断言格式必须是既有那几种
     const allowed = ['contains', 'matches', 'notContains', 'refusal', 'maxToolCalls', 'maxRounds',
-      'mustCall', 'minConsecutivePeriods', 'notCall']
+      'mustCall', 'minConsecutivePeriods', 'notCall', 'percentShareTable']
     for (const key of Object.keys(item.expect)) {
       if (!allowed.includes(key)) problems.push(`${item.id} 使用了未知断言 ${key}（断言格式必须向后兼容）`)
     }
@@ -1898,6 +1937,7 @@ function selfCheck() {
 
   // 周期解析器：把"真机踩过的坑"变成自检用例（解析器写错会让 AC-BA-02 假红/假绿）
   problems.push(...periodParserProblems())
+  problems.push(...shareAssertionProblems())
 
   // 动态工具名黑名单：扫描失效会静默退化成"只拦 3 个工具名"，必须自检
   if (TOOL_NAMES.size < 13) {
@@ -1968,6 +2008,33 @@ function periodParserProblems() {
   return problems
 }
 
+/**
+ * 占比断言的自检用例（R1② 的反证，不需要后端与模型）。
+ *
+ * <p>反证的要点：把**一个占比改错 0.02pp**（正是实测的漂移量）必须判红；
+ * 正确答案（含无关百分比）必须判绿。没有这组用例，"断言有没有判别力"就只能靠嘴说。</p>
+ */
+function shareAssertionProblems() {
+  const problems = []
+  const cases = [
+    ['正确占比（合计 100.00）', ['22.31%', '18.50%', '59.19%'], true],
+    // 合计级错误必须判红。注意：「单值 0.02pp 漂移」在合计口径下数学上无法检出
+    //（22.29+18.50+59.19=99.98，落在 ±0.1pp 内）——那一档靠「服务端下发 share + 逐值比对」覆盖（见 IT/单测）。
+    ['一个占比被改错 2pp（合计级错误）→ 必须判红', ['24.31%', '18.50%', '59.19%'], false],
+    ['单值 0.02pp 漂移：合计口径判绿（如实说明覆盖面）', ['22.29%', '18.50%', '59.19%'], true],
+    ['混入无关百分比（增长率）仍应判绿', ['22.31%', '18.50%', '59.19%', '环比增长 12.5%'], true],
+    ['占比个数不足 → 必须判红', ['59.19%', '22.31%'], false],
+    ['占比合计明显不对（少一行）→ 必须判红', ['22.31%', '18.50%'], false]
+  ]
+  for (const [label, texts, expectPass] of cases) {
+    const values = texts.flatMap((x) => [...x.matchAll(/(\d+(?:\.\d+)?)\s*%/g)].map((m) => Number(m[1])))
+    const pass = values.length >= 3 && hasSubsetSummingTo100(values, 0.1, 3)
+    if (pass !== expectPass) {
+      problems.push(`占比断言用例不通过「${label}」：期望 ${expectPass ? '通过' : '判红'}，实际 ${pass ? '通过' : '判红'}（解析到 ${values.join(', ')}）`)
+    }
+  }
+  return problems
+}
 if (process.argv.includes('--list-forbidden')) {
   // 诊断/留证用：把"到底在拦哪些词"打出来（工具名来自源码动态抽取）
   console.log(`内部术语黑名单：动态工具名 ${TOOL_NAMES.size} 个 + 精选 ${CURATED_FORBIDDEN_TERMS.length} 个，去重后共 ${FORBIDDEN_TECH_TERMS.length} 个`)

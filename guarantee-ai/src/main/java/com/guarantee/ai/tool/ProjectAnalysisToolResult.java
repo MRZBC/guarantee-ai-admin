@@ -28,6 +28,8 @@ public record ProjectAnalysisToolResult(
         String startDate,
         String endDate,
         String regionCode,
+        /** 占比基线：GUARANTEE_AMOUNT（担保金额）——DISTRIBUTION 模式下 share = 该组担保额占该维度合计的百分比 */
+        String shareBase,
         /** 分组明细或排行明细 */
         List<ProjectItem> items,
         ToolResultMeta meta) {
@@ -43,6 +45,8 @@ public record ProjectAnalysisToolResult(
             long orderCount,
             BigDecimal guaranteeAmount,
             BigDecimal premiumAmount,
+            /** 服务端算好的担保金额占比（百分比 2 位小数；分类合计=100.00）。模型必须直接引用，不要自己除 */
+            BigDecimal share,
             /** 项目类型（中文，TOP 模式下有值） */
             String projectType,
             /** 地区名称（TOP 模式下有值） */

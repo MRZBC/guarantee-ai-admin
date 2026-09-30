@@ -149,7 +149,7 @@ public class EnterpriseAnalysisTool {
                 items.add(new EnterpriseAnalysisToolResult.EnterpriseItem(
                         row.getGroupCode(), row.getGroupName(), row.getEnterpriseCount(),
                         row.getOrderCount(), zeroIfNull(row.getGuaranteeAmount()),
-                        zeroIfNull(row.getPremiumAmount()), null, null));
+                        zeroIfNull(row.getPremiumAmount()), zeroIfNull(row.getShare()), null, null));
             }
         } else {
             List<EnterpriseRankVO> rows =
@@ -159,7 +159,7 @@ public class EnterpriseAnalysisTool {
                 items.add(new EnterpriseAnalysisToolResult.EnterpriseItem(
                         row.getEntCode(), row.getEntName(), 0L,
                         row.getOrderCount(), zeroIfNull(row.getGuaranteeAmount()),
-                        zeroIfNull(row.getPremiumAmount()), row.getIndustry(), row.getEntLevel()));
+                        zeroIfNull(row.getPremiumAmount()), BigDecimal.ZERO, row.getIndustry(), row.getEntLevel()));
             }
         }
 
@@ -178,7 +178,7 @@ public class EnterpriseAnalysisTool {
                 start == null ? null : start.toString(),
                 end == null ? null : end.toString(),
                 regionCode == null || regionCode.isBlank() ? null : regionCode.trim(),
-                items, meta);
+                "ORDER_COUNT", items, meta);
     }
 
     /** 口径文本：不含工具名与英文参数名（REQ-BA-05 第 2 条）。 */
@@ -189,6 +189,9 @@ public class EnterpriseAnalysisTool {
         parts.put("dimension", DIMENSION_NAMES.getOrDefault(dim.name(), dim.name()));
         if (mode == Mode.TOP) {
             parts.put("orderBy", ORDER_BY_NAMES.getOrDefault(orderBy.name(), orderBy.name()));
+        }
+        if (mode == Mode.DISTRIBUTION) {
+            parts.put("占比口径", "按订单量");
         }
         parts.put("orderType", ORDER_TYPE_NAMES.getOrDefault(orderType, orderType));
         parts.put("startDate", start == null ? null : start.toString());

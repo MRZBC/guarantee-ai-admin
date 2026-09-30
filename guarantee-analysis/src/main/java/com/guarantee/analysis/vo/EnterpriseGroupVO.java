@@ -29,4 +29,12 @@ public class EnterpriseGroupVO {
     private BigDecimal guaranteeAmount = BigDecimal.ZERO;
 
     private BigDecimal premiumAmount = BigDecimal.ZERO;
+
+    /**
+     * 服务端算好的**订单量占比**（百分比，2 位小数；按维度归一，无浮点累积误差）。
+     *
+     * <p><b>为什么必须由服务端下发</b>：实测同一批数据"人工算 22.31% / 模型答 22.29%"——
+     * 0.02pp 漂移且**无法判定谁对**。基线口径是订单量（"哪些行业的企业下单最多"）。</p>
+     */
+    private BigDecimal share = BigDecimal.ZERO;
 }
