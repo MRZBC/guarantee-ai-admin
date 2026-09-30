@@ -18,7 +18,7 @@
 |---|---|---|---|
 | Q-MCP-01 | 业务 MCP Server 的实现形态 | **B：独立进程 stdio 网关（Node/TypeScript），经 HTTP 调用平台受控只读接口**。理由：本机 `.m2` **没有任何 MCP 相关构件**，Java 侧要新增依赖并联网下载（可行性未验证）；而 `tools/knowledge-os-mcp/` 已经跑通"TypeScript + MCP SDK + stdio + 真实 JSON-RPC 测试"的完整先例 | 决定是新增 Java 依赖还是复用既有 Node 技术栈 |
 | Q-MCP-02 | 外部 Agent 用什么身份 | **新增机器凭据**：服务账号 + 可撤销的 MCP Token，**最小权限只读**。现状**没有任何客户端凭据机制**（全仓 `ApiKey\|client_credentials\|X-API-KEY` 0 命中），拿令牌只能用"用户名 + 密码"登录，且新账号首登会被**强制改密闸门**拦住 | 决定是否新增 token 表与权限码 |
-| Q-MCP-03 | MCP 暴露哪些能力 | **只暴露只读工具**（**13 个 `@Tool` 方法**，含第三阶段新增的 `queryBusinessKnowledge`）。写能力**不暴露**；若将来要暴露，只暴露"生成提案"，确认仍必须发生在平台页面内 | 决定外部 Agent 的风险面 |
+| Q-MCP-03 | MCP 暴露哪些能力 | **只暴露只读工具**（**15 个 `@Tool` 方法**，含第三阶段新增的 `queryBusinessKnowledge`）。写能力**不暴露**；若将来要暴露，只暴露"生成提案"，确认仍必须发生在平台页面内 | 决定外部 Agent 的风险面 |
 | Q-MCP-04 | 指标栈 | **Micrometer + `/actuator/prometheus`**。注意本机 `~/.m2` **没有** `micrometer-registry-prometheus`（也没有 `micrometer-tracing`、OTel/zipkin jar，只有 BOM pom），需联网拉取；拉不到则退化为"落库 + 页面聚合"（Q-MCP-06） | 决定依赖与运维形态 |
 | Q-MCP-05 | "成本"的口径 | 现状**没有货币成本概念**（全仓搜 `单价\|price\|计费\|USD` 0 命中，`AI_TURN_COST` 的 "cost" 指 token + 耗时）。建议：**先只报 token 与耗时**；若要报金额，必须由第四阶段的配置化提供**单价表**（分模型、可改、可审计） | 决定"成本可观测"这句 DoD 的验收方式 |
 | Q-MCP-06 | 观测数据落不落库 | **落库**：新增轻量 `ai_turn_metric`（每次问答一行）。阶段二的 Q-BA-04 写的是"先只落日志"，现在日志已有一年，趋势查询仍答不上来 | 表数 +1 |
@@ -49,7 +49,7 @@
 | Evaluation · **单一事实源缺失** | "有多少测试"在三处文档里写的是 **176/9**、**137/68**、**13**，而本地报告文件是 **186/74/16**（合计 410，且报告早于 HEAD）——**数字不一致本身就是事实** | `PROJECT.md:265`、`DEC-助手回答的可见性与口径呈现.md:827`、`README.md:501` vs `target/**/surefire-reports` |
 | MCP · 业务侧 | **不存在**。Java 里 8 处 `mcp` 命中全是"首登强制改密" claim；无 MCP 依赖、无 `McpServer` 类；README 明确列为本阶段未实现 | `JwtTokenProvider.java:49` 等；`README.md:6` |
 | MCP · 可参考先例 | `tools/knowledge-os-mcp/`（**开发流程用**，不是业务 MCP）：Node 20 + TS ESM + `@modelcontextprotocol/sdk` 1.30.1 + zod 4.6.5，stdio（stdout 只走协议帧、日志走 stderr），**10 个工具**，三层身份校验 + 路径守卫（`pathguard.ts`），**刻意不提供** delete/move/arbitrary_write/execute_command，测试**通过真实 MCP JSON-RPC 驱动真实子进程**（8 个测试文件） | `tools/knowledge-os-mcp/src/index.ts:12-47`；`src/tools/index.ts:16-17/98-537` |
-| MCP · 现有可用能力 | **18 个 `@Tool` 方法**（分布在 16 个类：12 只读类含 **13** 个方法 + 5 个写提案类）；按权限**注册期裁剪**；双层校验（注册 + 工具内 `AiPermissionGuard`）；数据范围由 `DataScopeService` 判定（页面与助手同源） | `AiToolRegistry.java:40-230`；`AiDataScopeResolver.java:9-37` |
+| MCP · 现有可用能力 | **20 个 `@Tool` 方法**（分布在 18 个类：14 只读类含 **15** 个方法 + 5 个写提案类）；按权限**注册期裁剪**；双层校验（注册 + 工具内 `AiPermissionGuard`）；数据范围由 `DataScopeService` 判定（页面与助手同源） | `AiToolRegistry.java:40-230`；`AiDataScopeResolver.java:9-37` |
 | MCP · 授权现状 | JWT（权限编码直接写进令牌，靠 `jti` 白名单 + Redis 撤销）；**Redis 是鉴权强依赖**且默认 **fail-closed**；**没有机器身份机制**；新账号首登令牌会被改密闸门拦下 | `JwtTokenProvider.java:25-27`；`TokenRevocationService.java:16-34`；`PasswordChangeRequiredFilter.java:30` |
 | 已承诺未实现的指标 | `SYS-NF-08` 要求"提案数（按状态）/ 确认率 / 拒绝率 / 过期率 / 执行失败率 / 平均确认耗时"，**代码里没有任何 metric 注册** | `docs/REQ-系统管理助手能力.md:757` vs 全仓 0 命中 |
 
@@ -165,7 +165,7 @@
 |---|---|
 | 形态 | **独立进程 stdio 网关**（推荐，Q-MCP-01）：MCP 客户端 ↔ stdio ↔ 网关 ↔ HTTPS ↔ 平台受控接口。与 `tools/knowledge-os-mcp/` 同构（stdout 只走 JSON-RPC 帧、日志走 stderr） |
 | 位置 | 建议 `tools/business-mcp/`（与知识库 MCP 平级，明确区分用途）；**不要**放进 `guarantee-*` 模块 |
-| 暴露范围 | **第一版只读**：`queryOrderSummary` / `getCurrentDate` / `queryOrderDistribution` / `queryOrderTrend` / `queryBusinessKnowledge` / `queryOrg` / `queryDepartment` / `queryUser` / `queryRole` / `queryInsuranceType` / `queryOperationAudit` / `queryMyToolCalls` / `queryMyProposals`（**13 个 `@Tool` 方法 / 12 个只读类**，v1.1 更正：v1.0 写 12/11，未含第三阶段新增的知识检索工具） |
+| 暴露范围 | **第一版只读**：`queryOrderSummary` / `getCurrentDate` / `queryOrderDistribution` / `queryOrderTrend` / `queryBusinessKnowledge` / `queryEnterpriseAnalysis` / `queryProjectAnalysis` / `queryOrg` / `queryDepartment` / `queryUser` / `queryRole` / `queryInsuranceType` / `queryOperationAudit` / `queryMyToolCalls` / `queryMyProposals`（**15 个 `@Tool` 方法 / 14 个只读类**，v1.1 更正：v1.0 写 12/11，未含第三阶段新增的知识检索工具） |
 | 工具命名 | `mcp__guarantee__<toolName>`（沿用 DSH 的 `mcp__<server>__<tool>` 展示约定）；`tools/list` 里的 description **直接复用既有 `@Tool` 描述**（避免第二份工具说明漂移） |
 | 结果契约 | 与页面/助手一致：`dataSource` 口径文本、`truncated` 标记、`limit` 归一；不返回明细全表 |
 | 明确不做 | 不暴露 `propose*`（写）；不暴露 `resources`/`prompts` 能力（第一版只做 `tools`）；不提供"任意 HTTP 透传"这类万能口 |
@@ -443,7 +443,7 @@
 |---|---|---|---|
 | Q-MCP-01 | MCP 实现形态（Java 侧新增依赖 vs Node 网关） | **Node 网关**（有先例、零 Java 依赖变更） | 决定工作量与部署形态 |
 | Q-MCP-02 | 机器身份机制（服务账号 + Token） | 新增，最小权限只读 | 表数 +1、权限码 +1 |
-| Q-MCP-03 | 暴露范围 | 只读 **13** 个 `@Tool` 方法（含 `queryBusinessKnowledge`） | 风险面 |
+| Q-MCP-03 | 暴露范围 | 只读 **15** 个 `@Tool` 方法（含 `queryBusinessKnowledge` 与 T7 新增的企业/项目维度 2 个） | 风险面 |
 | Q-MCP-04 | 指标栈与依赖可得性 | Micrometer + Prometheus；先验证能否联网拉取 | 决定是否有 Grafana 之外的端点 |
 | Q-MCP-05 | 成本是否需要货币口径 | 先只报 token/耗时；要金额则需单价表（第四阶段配置化） | 决定 AC 表述 |
 | Q-MCP-06 | 观测数据是否落库 | **落库**（`ai_turn_metric`） | 表数 +1 |
@@ -479,7 +479,7 @@
 
 - **观测**：`ai_turn_metric`（每轮一行，含 `outcome`/`trace_id`/`source`）+ `ai_tool_call.source/trace_id` + `ai_message.token_count` 注释更正；`AiChatMetrics` **9 项指标**（标签经 `sanitize()` 卡基数）；`/actuator/prometheus` 免登录放行；`AI_TURN_COST` 日志带 traceId，Reactor 线程 traceId 显式下传；`AiRuntimeController` + 「AI 运行」页
 - **评测**：`scripts/ai-golden-questions.mjs` 升级（`--suite=all|deterministic|live`、`--baseline`、JSON+Markdown、基线 diff、打分、内嵌 SSOT）；评测集 **33 条**；确定性集由 `EvaluationDeterministicIT` 承载并纳入 `mvn verify`；`scripts/single-source-of-truth.mjs` 成为测试项/评测条数/指标/MCP 工具清单的唯一事实源
-- **MCP**：网关 `tools/business-mcp`（Node stdio，**13 个只读工具**，17 个协议用例）+ 平台侧 `McpController`（`GET/POST /api/ai/mcp/tools[/{name}]`、`/api/system/mcp-tokens`）+ `McpRateLimiter`（Redis QPS + 每日配额）+ 权限码 `ai:mcp:read`（硬门禁）/`ai:mcp:manage`；默认关闭（yml 级、需重启）
+- **MCP**：网关 `tools/business-mcp`（Node stdio，**15 个只读工具**，17 个协议用例）+ 平台侧 `McpController`（`GET/POST /api/ai/mcp/tools[/{name}]`、`/api/system/mcp-tokens`）+ `McpRateLimiter`（Redis QPS + 每日配额）+ 权限码 `ai:mcp:read`（硬门禁）/`ai:mcp:manage`；默认关闭（yml 级、需重启）
 - **T5-06 附带**：服务账号 `account_type` 映射 + 登录拒绝 SERVICE + MCP 签发强校验
 
 **证据**

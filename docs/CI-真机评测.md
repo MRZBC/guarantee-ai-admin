@@ -115,7 +115,11 @@ $ pwsh scripts/run-live-eval.ps1 -Port 8092 -SkipBuild -EvalScript .agent/stub-e
 |---|---|---|
 | `build-and-it` | 手动 + 每日 02:00 UTC | MySQL 8 + Redis service；`mvn -B verify`；上传 surefire/failsafe 报告 |
 | `deterministic-eval` | 手动 + 每日 | `--suite=deterministic`（发布门禁）；上传确定性报告 |
-| `live-eval` | **仅手动** | 有 `secrets.DEEPSEEK_API_KEY` 才跑；起后端（8092）→ `--suite=live` → 上传 `reports/**`；缺 Key **打印"未跑"并跳过**；退出码 1（断言失败）才让作业失败 |
+| `live-eval` | **仅手动** | 有 `secrets.DEEPSEEK_API_KEY` 才跑；起后端（8092）→ `--suite=live` **→ `--suite=refusal`（拒答类默认 3 轮）** → 上传 `reports/**`；缺 Key **打印"未跑"并跳过**；**两个步骤任一退出码 1（断言失败）即让作业失败**，退出码 2 按"未跑"告警不失败 |
+
+> **发布门禁口径（与 `docs/TEST-助手黄金问题集.md` §5.1 一致）**：**确定性集 12/12**（`deterministic-eval` 作业）
+> **+ 拒答类 ×3 全通过**（`live-eval` 里的 `--suite=refusal` 步骤）。拒答类是唯一有**方差实证**的一类题，
+> 因此判据是"**N 次全部通过才算通过**"，任一次失败 → 整题失败并逐轮列出差异，**不做平均**。
 
 定时任务**刻意不跑 live**：真模型花钱且依赖数据基线，无人看管时跑等于烧额度 + 长期假绿。
 

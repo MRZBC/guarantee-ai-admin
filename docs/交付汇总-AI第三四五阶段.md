@@ -68,8 +68,8 @@ mvn -B verify
 | `ai_turn_metric`（每轮一行，含 `outcome`/`trace_id`/`source`）+ `trace_id` 三段贯通 | `AiObservabilityIT` 2/2：指标行 / 工具调用 / 审计 **trace_id 相同且非空**；失败轮 `outcome=ERROR` |
 | `AiChatMetrics` **10 项**指标 + 标签基数闸 + `/actuator/prometheus` 免登录 | 真机 200（63 KB）；含 `userId\|conversationId\|question=\|prompt=` 的行 **0**；`AiObservabilityIT` 断言标签键 ⊆ 白名单 |
 | 「AI 运行」页 + `GET /api/ai/metrics/overview\|trend\|tools/top` | CDP 实测与 SQL 聚合**逐字段一致**（333 轮 / 平均 1.985 / 失败 11 / 触顶 12 / 104.2853ms；Top 工具计数与 p95 一致） |
-| 评测框架：**35 条**（GQ-01~35）+ `--suite=all\|deterministic\|live` + `--baseline` diff + 打分 + 内嵌 SSOT | 确定性集 **12/12、exit 0** 并纳入 `mvn verify`；`--baseline` diff 新增失败 **0**；缺 Key 时严格判"未跑"（exit 2） |
-| 业务 MCP：网关（Node stdio，**13 只读工具**）+ 平台协议面/凭据面 + Redis 限流配额 + 开关 | 真机：`tools/list=13`（与 `catalog.ts` 逐名一致）→ `tools/call` 成功；**撤销后立即 401**；写工具 **403**；同秒第 6 次 **429**；默认关闭实例三类路径 **404** 且平台自身正常 |
+| 评测框架：**37 条**（GQ-01~37）+ `--suite=all\|deterministic\|live\|refusal` + `--repeat=N` + `--baseline` diff + 打分 + 内嵌 SSOT | 确定性集 **12/12、exit 0** 并纳入 `mvn verify`；**拒答类 ×3 = 24/24 全通过**（`--suite=refusal`，**N 次全通过才算通过**）；`--baseline` diff 新增失败 **0**；缺 Key 时严格判"未跑"（exit 2） |
+| 业务 MCP：网关（Node stdio，**15 只读工具**）+ 平台协议面/凭据面 + Redis 限流配额 + 开关 | 真机：`tools/list=15`（与 `catalog.ts` 逐名一致）→ `tools/call` 成功；**撤销后立即 401**；写工具 **403**；同秒第 6 次 **429**；默认关闭实例三类路径 **404** 且平台自身正常 |
 | `ai:mcp:read` 硬门禁 + `ai:mcp:manage` 独立权限码 + 服务账号 `SERVICE` 强校验 | `McpBackendIT` 8/8（含 HUMAN 账号被拒签发 + `COUNT(*)==0`）、`McpRateLimitIT`/`McpQuotaIT` 各 1/1；登录拒绝 SERVICE 且与密码错误**同码同文案** |
 
 ---
@@ -112,8 +112,8 @@ mvn -B verify
 | 门禁结果按 `contentHash + TTL` 复用 | 与 AC-CFG-10"发布时强制重跑、不拿缓存放行"**直接冲突** | **不做**（有理由） |
 | 重命名**既有库**的审计分区 | 共享库风险高 | 只提供 **DRY-RUN** 脚本；新建库口径已修正 |
 | 真机集 3 处失败（GQ-27 周期不连续 / GQ-31,GQ-35 拒答泄漏「SQL」/ GQ-34 方差） | **收紧断言后暴露的真实模型行为缺陷**（此前被宽松断言掩盖） | 已立 **T6-07** 修提示词；判定由 **T6-08** 重新给出 |
-| 企业/项目维度（AC-BA-03/04） | 随 **M2.3 缓做**（Q-BA-01 拍板） | 第二阶段按 v1.2 裁剪口径验收 |
-| Vault 远端备份 | 只有本地 git | 仍缺（待用户决定远端） |
+| 企业/项目维度（AC-BA-03/04） | **已交付**（T7 收口轮 B1）：`queryEnterpriseAnalysis` / `queryProjectAnalysis` + 4 条聚合 SQL + 提示词路由 + GQ-36/37 | 独立改判后目标 **9/9** |
+| Vault 远端备份 | **已提供脚本 + 恢复演练**（`scripts/backup-vault.ps1`、`docs/VAULT-备份.md`）；**远端仓库未建**（本机无 `gh` CLI，需用户手工三步） | 备份链路可用，只差离机 |
 | `ai_config_item` 2 行历史 NULL | 无行为影响 | 登记不清理 |
 
 **工程教训（已写进发布说明与知识库）**：① 临时实例锁 fat jar → `repackage` 失败（先停实例再打包；**不要**用 `-Dspring-boot.repackage.skip=true`，它会把 fat jar 原地改写成 thin jar）；② 改了 `guarantee-ai` 却只跑 `-pl guarantee-web` → Maven 从 `~/.m2` 取旧 jar（必须 `install` 或带 `-am`）。
@@ -143,11 +143,11 @@ cd tools/business-mcp && npm test
 java -jar guarantee-web/target/guarantee-ai-admin.jar --server.port=8088
 ```
 
-> 真机黄金问题集（当前 **35 条**）需要 `DEEPSEEK_API_KEY`：`node scripts/ai-golden-questions.mjs --suite=live`
+> 真机黄金问题集（当前 **37 条**）需要 `DEEPSEEK_API_KEY`：`node scripts/ai-golden-questions.mjs --suite=live`
 > —— **没有 Key 时输出"未跑（环境问题）"，不是失败。**
-> **当前发布口径（T6-10）**：`reports/eval-live-t610-2026-09-30.*` = **34 PASS / 0 FAIL / 1 未跑**；
-> 未跑的 GQ-25 按设计需关知识层实例，已单独跑通（`reports/eval-live-gq25-2026-09-30.*`）= **35/35 全覆盖**。
-> 中间口径 `31/3/1` 已归档为 `reports/archive/eval-live-2026-09-30-snapshot-31-3-1.*`（其中 1 项为断言假失败、2 项为已修的模型行为缺陷）。
+> **当前发布口径（T7 收口轮）**：全量 **37 题 → 36 PASS / 0 FAIL / 1 未跑**（未跑的 GQ-25 按设计需关知识层实例，
+> 已单独跑通）= **37/37 题全覆盖**；**拒答类 8 题 × 3 轮 = 24/24 全通过**（`--suite=refusal`，N 次全通过才算通过）。
+> 历史口径 `33 题 32/32`、`35 题 31/3/1`、`35 题 34/0/1` 均归档在 `reports/archive/`（`31/3/1` 里的 3 处＝1 项断言假失败 + 2 项已修行为缺陷）。
 > 注意 `--suite=live` 在有未跑项时 **exit 2**（环境语义），**不是断言失败**。
 
 ---
@@ -246,3 +246,17 @@ java -jar guarantee-web/target/guarantee-ai-admin.jar --server.port=8088
 7. **真机集不进 CI**（发布门禁只有确定性集 12/12）→ 模型行为类回归 CI 拦不住；
 8. 前端 chunk 偏大（StatCards 570 KB / index 1.27 MB）；
 9. `reports/*` 跑评测即被重写（设计使然）。
+
+---
+
+## 十、T7 收口轮（用户指定：A1–A4 + B1 + B3）
+
+| 项 | 交付 | 关键证据 |
+|---|---|---|
+| **A1 真机评测进 CI** | `scripts/run-live-eval.ps1`（一键：`package -am` → 注入 Key → 起实例 → `--suite=live` → try/finally 必停 → 退出码透传）+ `.github/workflows/ai-eval.yml` + `docs/CI-真机评测.md` | 本地实测 **退出码 0/1/2 三种路径全部验证**（exit 0 = 8092 上 GQ-31 PASS；exit 2 = `-Port 8081` 拒绝 / 端口被占；exit 1 = 桩透传，失败路径同样停实例）；**workflow 明确标注"未在 CI 执行过"**（无 CI 环境可跑，YAML 仅语法自检，首跑需校准 schema/seed/ubuntu 兼容三点） |
+| **A2 classpath 启动脚本** | `scripts/run-local-classpath.ps1` | 实测 8092 health UP + login code=0 + `-Reextract` 场景；强制删 `bootlib/guarantee-*.jar` 防 mapper 双扫；退出即停且**不锁 fat jar** |
+| **A3 Vault 备份** | `scripts/backup-vault.ps1` + `docs/VAULT-备份.md` | 身份校验（`.agent/vault.local.yaml` ↔ `VAULT_ID.md`）→ bundle + zip + 轮转 + MANIFEST；**恢复演练实测**：`git clone <bundle>` 得 108 文件、HEAD `50d0ff1`、STATE/LOG 均在 |
+| **A4 拒答类制度化** | 脚本新增 `--repeat=N` 与 `--suite=refusal`（默认 3 轮，**N 次全通过才算通过**，任一次失败逐轮标注）+ 报告方差列/明细 | 真机 **8 题 × 3 轮 = 24/24 PASS（exit 0）**；发布门禁口径改为「确定性 12/12 + 拒答类 ×3」；CI 的 `live-eval` 作业已加 `--suite=refusal` 步骤，任一 exit 1 即作业失败 |
+| **B1 M2.3 企业/项目维度** | `queryEnterpriseAnalysis` / `queryProjectAnalysis` + 4 条聚合 SQL + 4 VO + 提示词路由 45.1 + GQ-36/37 | 真机 GQ-36/37 **各 1 次调用新工具即 PASS**；全量 37 题 36/0/1；口径三条（企业名历史保留 / 项目类型中文透传 / 准入六条）均有机制级证据 |
+| **B3 既有库分区重命名** | 脚本从 `RENAME PARTITION`（**MySQL 8.0 不存在**）改为 1:1 `REORGANIZE`；共享库实际执行 | 执行前 36/36 名字不符 → 执行后 **0 不符**、边界值多重集差异 0、**逐分区行数差异 0**、总行数 **2623 不变**、`pmax` 未动；Lead 独立用精确 `COUNT(*)` 复核（`p202609`=2623） |
+| 联动 | MCP 白名单 **13 → 15**（两个新只读工具，按既有先例经 MCP 暴露） | `npm test` 17/17、`McpToolCatalogTest` 6/6、`McpBackendIT` 8/8、SSOT `--check` exit 0 |

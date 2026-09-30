@@ -19,8 +19,12 @@
 #
 # 三道门（与本地一致）：
 #   Job1 `mvn -B verify`      —— 编译 + 单测 + 集成测试（MySQL 8 + Redis service）
-#   Job2 确定性集              —— Stub 模型，12 条，**发布门禁就是它**（快、不花钱）
-#   Job3 真机集（仅手动）      —— 真模型 25/33 条，覆盖"只有真机才能暴露"的那半边
+#   Job2 确定性集              —— Stub 模型，12 条，**发布门禁的确定性半边**（快、不花钱）
+#   Job3 真机集（仅手动）      —— 真模型 + **拒答类多轮（--suite=refusal，默认 3 轮，N 次全通过才算通过）**
+#
+# 发布门禁口径（与 docs/TEST-助手黄金问题集.md §5.1 一致）：
+#   **确定性集 12/12（Job2） + 拒答类 ×3 全通过（Job3 内的 refusal 步骤）**
+#   两个步骤中任一判为"断言失败(exit 1)"即视为模型行为回归 → 作业失败。
 #
 # 本地等价物：`pwsh scripts/run-live-eval.ps1 -Port 8092`（Windows；本机已实测）。
 #   ⚠️ 本机脚本用 Windows API（Get-NetTCPConnection），**不能**直接在 ubuntu runner 上跑；
@@ -304,18 +308,22 @@ jobs:
           if [ -n "${ONLY:-}" ]; then ARGS="--only=$ONLY"; fi
           set +e
           BASE_URL="http://127.0.0.1:$PORT" node scripts/ai-golden-questions.mjs --suite=live $ARGS
-          CODE=$?
+          LIVE_CODE=$?
+          # A4：拒答类必须**多轮通过**（N 次全通过才算通过；默认 3 轮，见 --suite=refusal）
+          BASE_URL="http://127.0.0.1:$PORT" node scripts/ai-golden-questions.mjs --suite=refusal
+          REFUSAL_CODE=$?
           set -e
-          echo "live 退出码=$CODE（0 通过 / 1 断言失败 / 2 环境问题）"
+          echo "live 退出码=$LIVE_CODE（0 通过 / 1 断言失败 / 2 环境问题）"
+          echo "refusal 退出码=$REFUSAL_CODE（--suite=refusal 默认 3 轮）"
 
-          if [ "$CODE" = "1" ]; then
-            echo "::error::真机集断言失败（模型行为回归）"
+          if [ "$LIVE_CODE" = "1" ] || [ "$REFUSAL_CODE" = "1" ]; then
+            echo "::error::真机评测断言失败（模型行为回归：live 或 拒答类多轮）"
             exit 1
           fi
-          if [ "$CODE" = "2" ]; then
+          if [ "$LIVE_CODE" = "2" ] || [ "$REFUSAL_CODE" = "2" ]; then
             # 见文件头第 2 条：CI 目前没有订单 seed，live 集大概率数据不足。
             # 这是**有意**的宽松口径；接入 seed 后应改成 exit 1。
-            echo "::warning::真机集判为 environment（多半是缺数据 seed），按'未跑'处理，本作业不失败"
+            echo "::warning::真机评测判为 environment（多半是缺数据 seed），按'未跑'处理，本作业不失败"
           fi
           exit 0
 

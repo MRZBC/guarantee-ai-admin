@@ -34,8 +34,8 @@
 
 - 指标：`ai_turn_metric`（每轮一行，含 `outcome`/`trace_id`/`source`）、`AiChatMetrics`（10 个 meter，标签全枚举维度）、`/actuator/prometheus`（免登录，仅内网/白名单）
 - `系统管理 → AI 运行` 页（概览 / 趋势 / Top 工具 / 提案计数）
-- 评测框架：可重跑脚本 + 评测集（当前 **35 条**，含真机与确定性两套）+ 基线 diff + 单一事实源 `scripts/single-source-of-truth.mjs`
-- 业务 MCP：网关 `tools/business-mcp`（Node + stdio）+ 平台 HTTP 面（`/api/ai/mcp/tools`、`/api/system/mcp-tokens`），**13 个只读工具**、Redis 限流配额、`ai:mcp:read` / `ai:mcp:manage`；**默认关闭**
+- 评测框架：可重跑脚本 + 评测集（当前 **37 条**，含真机、确定性与拒答三类）+ 基线 diff + 单一事实源 `scripts/single-source-of-truth.mjs`；发布门禁 = **确定性集 12/12 + 拒答类 ×3 全通过**
+- 业务 MCP：网关 `tools/business-mcp`（Node + stdio）+ 平台 HTTP 面（`/api/ai/mcp/tools`、`/api/system/mcp-tokens`），**15 个只读工具**（含企业/项目维度）、Redis 限流配额、`ai:mcp:read` / `ai:mcp:manage`；**默认关闭**
 - 服务账号强校验：`sys_user.account_type=SERVICE` 才可签发 MCP Token；**SERVICE 账号禁止登录**（同码同文案防枚举）
 
 ---
@@ -85,7 +85,7 @@
 | 门禁结果按 `contentHash + TTL` 缓存 | **不做**：与 AC-CFG-10"发布时强制重跑、不拿缓存放行"直接冲突 |
 | 重命名**既有库**的审计分区 | **不执行**：只提供 DRY-RUN 脚本；共享库风险高 |
 | 真机集 GQ-25（关知识层） | 需单独实例（`--guarantee.ai.knowledge.enabled=false`），已在独立实例跑通（**35/35 覆盖**由此达成） |
-| 企业/项目维度（AC-BA-03/04） | 随 **M2.3 缓做**（Q-BA-01 已拍板），第二阶段按 v1.2 裁剪口径验收（**7 成立 / 2 不成立=这 2 条**） |
+| 企业/项目维度（AC-BA-03/04） | **已交付**（T7 收口轮）：`queryEnterpriseAnalysis` / `queryProjectAnalysis` + 4 条聚合 SQL；独立改判后第二阶段目标 **9/9** |
 | `FORBIDDEN_TECH_TERMS` 的编码/枚举部分 | 只收**精选 7 个**（工具名 18 个已动态生成）：动态铺全区划码/险种码表会把模型**正当引用**的编码误判为泄漏 |
 | Vault 远端备份 | 仍缺（本地 git only） |
 
