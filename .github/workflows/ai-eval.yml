@@ -10,9 +10,9 @@
 #     ① 空库没有演示数据：Job1 只起 MySQL/Redis service，**从不启动 guarantee-web** →
 #        DataInitializer（默认 true）不执行。而 system / analysis / web 的 *IT 全按"演示库"写
 #        （21 机构 / 单棵 11 部门树 / 300 用户 / 角色权限矩阵 / 15 万订单）。
-#        修法：Job1 新增两步——**打包 → 起一次后端播种（实测 6.0s）→ 断言形状 → 停**，
-#        与本地口径完全一致；形状断言（21 机构 / 11 部门 / 1 个顶级 / 300 用户 / 订单数）
-#        把"演示数据规格漂移"变成 CI 上的**响亮失败**，而不是让 IT 以"数据缺失"的面目红。
+#        修法：新增 **scripts/ci-seed-demo-data.sh**（打包好的后端起一次 → 等
+#        "演示数据初始化完成" → 以**库里可见状态**为准 → 断言形状 21/11/1/300 + 订单数 → 停），
+#        Job1 与 Job2 **共用同一份脚本**；实测种子自身 6.0s、含启动约 15s。
 #     ② schema 漂移：`sys_user.account_type` 只加在 db/migration/V10，schema.sql 没有
 #        → 空库缺列，SysUserAccountTypeIntegrationTest 6/6 报 BadSqlGrammar。
 #        修法：补进 schema.sql（DDL 与 V10 的 ADD COLUMN 逐字一致）。
@@ -33,18 +33,24 @@
 #     `mvn -B verify` → **8/8 模块 BUILD SUCCESS，合计 753 项用例 0 失败 0 错误**。
 #     Job1 的这一步也在本文件里落成了形状断言（见 "起一次后端播种演示数据，并断言形状"）。
 #
-#   仍未在 CI 上执行过：**Job2（确定性集）与 Job3（真机集/拒答）**，其差异仍是按 runner 推断：
+#   【同日后续两轮】
+#     · Job1 第二轮：修好播种后又红了 `AiObservabilityIT`（依赖"别的用例先写过
+#       ai_config_item"）与 `PromptVersionLifecycleIT`（门禁桩命令写了 Windows 专有的
+#       `cmd /c exit 0`）——两处都是**测试侧**问题，已修（前者改断言口径+会话定位，
+#       后者把桩命令换成跨平台的 `java -version`）。
+#     · Job2 首跑（第二轮）：12 个用例全红在 `EvaluationDeterministicIT.adminUserId`
+#       （`Incorrect result size: expected 1, actual 0`）——根因与 Job1 首跑同源：
+#       **Job2 是另一个 runner + 另一个 MySQL 容器**，吃不到 Job1 播的种，而该 IT 自己也
+#       显式 `guarantee.data-init.enabled=false`。修法：Job2 也调用
+#       scripts/ci-seed-demo-data.sh，并补"等 MySQL/Redis 就绪"一步。
+#     · 仍未在 CI 上执行过：**Job3（真机集/拒答）**，其差异仍是按 runner 推断：
 #    1) schema 初始化：应用启动时靠 `guarantee-web/src/main/resources/db/schema.sql`
 #       自建表（`spring.sql.init.mode=always`）。仓库**没有 Flyway**，
 #       `db/migration/V1..V10` 是**手工**执行的幂等脚本 → 新增列/表必须**同时**改
 #       schema.sql（空库路径）与 migration（存量路径）；只改一处就是上面 ② 那种漂移。
 #    2) live 集的数据基线：真机集要求订单量 ≥1000 且数据区间正确
-#       （`GOLDEN_BASELINE_MIN_ORDERS` 默认 1000）。仓库目前**没有订单 seed 脚本**
-#       （只有 `db/seed/region.sql`），所以 CI 上直接跑 live 极可能被判
-#       `environment`（脚本退出码 2）。本 workflow 对此采取"**打印未跑/环境不足但不失败**"
-#       的口径（见 live-eval 作业）；**接入 seed 之后应把退出码 2 也改为失败**，
-#       否则这道门会长期空转。
-#       （注：Job1 现在会起一次后端播种 15 万订单，需要真机集时可以直接复用同一套做法。）
+#       （`GOLDEN_BASELINE_MIN_ORDERS` 默认 1000）。Job3 自己起后端，因此**已经**有
+#       15 万订单的演示数据；但"数据区间正确"仍需真机跑一次确认。
 #    3) 真机集需要 `secrets.DEEPSEEK_API_KEY`：未配置时该作业**跳过而不是失败**。
 #
 # 三道门（与本地一致）：
@@ -161,71 +167,23 @@ jobs:
           exit 1
 
       # ---------------------------------------------------------------------
-      # 演示数据播种（与本地口径**完全一致**）
+      # 演示数据播种（与本地口径**完全一致**；实现收敛在 scripts/ci-seed-demo-data.sh，
+      # Job2 也调同一份脚本——不同 job 是不同 runner 与不同 MySQL 容器，不能复用彼此的库）
       #
       # 为什么必须有这一步：guarantee-system / guarantee-analysis / guarantee-web 的 *IT
       # 都是按"演示库"写的（21 机构 / 单棵 11 部门树 / 300 用户 / 角色权限矩阵 / 15 万订单），
-      # 而在此之前 Job1 只起 MySQL/Redis、**从不启动 guarantee-web**（DataInitializer 不执行）
-      # → 库是空的 → 2026-10-08 首跑 guarantee-system 就红了 44 个用例。
+      # 且它们自己都显式 `guarantee.data-init.enabled=false`；而在此之前 Job1 只起
+      # MySQL/Redis、**从不启动 guarantee-web** → 库是空的 → 首跑 guarantee-system 红了 44 个用例。
       #
-      # 做法：起一次打包好的后端（实测种子耗时 6.0s），等它打出"演示数据初始化完成"、
-      # 并且**直接查库确认已提交**，再停掉。纪律与 Job3 一致：带 -am、禁 repackage.skip、
-      # 用 8093（绝不碰用户自己的 8081 / Job3 的 8092）。
+      # 纪律：带 -am、禁 repackage.skip、用 8093（绝不碰用户自己的 8081 / Job3 的 8092）；
+      # 脚本会等"演示数据初始化完成"、以**库里可见状态**为准（DataInitializer 带 @Transactional，
+      # 日志先于提交）、再断言形状（21/11/1/300 + 订单数）。
       # ---------------------------------------------------------------------
       - name: 打包（播种用；带 -am，禁 repackage.skip）
         run: mvn -B -pl guarantee-web -am -DskipTests package
 
       - name: 起一次后端播种演示数据，并断言形状
-        run: |
-          set -euo pipefail
-          JAR=guarantee-web/target/guarantee-ai-admin.jar
-          if ! unzip -l "$JAR" | grep -q 'BOOT-INF/'; then
-            echo "::error::$JAR 不是 fat jar（BOOT-INF 缺失）——不要传 -Dspring-boot.repackage.skip=true"
-            exit 1
-          fi
-          java -jar "$JAR" --server.port=8093 > ci-seed-app.log 2>&1 &
-          APP_PID=$!
-          # 无论后面成功、失败、报错，都必须回收实例（否则它锁住 jar，verify 的 repackage 会卡死）
-          trap 'kill $APP_PID 2>/dev/null || true' EXIT
-
-          seeded=0
-          for i in $(seq 1 120); do
-            if grep -q '演示数据初始化完成' ci-seed-app.log; then seeded=1; break; fi
-            if ! kill -0 "$APP_PID" 2>/dev/null; then
-              echo "::error::播种进程提前退出"; tail -n 60 ci-seed-app.log; exit 1
-            fi
-            sleep 2
-          done
-          if [ "$seeded" != "1" ]; then
-            echo "::error::240s 内未见「演示数据初始化完成」"; tail -n 60 ci-seed-app.log; exit 1
-          fi
-          grep '演示数据初始化完成' ci-seed-app.log
-
-          # DataInitializer.run() 带 @Transactional：日志在方法内打印，提交在其后。
-          # 因此这里**以库里的可见状态为准**（而不是"看到日志就杀进程"）。
-          q() { mysql -h127.0.0.1 -P3306 -uroot -proot -N -B -e "SELECT $1 FROM guarantee_ai_admin.$2" 2>/dev/null || echo 0; }
-          USERS=0
-          for i in $(seq 1 30); do
-            USERS=$(q 'COUNT(*)' sys_user)
-            if [ "$USERS" = "300" ]; then break; fi
-            sleep 2
-          done
-          kill "$APP_PID" 2>/dev/null || true
-          wait "$APP_PID" 2>/dev/null || true
-
-          # 形状断言：DataInitializer 的规格一旦漂移，就在这里**响亮地**红，
-          # 而不是让 IT 以"数据缺失/查不到 admin"的面目失败（首跑就是这么红的）。
-          ORG=$(q 'COUNT(*)' sys_org)
-          DEPT=$(q 'COUNT(*)' sys_department)
-          ROOTS=$(q 'COUNT(*)' "sys_department WHERE parent_id = 0")
-          TENDER=$(q 'COUNT(*)' tender_order)
-          PERF=$(q 'COUNT(*)' performance_order)
-          echo "播种结果：机构=$ORG 部门=$DEPT（顶级=$ROOTS）用户=$USERS 投标订单=$TENDER 履约订单=$PERF"
-          if [ "$ORG" != "21" ] || [ "$DEPT" != "11" ] || [ "$ROOTS" != "1" ] || [ "$USERS" != "300" ] \
-             || [ "$TENDER" -lt 1000 ] || [ "$PERF" -lt 1000 ]; then
-            echo "::error::演示数据形状不符合预期（预期 21 机构 / 11 部门 / 1 个顶级 / 300 用户 / 订单各 ≥1000）"
-            exit 1
-          fi
+        run: bash scripts/ci-seed-demo-data.sh
 
       - name: mvn -B verify
         run: mvn -B verify
@@ -291,8 +249,36 @@ jobs:
         with:
           node-version: '22'
 
+      - name: 等待 MySQL 与 Redis 就绪
+        run: |
+          mysql_ok=0
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -proot --silent; then mysql_ok=1; break; fi
+            sleep 2
+          done
+          if [ "$mysql_ok" != "1" ]; then echo "MySQL 未在 60s 内就绪" >&2; exit 1; fi
+          redis_ok=0
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/6379) 2>/dev/null; then redis_ok=1; break; fi
+            sleep 2
+          done
+          if [ "$redis_ok" != "1" ]; then echo "Redis 未在 60s 内就绪" >&2; exit 1; fi
+          echo "MySQL / Redis 就绪"
+
       - name: 先安装依赖模块到本地仓库（保证确定性集用的是本次代码）
         run: mvn -B -DskipTests install
+
+      # ---------------------------------------------------------------------
+      # 播种演示数据：EvaluationDeterministicIT 显式 `guarantee.data-init.enabled=false`，
+      # 而它要查 admin 用户、按演示数据算 12 道题 → 本作业的库也必须有演示数据，
+      # 否则 12 个用例全红在 `adminUserId` 上（2026-10-08 CI 实测：
+      # Incorrect result size: expected 1, actual 0）。
+      # 本作业与 Job1 是**不同 runner + 不同 MySQL 容器**，不能复用 Job1 的库，
+      # 因此调用同一份脚本 scripts/ci-seed-demo-data.sh 再播一次（实测约 15s）。
+      # install 已经产出 fat jar，无需再 package。
+      # ---------------------------------------------------------------------
+      - name: 起一次后端播种演示数据，并断言形状
+        run: bash scripts/ci-seed-demo-data.sh
 
       - name: 确定性集（--suite=deterministic）
         run: node scripts/ai-golden-questions.mjs --suite=deterministic

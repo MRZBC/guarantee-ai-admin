@@ -212,6 +212,36 @@ $ pwsh scripts/run-live-eval.ps1 -Port 8092 -SkipBuild -EvalScript .agent/stub-e
 > 附记：§3.0.1 修的 `AiObservabilityIT` **不是本轮 CI 的元凶**，但它是同一类"只在被使用过的
 > 本机开发库上绿"的真实隐患（干净库单跑必红），所以一并修掉、没有回退。
 
+### 3.0.3 第四轮：Job2（确定性集）的库同样是空的（同日）
+
+Job1 修好后，Job2 第一次真正跑起来（此前一直被 `needs: build-and-it` 挡着）：
+**`EvaluationDeterministicIT` 12 个用例全部报错**——
+
+```
+[ERROR] Tests run: 12, Failures: 0, Errors: 12 ... EvaluationDeterministicIT
+org.springframework.dao.EmptyResultDataAccessException: Incorrect result size: expected 1, actual 0
+	at EvaluationDeterministicIT.adminUserId(EvaluationDeterministicIT.java:580)
+```
+
+**根因与 Job1 首跑同源**：`EvaluationDeterministicIT` 自己也显式
+`guarantee.data-init.enabled=false`，而 **Job2 是另一个 runner + 另一个 MySQL 容器**，
+吃不到 Job1 播的种 → 库里没有 `admin`，12 道题全在"取 admin 用户"这一步就断了
+（判定被数据问题污染，而不是模型/行为问题）。
+
+**修复**：
+
+- 把"起一次后端播种 + 形状断言"抽成单一定义 **`scripts/ci-seed-demo-data.sh`**，
+  **Job1 与 Job2 共用**（Job3 自己起后端并复用同一实例跑评测，不需要它）；
+  脚本的行为：起打包好的 jar → 等 `演示数据初始化完成` → **以库里可见状态为准**
+  （`DataInitializer.run()` 带 `@Transactional`，日志先于提交）→ 断言形状
+  （21 机构 / 11 部门 / 1 个顶级 / 300 用户 / 订单数）→ 停；
+- Job2 补一步 **"等待 MySQL 与 Redis 就绪"**（原来只靠 `mvn install` 的耗时兜着，不显式等待）；
+- 脚本里 `unzip -l | grep -q` **显式关掉 pipefail**：`set -o pipefail` 下 grep 提前退出会触发
+  SIGPIPE（unzip 以 141 结束）→ 管道整体非 0 → 会把**好 jar 误判成坏 jar**。
+
+**验证**：`bash -n`（脚本 + 各 job 的 bash 步骤）、YAML 解析、三个 job 的步骤清单自检通过；
+本地用同一套动作（全新空库 → 整包 → 播种 → `mvn -B verify`）复演为 **8/8 BUILD SUCCESS**。
+
 | 作业 | 触发 | 内容 |
 |---|---|---|
 | `build-and-it` | 手动 + 每日 02:00 UTC | MySQL 8 + Redis service；**先打包并起一次后端播种演示数据（Job1 的 `mvn -B verify` 依赖演示库，见 §3.0）**；`mvn -B verify`；上传 surefire/failsafe 报告 + 播种日志 |
