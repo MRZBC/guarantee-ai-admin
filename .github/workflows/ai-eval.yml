@@ -283,13 +283,14 @@ jobs:
       - name: 确定性集（--suite=deterministic）
         run: node scripts/ai-golden-questions.mjs --suite=deterministic
 
-      - name: 上传确定性集报告
+      - name: 上传确定性集报告与播种日志
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: deterministic-eval-reports
           path: |
             reports/eval-deterministic-*
+            ci-seed-app.log
           if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
