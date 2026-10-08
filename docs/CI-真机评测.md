@@ -158,6 +158,31 @@ $ pwsh scripts/run-live-eval.ps1 -Port 8092 -SkipBuild -EvalScript .agent/stub-e
 **本地开发库不受影响**：`DataInitializer` 只在 `sys_user` 为空时执行，存量库一次都不会跑到；
 `schema.sql` 的 `CREATE TABLE IF NOT EXISTS` 对已存在的表是空操作（列由 migration V10 补）。
 
+### 3.0.1 第二轮：CI 上 `guarantee-web` 的红（同日）
+
+第一版修复推送后重跑：**播种与前三处修复都生效**——CI 上 `guarantee-system` /
+`guarantee-analysis` / `guarantee-ai` 全部通过，失败收窄到最后一个模块的
+`AiObservabilityIT.failingTurnStillPersistsTraceableMetric`。
+
+**根因是"用例间的隐藏数据依赖"**（这类问题只在执行顺序变化时暴露，而 CI 是 Linux、
+文件遍历顺序与本地不同）：
+
+1. 它断言 `ai_conversation.config_version > 0`，而该列 = `MAX(ai_config_item.version)`、
+   **`0` 表示空表**（`AiConfigSnapshot` 口径）；应用启动与演示数据播种**都不预置配置行**
+   → 该断言实际要求"先跑过某个写 `ai_config_item` 的 IT"。实测：**干净库单独跑本类必红**
+   （`Expecting actual: 0L to be greater than: 0L`），把 IT 顺序反转同样必红。
+2. 它用"该用户最新一条会话"定位自己的会话，会被别的 IT 抢先建出的会话顶掉。
+
+**修复**（均在 `guarantee-web/src/test/java/com/guarantee/web/ai/AiObservabilityIT.java`）：
+`config_version` 改为断言"等于那一刻 `MAX(version)` 的快照"（空表 0 也成立、非空表仍验正版本）；
+会话改为"本轮新建的那一个"（先取基线，再取 `id > 基线`），并断言恰好新建 1 个。
+
+**验证**：反转顺序（`-Dfailsafe.runOrder=reversealphabetical`）**120/0/0**；
+正常顺序全量 **8/8 BUILD SUCCESS**。
+
+> 教训（写给以后看的人）：`*IT` 之间有共享的 MySQL/Redis，**任何"取最新一行""断言某计数 > N"
+> 都必须限定在用例自己创建的数据上**，否则本地绿、CI 红，且报错信息完全指向别处。
+
 | 作业 | 触发 | 内容 |
 |---|---|---|
 | `build-and-it` | 手动 + 每日 02:00 UTC | MySQL 8 + Redis service；**先打包并起一次后端播种演示数据（Job1 的 `mvn -B verify` 依赖演示库，见 §3.0）**；`mvn -B verify`；上传 surefire/failsafe 报告 + 播种日志 |
