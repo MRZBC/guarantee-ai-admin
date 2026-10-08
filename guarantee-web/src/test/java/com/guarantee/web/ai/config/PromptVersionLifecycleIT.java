@@ -29,9 +29,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 保存草稿 → 发布 → {@link BusinessAssistantPrompt#loadTemplate()} 读到 DB 正文 →
  * 再发一版 → 回滚 → 读回旧正文 → 审计落库。</p>
  *
- * <p><b>门禁</b>：用 {@code guarantee.ai.prompt.gate-command=cmd /c exit 0} 把"命令一定成功"
- * 打桩掉——本 IT 验证的是**门禁通过之后**的发布/回滚/生效链路；
+ * <p><b>门禁</b>：用一个"一定成功且跨平台"的命令（{@code java -version}）把门禁打桩掉——
+ * 本 IT 验证的是**门禁通过之后**的发布/回滚/生效链路；
  * "门禁未跑 / 未全绿必须拒绝"由 {@code PromptVersionServiceTest} 用假门禁覆盖。</p>
+ *
+ * <p><b>桩命令为什么不能写 {@code cmd /c exit 0}</b>：那是 Windows 专有命令。CI（ubuntu runner）
+ * 上 {@code CommandPromptGate} 会以 {@code Cannot run program "cmd": ... (No such file or directory)}
+ * 判为"门禁未跑"，进而拒绝发布，本 IT 就以 {@code 发布门禁未跑} 报错
+ * （2026-10-08 CI 实测）。同时门禁实现是 {@code new ProcessBuilder(command.trim().split("\\s+"))}，
+ * **按空白切分、不支持引号**，所以桩命令必须是"无引号 + JDK 自带工具"的形态：
+ * {@code java -version} 满足（Maven 能跑就一定有 java），退出码 0，任何平台都不会"命令不存在"。</p>
  *
  * <p><b>不污染共享开发库</b>：用例创建的所有版本行与 {@code prompt.active-version} 配置行
  * 在 {@code @AfterEach} 里按版本号精确删除（审计行按既有约定保留：审计只增不删）。</p>
@@ -40,7 +47,9 @@ import static org.assertj.core.api.Assertions.assertThat;
         classes = GuaranteeAiAdminApplication.class,
         properties = {
                 "guarantee.data-init.enabled=false",
-                "guarantee.ai.prompt.gate-command=cmd /c exit 0"
+                // 跨平台的可打桩门禁命令：任何平台都"命令存在 + 退出码 0"
+                // （详见类注释里为什么不能用 cmd /c）
+                "guarantee.ai.prompt.gate-command=java -version"
         })
 class PromptVersionLifecycleIT {
 

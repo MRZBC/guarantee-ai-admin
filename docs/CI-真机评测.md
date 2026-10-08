@@ -183,6 +183,35 @@ $ pwsh scripts/run-live-eval.ps1 -Port 8092 -SkipBuild -EvalScript .agent/stub-e
 > 教训（写给以后看的人）：`*IT` 之间有共享的 MySQL/Redis，**任何"取最新一行""断言某计数 > N"
 > 都必须限定在用例自己创建的数据上**，否则本地绿、CI 红，且报错信息完全指向别处。
 
+### 3.0.2 第三轮：`PromptVersionLifecycleIT` 的 Windows 专有桩命令（同日）
+
+第二轮修复推送后重跑：**仍然只有 `guarantee-web` 红**。这一轮拿到了失败用例名（私有仓库的日志
+本机取不到，由仓库所有者从 CI 日志中提供）：
+
+```
+[ERROR] PromptVersionLifecycleIT.publishTakesEffectAndRollbackRestoresPreviousVersion:98 » Biz
+  发布门禁未跑：门禁命令无法执行（Cannot run program "cmd": Exec failed, error: 2
+  (No such file or directory)）：cmd /c exit 0
+```
+
+**根因：测试里的桩命令写了 Windows 专有命令。** 该 IT 只验证"门禁通过之后"的发布 / 回滚 / 生效链路，
+于是用 `guarantee.ai.prompt.gate-command=cmd /c exit 0` 把门禁打桩成"一定成功"：
+本机（Windows）有 `cmd` → 绿；ubuntu runner 上没有 → `CommandPromptGate` 按设计把
+"命令无法执行"判为 **NOT_RUN** → 拒绝发布 → 用例以 `BizException` 报错。
+（产品侧默认值是 `node scripts/ai-golden-questions.mjs --suite=deterministic`，**本身可移植**，不受影响。）
+
+**修复**：桩命令改为 `java -version`——任何平台都"命令存在 + 退出码 0"。
+注意 `CommandPromptGate` 用 `new ProcessBuilder(command.trim().split("\\s+"))`，
+**按空白切分、不支持引号**，所以桩命令只能是"无引号 + JDK 自带工具"的形态（Maven 能跑就一定有 java）。
+
+**验证**：单跑该 IT 2/2 绿；全新空库 + 播种 + 全量 `mvn -B verify` → **8/8 BUILD SUCCESS**。
+
+> 教训续一条：**测试里不要出现平台专有的可执行命令**（`cmd` / `powershell` / `.ps1`），
+> 桩命令优先选 JDK 自带工具；`mvn verify` 的门禁命令默认值也要保持跨平台。
+>
+> 附记：§3.0.1 修的 `AiObservabilityIT` **不是本轮 CI 的元凶**，但它是同一类"只在被使用过的
+> 本机开发库上绿"的真实隐患（干净库单跑必红），所以一并修掉、没有回退。
+
 | 作业 | 触发 | 内容 |
 |---|---|---|
 | `build-and-it` | 手动 + 每日 02:00 UTC | MySQL 8 + Redis service；**先打包并起一次后端播种演示数据（Job1 的 `mvn -B verify` 依赖演示库，见 §3.0）**；`mvn -B verify`；上传 surefire/failsafe 报告 + 播种日志 |
