@@ -584,6 +584,17 @@ GET /api/system/departments/tree
 
 ### 16.3 一个必须记住的入口差异
 
+> **（2026-10-08 已闭环 —— 本节保留作历史记录）** 下面这个入口差异已经修掉了：
+> `DataInitializer.seedDepartments` 现在直接生成**单棵树**（11 个部门、id 从 1001 起、
+> 编码 `ORGHQ-*`），`seedUsers` 按用户序号轮转挂到 11 个部门上，与
+> `migrate-dept-single-org` 的目标态一致 → **`reset-demo-data.ps1` 之后不再需要补一次迁移**，
+> 新库（含 CI）的演示数据与存量库同形。
+> 触发这次决策的是 CI 首跑：Job1 在空库上跑 `mvn -B verify` 时
+> `guarantee-system` 红 44 个用例，其中"新库是 21 棵部门树、而测试与
+> `verify-dept-tree-shape.mjs` 要求单棵"是根因之一（见 `docs/CI-真机评测.md` §3.0）。
+> `DEPT_COUNT` 相应由 `ORG_COUNT × 11` 改为 `11`，并在启动时校验
+> "规格表长度一致 + 第 0 项是顶级部门「总部」"（保证 admin 仍落在总部，SYS-P-24）。
+
 **`DataInitializer` 仍然按"21 个机构各一棵 11 个部门的树"生成演示数据**，与当前库不一致。
 
 - 原因：`DataInitializer` 是**全量演示数据的源头**（含 21 个机构的三级层级、地区分布、订单等），

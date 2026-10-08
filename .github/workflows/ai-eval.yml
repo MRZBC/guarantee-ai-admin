@@ -1,20 +1,50 @@
 # =============================================================================
 # AI 评测 CI（ai-eval）
 #
-# ⚠️ 真实状态（必读）：**本 workflow 从未在 GitHub Actions 上执行过。**
-#    本机没有 CI 环境、也无法在本地运行 GitHub runner，所以它是依据 runner 环境
-#    **推断**写出的第一版。首次在 GitHub 上跑，很可能需要按实际报错调整，尤其是：
+# ⚠️ 真实状态（必读）：
+#   【首跑 + 修复 + 本地复演全绿：2026-10-08（手动触发）】
+#   首跑：**Job1 在 guarantee-system 红了**（120 用例中 3 failures + 41 errors），
+#   Job2/Job3 因 `needs: build-and-it` 被跳过。用"空库"在本机复现，报错与 CI 逐字一致
+#   （surefire 3.5.6 / "There are test failures." / MojoFailureException）。
+#   四处根因与修复：
+#     ① 空库没有演示数据：Job1 只起 MySQL/Redis service，**从不启动 guarantee-web** →
+#        DataInitializer（默认 true）不执行。而 system / analysis / web 的 *IT 全按"演示库"写
+#        （21 机构 / 单棵 11 部门树 / 300 用户 / 角色权限矩阵 / 15 万订单）。
+#        修法：Job1 新增两步——**打包 → 起一次后端播种（实测 6.0s）→ 断言形状 → 停**，
+#        与本地口径完全一致；形状断言（21 机构 / 11 部门 / 1 个顶级 / 300 用户 / 订单数）
+#        把"演示数据规格漂移"变成 CI 上的**响亮失败**，而不是让 IT 以"数据缺失"的面目红。
+#     ② schema 漂移：`sys_user.account_type` 只加在 db/migration/V10，schema.sql 没有
+#        → 空库缺列，SysUserAccountTypeIntegrationTest 6/6 报 BadSqlGrammar。
+#        修法：补进 schema.sql（DDL 与 V10 的 ADD COLUMN 逐字一致）。
+#     ③ 新库的演示数据与测试目标态不一致：DataInitializer 产出 **21 棵**部门树
+#        （231 部门 / 21 个 parent_id=0 的根），而 DataScopeIntegrationTest 与
+#        scripts/verify-dept-tree-shape.mjs 都要求"**单棵纯部门树**（11 部门 / 唯一根「总部」）"。
+#        本地能绿是因为开发库早已用手工迁移（migrate-dept-single-org）收敛过 →
+#        **新库/新同事/CI 都是坏的**。修法：**对齐 DataInitializer**（单棵树、部门 id 从 1001 起、
+#        用户按序号轮转，与已执行迁移同形）。该残留项此前在 docs/PLAN-部门配置树形改造方案.md
+#        §16.3 被显式记录为"应单独决策"，本次即该决策（§16.3 已同步为"已闭环"）。
+#     ④（测试侧）OperationAuditAllLimitIT 原来要求"库里近 7 天审计 > 200 条"——审计行是
+#        **运行时**产物（DataInitializer 不造），干净库只有 14 条 → 它测不到 all/limit 的差异。
+#        修法：用例自建 250 条夹具、用例后按 trace_id 删除（断言口径不变）。
 #
+#   修复后**本地干净库复演**（等同本文件 Job1 的序列）：
+#     全新建空库 → `mvn -pl guarantee-web -am -DskipTests package` → 起 jar 播种
+#     （16.1s 含启动，种子自身 6.0s）→ 形状 OK（21/11/1/300/100000/50000）→
+#     `mvn -B verify` → **8/8 模块 BUILD SUCCESS，合计 753 项用例 0 失败 0 错误**。
+#     Job1 的这一步也在本文件里落成了形状断言（见 "起一次后端播种演示数据，并断言形状"）。
+#
+#   仍未在 CI 上执行过：**Job2（确定性集）与 Job3（真机集/拒答）**，其差异仍是按 runner 推断：
 #    1) schema 初始化：应用启动时靠 `guarantee-web/src/main/resources/db/schema.sql`
 #       自建表（`spring.sql.init.mode=always`）。仓库**没有 Flyway**，
-#       `db/migration/V1..V10` 是**手工**执行的幂等脚本 → CI 首跑务必确认表结构完整
-#       （缺列/缺表会在启动或 IT 里以 SQL 异常暴露）。
+#       `db/migration/V1..V10` 是**手工**执行的幂等脚本 → 新增列/表必须**同时**改
+#       schema.sql（空库路径）与 migration（存量路径）；只改一处就是上面 ② 那种漂移。
 #    2) live 集的数据基线：真机集要求订单量 ≥1000 且数据区间正确
 #       （`GOLDEN_BASELINE_MIN_ORDERS` 默认 1000）。仓库目前**没有订单 seed 脚本**
 #       （只有 `db/seed/region.sql`），所以 CI 上直接跑 live 极可能被判
 #       `environment`（脚本退出码 2）。本 workflow 对此采取"**打印未跑/环境不足但不失败**"
 #       的口径（见 live-eval 作业）；**接入 seed 之后应把退出码 2 也改为失败**，
 #       否则这道门会长期空转。
+#       （注：Job1 现在会起一次后端播种 15 万订单，需要真机集时可以直接复用同一套做法。）
 #    3) 真机集需要 `secrets.DEEPSEEK_API_KEY`：未配置时该作业**跳过而不是失败**。
 #
 # 三道门（与本地一致）：
@@ -130,10 +160,77 @@ jobs:
           echo "MySQL 未在 60s 内就绪" >&2
           exit 1
 
+      # ---------------------------------------------------------------------
+      # 演示数据播种（与本地口径**完全一致**）
+      #
+      # 为什么必须有这一步：guarantee-system / guarantee-analysis / guarantee-web 的 *IT
+      # 都是按"演示库"写的（21 机构 / 单棵 11 部门树 / 300 用户 / 角色权限矩阵 / 15 万订单），
+      # 而在此之前 Job1 只起 MySQL/Redis、**从不启动 guarantee-web**（DataInitializer 不执行）
+      # → 库是空的 → 2026-10-08 首跑 guarantee-system 就红了 44 个用例。
+      #
+      # 做法：起一次打包好的后端（实测种子耗时 6.0s），等它打出"演示数据初始化完成"、
+      # 并且**直接查库确认已提交**，再停掉。纪律与 Job3 一致：带 -am、禁 repackage.skip、
+      # 用 8093（绝不碰用户自己的 8081 / Job3 的 8092）。
+      # ---------------------------------------------------------------------
+      - name: 打包（播种用；带 -am，禁 repackage.skip）
+        run: mvn -B -pl guarantee-web -am -DskipTests package
+
+      - name: 起一次后端播种演示数据，并断言形状
+        run: |
+          set -euo pipefail
+          JAR=guarantee-web/target/guarantee-ai-admin.jar
+          if ! unzip -l "$JAR" | grep -q 'BOOT-INF/'; then
+            echo "::error::$JAR 不是 fat jar（BOOT-INF 缺失）——不要传 -Dspring-boot.repackage.skip=true"
+            exit 1
+          fi
+          java -jar "$JAR" --server.port=8093 > ci-seed-app.log 2>&1 &
+          APP_PID=$!
+          # 无论后面成功、失败、报错，都必须回收实例（否则它锁住 jar，verify 的 repackage 会卡死）
+          trap 'kill $APP_PID 2>/dev/null || true' EXIT
+
+          seeded=0
+          for i in $(seq 1 120); do
+            if grep -q '演示数据初始化完成' ci-seed-app.log; then seeded=1; break; fi
+            if ! kill -0 "$APP_PID" 2>/dev/null; then
+              echo "::error::播种进程提前退出"; tail -n 60 ci-seed-app.log; exit 1
+            fi
+            sleep 2
+          done
+          if [ "$seeded" != "1" ]; then
+            echo "::error::240s 内未见「演示数据初始化完成」"; tail -n 60 ci-seed-app.log; exit 1
+          fi
+          grep '演示数据初始化完成' ci-seed-app.log
+
+          # DataInitializer.run() 带 @Transactional：日志在方法内打印，提交在其后。
+          # 因此这里**以库里的可见状态为准**（而不是"看到日志就杀进程"）。
+          q() { mysql -h127.0.0.1 -P3306 -uroot -proot -N -B -e "SELECT $1 FROM guarantee_ai_admin.$2" 2>/dev/null || echo 0; }
+          USERS=0
+          for i in $(seq 1 30); do
+            USERS=$(q 'COUNT(*)' sys_user)
+            if [ "$USERS" = "300" ]; then break; fi
+            sleep 2
+          done
+          kill "$APP_PID" 2>/dev/null || true
+          wait "$APP_PID" 2>/dev/null || true
+
+          # 形状断言：DataInitializer 的规格一旦漂移，就在这里**响亮地**红，
+          # 而不是让 IT 以"数据缺失/查不到 admin"的面目失败（首跑就是这么红的）。
+          ORG=$(q 'COUNT(*)' sys_org)
+          DEPT=$(q 'COUNT(*)' sys_department)
+          ROOTS=$(q 'COUNT(*)' "sys_department WHERE parent_id = 0")
+          TENDER=$(q 'COUNT(*)' tender_order)
+          PERF=$(q 'COUNT(*)' performance_order)
+          echo "播种结果：机构=$ORG 部门=$DEPT（顶级=$ROOTS）用户=$USERS 投标订单=$TENDER 履约订单=$PERF"
+          if [ "$ORG" != "21" ] || [ "$DEPT" != "11" ] || [ "$ROOTS" != "1" ] || [ "$USERS" != "300" ] \
+             || [ "$TENDER" -lt 1000 ] || [ "$PERF" -lt 1000 ]; then
+            echo "::error::演示数据形状不符合预期（预期 21 机构 / 11 部门 / 1 个顶级 / 300 用户 / 订单各 ≥1000）"
+            exit 1
+          fi
+
       - name: mvn -B verify
         run: mvn -B verify
 
-      - name: 上传 surefire/failsafe 报告
+      - name: 上传 surefire/failsafe 报告与播种日志
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -141,6 +238,7 @@ jobs:
           path: |
             **/target/surefire-reports/**
             **/target/failsafe-reports/**
+            ci-seed-app.log
           if-no-files-found: warn
 
   # ---------------------------------------------------------------------------

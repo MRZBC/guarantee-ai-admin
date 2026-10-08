@@ -54,19 +54,31 @@ public class DataInitializer implements ApplicationRunner {
     /**
      * 机构**总数** = 总部 + 区域机构。
      *
-     * <p>该常量驱动 {@code sys_department} 的分配公式与用户机构分配，机构表新增总部节点后
-     * 必须同步为 21，否则部门/用户会挂到错误的机构（SYS-P-17 / SYS-P-22）。</p>
+     * <p>只驱动机构层级与订单的区域采样；**不再**驱动部门分配——2026-10-08 起部门树是
+     * 挂在总部编码下的**单棵**纯部门树（见 {@link #DEPT_COUNT}）。机构表新增总部节点后
+     * 必须同步为 21，否则订单会挂到错误的机构（SYS-P-16a / SYS-P-23）。</p>
      */
     private static final int ORG_COUNT = HEADQUARTERS + 20;
 
-    /** 总部节点机构编码。 */
+    /**
+     * 总部节点机构编码。同时是部门树的编码前缀（{@code ORGHQ-*}）。
+     */
     private static final String HEADQUARTERS_CODE = "ORGHQ";
 
     /**
-     * admin 归属的部门名（即 {@link #DEPT_SPEC} 里那个根节点，也是总部机构下的第一个部门）。
+     * 部门 id 起点。
+     *
+     * <p>与已执行的收敛迁移 {@code scripts/migrate-dept-single-org.*}（新部门 id 从 1001 起、
+     * 避开旧口径的 1~80）保持一致：这样**新库**与存量库的部门标识相同，
+     * 测试夹具里出现的 {@code 1001} 也不再是巧合。</p>
+     */
+    private static final long DEPT_ID_BASE = 1001;
+
+    /**
+     * admin 归属的部门名（即 {@link #DEPT_SPEC} 里那个根节点，也是单棵部门树的唯一顶级节点）。
      *
      * <p>实库里 admin 的 {@code dept_name = '总部'}；用户必须属于一个部门
-     * （{@code sys_user.dept_id} 为 NOT NULL），因此初始化时按**名字**给 admin 选部门，
+     * （{@code sys_user.dept_id} 为 NOT NULL），因此初始化时按**名字**校验这个根节点，
      * 不硬编码部门 id。</p>
      */
     private static final String HEADQUARTERS_DEPT_NAME = "总部";
@@ -75,14 +87,22 @@ public class DataInitializer implements ApplicationRunner {
     private static final String HEADQUARTERS_REGION = "110000";
 
     /**
-     * 部门**总数** = 机构数 × 每机构部门数。
+     * 部门**总数** = 单棵部门树的节点数（11），**不再**乘机构数。
+     *
+     * <p>2026-10-08：部门树收敛为**单棵**（只保留 ORGHQ 一棵；评审要求、迁移与连带后果见
+     * {@code docs/PLAN-部门配置树形改造方案.md} §16）。在此之前这里是
+     * {@code ORG_COUNT * 11}，于是**新库**会生成 21 棵（231 个部门 / 21 个顶级节点），
+     * 与 {@code DataScopeIntegrationTest}、{@code scripts/verify-dept-tree-shape.mjs}
+     * 要求的目标态（唯一根节点「总部」）冲突——这正是 CI 在空库上跑 verify 时
+     * {@code guarantee-system} 变红的原因之一。该残留项此前被显式记录为"应单独决策"，
+     * 本次决策：**对齐**。</p>
      *
      * <p>在字段初始化处**不做跨常量引用**（Java 常量初始化不允许前向引用，
-     * 而 {@code DEPT_SPEC} 定义在下方便于就近阅读）。此处按规格表长度写死表达式，
+     * 而 {@code DEPT_SPEC} 定义在下方便于就近阅读）。此处写死字面量，
      * 并在 {@link #assertDeptCountConsistent()} 里校验它与规格表一致——
-     * 校验失败会在启动时报错，不会静默失配。</p>
+     * 校验失败会**在启动时报错**，不会静默少建/多建部门。</p>
      */
-    private static final int DEPT_COUNT = ORG_COUNT * 11;
+    private static final int DEPT_COUNT = 11;
 
     private static final int USER_COUNT = 300;
     private static final int ENTERPRISE_COUNT = 3000;
@@ -151,16 +171,16 @@ public class DataInitializer implements ApplicationRunner {
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     /**
-     * 每个机构**实际创建**的部门 id 列表（机构下标 → 部门 id 列表）。
+     * 单棵部门树**实际创建**的部门 id 列表（按 {@link #DEPT_SPEC} 顺序）。
      *
      * <p><b>为什么必须查表而不是算公式</b>：早期实现用
-     * {@code deptId = orgIndex + 1 + ORG_COUNT * slot} 推导，一旦部门总数不能被机构数整除
-     * （当时的 80 就不能被 21 整除），最后一个机构会算出 {@code 85} 这类**并不存在**的部门 id，
+     * {@code deptId = orgIndex + 1 + ORG_COUNT * slot} 推导，一旦部门总数与机构数不再是整除关系
+     * （当时的 80 就不能被 21 整除），就会算出 {@code 85} 这类**并不存在**的部门 id，
      * 使这批用户的 {@code dept_id} 指向空记录——列表里"所属部门"永远为空，
      * 且按部门统计用户数时会静默少算。改成规格表驱动后部门数会随规格变化，
-     * 算术推导只会更容易出错，因此坚持查表。</p>
+     * 算术推导只会更容易出错，因此坚持记录实建 id。</p>
      */
-    private final Map<Integer, List<Long>> orgDeptIds = new LinkedHashMap<>();
+    private final List<Long> deptIds = new ArrayList<>();
 
     @Value("${guarantee.data-init.seed:20260920}")
     private long seed;
@@ -183,9 +203,9 @@ public class DataInitializer implements ApplicationRunner {
 
         assertDeptCountConsistent();
         List<OrgRow> orgs = seedOrgs();
-        seedDepartments(orgs);
+        seedDepartments();
         seedRolesAndPermissions();
-        seedUsers(random, orgs);
+        seedUsers(random);
         List<InsuranceRow> insuranceTypes = seedInsuranceTypes();
         List<EnterpriseRow> enterprises = seedEnterprises(random);
         List<ProjectRow> projects = seedProjects(random, enterprises);
@@ -265,9 +285,11 @@ public class DataInitializer implements ApplicationRunner {
     /**
      * 部门树规格：{@code {部门名, 上级部门名（null = 顶级）}}。
      *
-     * <p><b>每个机构都套用这同一棵树</b>（机构是出函机构、部门是公司内部部门，二者是不同的实体；
+     * <p><b>全库只有这一棵树</b>（机构是出函机构、部门是公司内部部门，二者是不同的实体；
      * 部门靠 {@code parent_id} 成树，**不再有机构字段**——机构服务于订单，不是人的归属属性）。
-     * 本机构 11 个部门：总部 → 5 个一级部门 → 其中业务部/技术部再分 5 个二级部门。</p>
+     * 共 11 个部门：总部 → 5 个一级部门 → 其中业务部/技术部再分 5 个二级部门。
+     * 第 0 项必须是顶级部门「总部」：{@code admin} 的用户序号是 1，按序号轮转必然落在它上面
+     * （SYS-P-24），{@link #assertDeptCountConsistent()} 会把这个前提变成**启动即校验**。</p>
      *
      * <p>为什么用规格表驱动而不是原来的"按 slot 取名字"：原实现的父子关系靠
      * {@code parentId = orgIndex + 1} 这种 id 算术推导，一旦部门数或顺序变化就会指向错误父节点。
@@ -287,33 +309,41 @@ public class DataInitializer implements ApplicationRunner {
             {"系统部", "技术部"},
     };
 
-    /** 每机构部门数（= 部门树节点数）。 */
+    /** 部门树节点数（= 规格表长度）。 */
     private static final int DEPTS_PER_ORG = DEPT_SPEC.length;
 
     /**
-     * 启动时校验 {@link #DEPT_COUNT} 与规格表一致。
+     * 启动时校验 {@link #DEPT_COUNT}、规格表与"唯一根 = 总部"三个前提一致。
      *
-     * <p>常量初始化不能前向引用 {@code DEPT_SPEC}，因此 {@code DEPT_COUNT} 里的乘数只能写字面量；
-     * 这个校验把"改了规格忘记改乘数"变成**启动即失败**，而不是悄悄少建/多建部门。</p>
+     * <p>常量初始化不能前向引用 {@code DEPT_SPEC}，因此 {@code DEPT_COUNT} 只能写字面量；
+     * 这些校验把"改了规格忘记改常量""把根节点换成别的部门"变成**启动即失败**，
+     * 而不是悄悄多建/少建部门、或让 {@code admin} 挂到非总部部门上。</p>
      */
     private static void assertDeptCountConsistent() {
-        if (DEPT_COUNT != ORG_COUNT * DEPTS_PER_ORG) {
+        if (DEPT_COUNT != DEPTS_PER_ORG) {
             throw new IllegalStateException("部门总数常量与规格表不一致: DEPT_COUNT=" + DEPT_COUNT
-                    + " 但 ORG_COUNT×规格表长度=" + (ORG_COUNT * DEPTS_PER_ORG));
+                    + " 但规格表长度=" + DEPTS_PER_ORG);
+        }
+        if (!HEADQUARTERS_DEPT_NAME.equals(DEPT_SPEC[0][0]) || DEPT_SPEC[0][1] != null) {
+            throw new IllegalStateException("部门规格表第 0 项必须是顶级部门「" + HEADQUARTERS_DEPT_NAME
+                    + "」：用户序号 1（admin）按轮转落在它上面（SYS-P-24），实际="
+                    + DEPT_SPEC[0][0] + " / 上级=" + DEPT_SPEC[0][1]);
         }
     }
 
     /**
-     * 生成部门（SYS-P-18 / SYS-P-24a / SYS-P-25）。
+     * 生成**单棵**纯部门树（SYS-P-18 / SYS-P-24a / SYS-P-25）。
      *
-     * <p>每个机构套用 {@link #DEPT_SPEC} 这棵树：第 1 个节点（总部）为顶级，
-     * 其余按规格表指明父节点，因此层级**不是**一层平铺，而是"总部 → 一级部门 → 二级部门"。</p>
+     * <p>11 个节点全部挂在总部机构编码（{@code ORGHQ}）下：第 0 项「总部」为顶级，
+     * 其余按规格表指明父节点，因此层级是"总部 → 一级部门 → 二级部门"（三级），不是一层平铺。
+     * 部门 id 从 {@link #DEPT_ID_BASE} 起，与已执行的收敛迁移（{@code migrate-dept-single-org}）
+     * 同一形状 → **新库与存量库的部门标识一致**，不需要再手工补一次迁移。</p>
      *
-     * <p>编码用"机构编码 + 短代码"（如 {@code ORGHQ-TECH}）保证全局唯一——
-     * {@code dept_code} 是全局唯一键，而"技术部"这类名字在 21 个机构里都会出现。</p>
+     * <p>编码用"机构编码 + 短代码"（如 {@code ORGHQ-TECH}）：{@code dept_code} 是全局唯一键，
+     * 而"技术部"这类名字在 21 个机构各自一棵树的旧口径里出现过 21 次。</p>
      */
-    private void seedDepartments(List<OrgRow> orgs) {
-        // 部门名 -> 该机构内的短代码，用于拼 dept_code
+    private void seedDepartments() {
+        // 部门名 -> 短代码，用于拼 dept_code
         Map<String, String> shortCodes = Map.ofEntries(
                 Map.entry("总部", "HQ"),
                 Map.entry("业务部", "BIZ"),
@@ -327,37 +357,34 @@ public class DataInitializer implements ApplicationRunner {
                 Map.entry("大数据部", "TECH-BD"),
                 Map.entry("系统部", "TECH-SYS"));
 
-        List<Object[]> batch = new ArrayList<>(orgs.size() * DEPTS_PER_ORG);
-        long id = 1;
+        List<Object[]> batch = new ArrayList<>(DEPTS_PER_ORG);
+        long id = DEPT_ID_BASE;
         int sortNo = 1;
-        for (int orgIndex = 0; orgIndex < orgs.size(); orgIndex++) {
-            OrgRow org = orgs.get(orgIndex);
-            // 本机构内 部门名 -> 已插入的 id（供规格表解析父 id）
-            Map<String, Long> idByName = new LinkedHashMap<>();
-            for (String[] node : DEPT_SPEC) {
-                String deptName = node[0];
-                String parentName = node[1];
-                String code = org.code() + "-" + shortCodes.get(deptName);
-                Long parentId = parentName == null ? 0L : idByName.get(parentName);
-                if (parentId == null) {
-                    throw new IllegalStateException("部门规格表引用了未定义或不存在的上级部门: " + parentName);
-                }
-                batch.add(new Object[]{id, code, deptName, parentId, 1, sortNo});
-
-                // 记录"该机构实际创建了哪些部门"（**按 DEPT_SPEC 顺序追加**），
-                // 供 seedUsers 分配用户时查表；顺序是 deptIdByName 按名字定位部门的前提。
-                orgDeptIds.computeIfAbsent(orgIndex, k -> new ArrayList<>()).add(id);
-                idByName.put(deptName, id);
-                id++;
-                sortNo++;
+        // 本棵树内 部门名 -> 已插入的 id（供规格表解析父 id）
+        Map<String, Long> idByName = new LinkedHashMap<>();
+        for (String[] node : DEPT_SPEC) {
+            String deptName = node[0];
+            String parentName = node[1];
+            String code = HEADQUARTERS_CODE + "-" + shortCodes.get(deptName);
+            Long parentId = parentName == null ? 0L : idByName.get(parentName);
+            if (parentId == null) {
+                throw new IllegalStateException("部门规格表引用了未定义或不存在的上级部门: " + parentName);
             }
+            batch.add(new Object[]{id, code, deptName, parentId, 1, sortNo});
+
+            // 记录"实际创建了哪些部门"（**按 DEPT_SPEC 顺序追加**），
+            // 供 seedUsers 按用户序号轮转分配；顺序是"序号 ↔ 部门"可复现的前提。
+            deptIds.add(id);
+            idByName.put(deptName, id);
+            id++;
+            sortNo++;
         }
         jdbcTemplate.batchUpdate("""
                 INSERT INTO sys_department (id, dept_code, dept_name, parent_id, status, sort_no)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """, batch);
-        log.info("已生成部门 {} 个（每机构 {} 个：总部 + 5 个一级部门 + 5 个二级部门）",
-                batch.size(), DEPTS_PER_ORG);
+        log.info("已生成部门 {} 个（单棵树：总部 + 5 个一级部门 + 5 个二级部门，全部挂在 {} 下）",
+                batch.size(), HEADQUARTERS_CODE);
     }
 
     /** 权限编码 / 权限名称 / 前端路由。权威定义见 {@link PermissionCatalog}（SYS-P-13）。 */
@@ -398,7 +425,7 @@ public class DataInitializer implements ApplicationRunner {
         return id;
     }
 
-    private void seedUsers(Random random, List<OrgRow> orgs) {
+    private void seedUsers(Random random) {
         String[] surnames = {"张", "王", "李", "赵", "陈", "刘", "杨", "黄", "周", "吴", "徐", "孙", "马", "朱", "胡"};
         String[] givenNames = {"伟", "芳", "娜", "敏", "静", "磊", "强", "军", "洋", "勇", "艳", "杰", "娟", "涛", "明"};
 
@@ -422,12 +449,13 @@ public class DataInitializer implements ApplicationRunner {
         String defaultHash = passwordEncoder.encode(DEFAULT_PASSWORD);
 
         for (int i = 1; i <= USER_COUNT; i++) {
-            int orgIndex = i % orgs.size();
-            // 从"该机构实际创建的部门"里取一个：用户必须挂在真实存在的部门上。
-            // 不能用 id 算术推导——部门树由 DEPT_SPEC 驱动，部门数与顺序都可能变，
-            // 推导出来的 id 一旦失配就会指向不存在的部门（列表里"所属部门"永远为空）。
-            List<Long> deptIds = orgDeptIds.getOrDefault(orgIndex, List.of());
-            Long deptId = deptIds.isEmpty() ? null : deptIds.get(i % deptIds.size());
+            // 用户全部挂在**单棵部门树**的 11 个部门上，按用户序号轮转（每部门 27~28 人）。
+            // 序号 1 落在 DEPT_SPEC 第 0 项「总部」= SYS-P-24 对 admin 的要求
+            // （该前提由 assertDeptCountConsistent() 在启动时校验），2/3/4 依次落在
+            // 业务部 / 财务部 / 人事部。口径与已执行的收敛迁移 migrate-dept-single-org 一致，
+            // 因此新库与存量库的"按部门统计"结果相同。用序号取模而不是随机：
+            // 演示数据的分布必须可复现。
+            Long deptId = deptIds.get((i - 1) % deptIds.size());
             String username;
             String hash;
             long roleId;
@@ -435,32 +463,18 @@ public class DataInitializer implements ApplicationRunner {
                 username = "admin";
                 hash = adminHash;
                 roleId = adminRoleId;
-                // SYS-P-24：admin 挂总部机构下的「总部」部门。
-                // 用户必须属于一个部门（sys_user.dept_id 为 NOT NULL），因此不再允许 deptId = null；
-                // 部门按**名字**定位（见 deptIdByName），不硬编码部门 id。
-                orgIndex = headquartersOrgIndex(orgs);
-                deptId = deptIdByName(orgIndex, HEADQUARTERS_DEPT_NAME);
             } else if (i == 2) {
                 username = "operator";
                 hash = operatorHash;
                 roleId = operatorRoleId;
-                // SYS-P-24：operator 使用「浙江省省级机构」那一组部门（orgs 下标 1）
-                orgIndex = 1;
-                deptId = pickDeptId(orgIndex, i);
             } else if (i == 3) {
                 username = "analyst";
                 hash = analystHash;
                 roleId = analystRoleId;
-                // SYS-P-24：analyst 使用「浙江省第2保函运营机构」那一组部门（orgs 下标 2）
-                orgIndex = 2;
-                deptId = pickDeptId(orgIndex, i);
             } else if (i == 4) {
                 username = "user0004";
                 hash = defaultHash;
                 roleId = operatorRoleId;
-                // SYS-P-24：user0004 使用「江苏省省级机构」那一组部门（orgs 下标 7）
-                orgIndex = 7;
-                deptId = pickDeptId(orgIndex, i);
             } else {
                 username = "user" + String.format("%04d", i);
                 hash = defaultHash;
@@ -488,63 +502,8 @@ public class DataInitializer implements ApplicationRunner {
         jdbcTemplate.batchUpdate("""
                 INSERT INTO sys_user_role (user_id, role_id) VALUES (?, ?)
                 """, userRoles);
-        log.info("已生成用户 {} 个（admin 挂总部部门 / operator、analyst、user0004 挂指定演示部门 "
-                + "+ {} 个普通用户）", USER_COUNT, USER_COUNT - 4);
-    }
-
-    /**
-     * 取总部机构在 {@code orgs} 里的下标。
-     *
-     * <p>按机构编码（{@link #HEADQUARTERS_CODE}）查找，而不是硬编码 {@code 0}：
-     * 总部必须是机构的唯一根，位置一旦变化，admin 的部门就会挂到别的机构去。</p>
-     */
-    private static int headquartersOrgIndex(List<OrgRow> orgs) {
-        for (int i = 0; i < orgs.size(); i++) {
-            if (HEADQUARTERS_CODE.equals(orgs.get(i).code())) {
-                return i;
-            }
-        }
-        throw new IllegalStateException("机构列表中找不到总部节点: " + HEADQUARTERS_CODE);
-    }
-
-    /**
-     * 取某机构内指定**名称**的部门 id。
-     *
-     * <p>{@link #orgDeptIds} 是按 {@link #DEPT_SPEC} 顺序追加的，因此用部门名在规格表中的下标
-     * 即可定位同名部门；这样既不硬编码部门 id，也不依赖 id 算术。
-     * 名字不在规格表、或该机构没建出这个部门时**直接抛错**，而不是返回 null：
-     * {@code sys_user.dept_id} 已收紧为 NOT NULL，静默返回 null 只会在批量插入时才失败。</p>
-     */
-    private Long deptIdByName(int orgIndex, String deptName) {
-        int index = -1;
-        for (int i = 0; i < DEPT_SPEC.length; i++) {
-            if (DEPT_SPEC[i][0].equals(deptName)) {
-                index = i;
-                break;
-            }
-        }
-        if (index < 0) {
-            throw new IllegalStateException("部门规格表中不存在部门: " + deptName);
-        }
-        List<Long> deptIds = orgDeptIds.getOrDefault(orgIndex, List.of());
-        if (index >= deptIds.size()) {
-            throw new IllegalStateException("机构下标 " + orgIndex + " 下没有部门 " + deptName
-                    + "（该机构实际部门数 " + deptIds.size() + "）");
-        }
-        return deptIds.get(index);
-    }
-
-    /**
-     * 取某机构的第 n 个部门 id（按用户序号稳定选择）。
-     *
-     * <p>演示账号（operator / analyst / user0004）被显式指定到不同机构的部门组，
-     * 以便演示数据里"不同归属的用户"分布可控；**指定了哪一组部门，就必须用同一组的下标去取
-     * deptId**，否则会拿到别的机构那一组部门——页面上看不出毛病，但按部门统计人数会静默错位
-     * （本仓库踩过一次）。</p>
-     */
-    private Long pickDeptId(int orgIndex, int userSeq) {
-        List<Long> deptIds = orgDeptIds.getOrDefault(orgIndex, List.of());
-        return deptIds.isEmpty() ? null : deptIds.get(userSeq % deptIds.size());
+        log.info("已生成用户 {} 个（全部挂在单棵部门树的 {} 个部门上，按序号轮转；admin 落在「{}」）",
+                USER_COUNT, deptIds.size(), HEADQUARTERS_DEPT_NAME);
     }
 
     // ==================================================================

@@ -61,6 +61,11 @@ CREATE TABLE IF NOT EXISTS sys_user (
     phone         VARCHAR(20)  NULL,
     email         VARCHAR(128) NULL,
     status        TINYINT      NOT NULL DEFAULT 1 COMMENT '状态 1启用 0停用',
+    -- account_type 的 DDL 必须与 db/migration/V10__ai_mcp.sql 的 ADD COLUMN 逐字一致：
+    -- 存量库靠 V10 补列，空库靠本文件自建（见 docs/DEC-逻辑删除设计方案.md §10.1 的幂等边界）。
+    -- 该列曾**只**加在 V10：空库没有这一列，guarantee-system 的账号类型集成测试
+    -- 在 CI 首跑 6/6 全错（BadSqlGrammar: Unknown column 'account_type'，2026-10-08）。
+    account_type  VARCHAR(16)  NOT NULL DEFAULT 'HUMAN' COMMENT '账号类型 HUMAN/SERVICE（SERVICE 不参与登录）',
     must_change_password TINYINT NOT NULL DEFAULT 0 COMMENT '首次登录强制改密 1是 0否',
     last_login_at DATETIME     NULL COMMENT '最近登录时间',
     created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -71,7 +76,9 @@ CREATE TABLE IF NOT EXISTS sys_user (
     PRIMARY KEY (id),
     KEY idx_sys_user_deleted (is_deleted),
     UNIQUE KEY uk_sys_user_username (username, (IFNULL(deleted_at, '1970-01-01 00:00:00.000000'))),
-    KEY idx_sys_user_dept (dept_id)
+    KEY idx_sys_user_dept (dept_id),
+    -- 与 V10 同步：服务账号查询走这个索引（SERVICE 不参与登录）
+    KEY idx_sys_user_account_type (account_type)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户配置';
 
 CREATE TABLE IF NOT EXISTS sys_role (

@@ -1,7 +1,8 @@
 # CI 与真机评测（A1 / task-34）
 
 > 交付：`scripts/run-live-eval.ps1`（本地一键真机评测，**已实测**）+ `.github/workflows/ai-eval.yml`
-> （GitHub Actions 工作流，**未在 CI 上执行过**，见 §3 的如实标注）。
+> （GitHub Actions 工作流；**Job1 已于 2026-10-08 首跑（失败 → 已修 → 本地干净库复演 8/8 全绿，见 §3.0），
+> Job2/Job3 仍未在 CI 上执行过**）。
 
 ## 0. 为什么要做这件事
 
@@ -98,22 +99,68 @@ $ pwsh scripts/run-live-eval.ps1 -Port 8092 -SkipBuild -EvalScript .agent/stub-e
 
 ## 3. GitHub Actions：`.github/workflows/ai-eval.yml`
 
-> ⚠️ **本 workflow 从未在 GitHub Actions 上执行过。** 本机没有 CI 环境，也无法在本地跑 GitHub runner；
-> 它是按 runner 环境**推断**写出的第一版，**首次运行很可能需要按实际报错调整**。以下差异是已知的：
+> ⚠️ **状态（2026-10-08 更新）**：Job1（`mvn -B verify`）已于 2026-10-08 在 GitHub Actions
+> 上**首跑**，结果是**红**（失败在 `guarantee-system`）→ 已在本地复现、修好、
+> 并用**干净库复演到 8/8 全绿**（详见 §3.0）。**Job2/Job3 仍未在 CI 上执行过**，
+> 其差异仍是按 runner 环境推断的：
 > 1. **schema 初始化**：应用靠 `guarantee-web/src/main/resources/db/schema.sql` 自建表
 >    （`spring.sql.init.mode=always`）。仓库**没有 Flyway**，`db/migration/V1..V10` 是**手工**执行的
->    幂等脚本 → CI 首跑要确认表结构完整（缺表/缺列会以 SQL 异常暴露）。
+>    幂等脚本 → 新增列/表必须**同时**改 schema.sql（空库路径）与 migration（存量路径），
+>    只改一处就是 §3.0 的根因 ②。
 > 2. **live 集数据基线**：真机集要求订单量 ≥1000 且数据区间正确（`GOLDEN_BASELINE_MIN_ORDERS`）。
 >    仓库目前**没有订单 seed 脚本**（只有 `db/seed/region.sql`）→ CI 上直接跑 live 极可能被判
 >    `environment`（退出码 2）。因此 Job3 对退出码 2 采取"**打印未跑/环境不足但不失败**"的口径；
 >    **接入 seed 后应把退出码 2 也改为失败**，否则这道门会长期空转。
+>    （注：Job1 现在会起一次后端播种 15 万订单，真机集可以直接复用这套做法。）
 > 3. `scripts/run-live-eval.ps1` 用 Windows API（`Get-NetTCPConnection`），**不能**直接在 ubuntu
 >    runner 上跑；Job3 用 bash 重写了同样的步骤，纪律不变（带 `-am`、禁 `repackage.skip`、
 >    不用用户自己的端口）。
 
+### 3.0 首跑结果、根因与修复（2026-10-08）
+
+**首跑**：手动触发 → Job1 在 `guarantee-system` 失败（`mvn -B verify`，120 用例中
+3 failures + 41 errors），Job2/Job3 因 `needs: build-and-it` 跳过。用"空库"在本机复现，
+报错与 CI **逐字一致**（surefire 3.5.6 / `There are test failures.` / `MojoFailureException`）。
+**四处根因与修复**：
+
+| # | 根因 | 证据 | 修复 |
+|---|---|---|---|
+| ① | **空库没有演示数据**：Job1 只起 MySQL/Redis service，**从不启动 guarantee-web**，`DataInitializer` 不执行。而 system / analysis / web 的 `*IT` 全按"演示库"写（21 机构 / 单棵 11 部门树 / 300 用户 / 角色权限矩阵 / 15 万订单） | `guarantee-system` 38 个用例红：`0 ≠ 21`、`EmptyResultDataAccess expected 1 actual 0`（查 `admin`）、`Column 'project_id' cannot be null`、`角色不存在或已停用: [OPERATOR]`、`权限码不存在: [system:audit:view]`；`guarantee-analysis` 的 `OrderTrendGranularityIT` 也因无订单必红 | Job1 新增两步：**打包 → 起一次后端播种（实测 6.0s）→ 断言形状 → 停**，与本地口径一致；形状断言把"演示数据规格漂移"变成 CI 上的响亮失败 |
+| ② | **schema.sql 缺列**：`sys_user.account_type` 只加在 `db/migration/V10__ai_mcp.sql`，空库路径（`schema.sql`）里没有 → 与数据无关的纯表结构漂移 | `SysUserAccountTypeIntegrationTest` 6/6 `BadSqlGrammar: Unknown column 'account_type'`；`information_schema.columns` 全量 diff 后**唯一**真实差异就是这一列 | 补进 `schema.sql`，DDL 与 V10 的 `ADD COLUMN` 逐字一致（列 + 索引） |
+| ③ | **新库的演示数据与测试目标态不一致**：`DataInitializer.seedDepartments` 产出 **21 棵**部门树（231 部门 / 21 个 `parent_id=0` 的根），而 `DataScopeIntegrationTest` 与 `scripts/verify-dept-tree-shape.mjs` 要求**单棵纯部门树**（11 部门 / 唯一根「总部」）。本地库之所以绿，是它早已被手工迁移 `migrate-dept-single-org` 收敛过 → **新库/新同事/CI 都是坏的** | 用"本地口径"（起一次后端播种）跑 verify：`guarantee-system` 反而红 2 个（`[部门树只有 1 个顶级节点] expected: 1 but was: 21`） | **对齐 DataInitializer**：`seedDepartments` 只建一棵树（id 从 1001 起、编码 `ORGHQ-*`）、`seedUsers` 按序号轮转挂 11 个部门、`DEPT_COUNT` 由 `ORG_COUNT × 11` 改为 `11`，并新增"唯一根 = 总部"的启动校验。与已执行迁移同形；该残留项原记录在 `docs/PLAN-部门配置树形改造方案.md` §16.3（现标注已闭环） |
+| ④ | **（测试侧）`OperationAuditAllLimitIT` 依赖"历史累积"**：它要求库里近 7 天审计 > 200 条，而审计行是**运行时**产物（DataInitializer 不造），干净库只有 14 条 → 它测不到 `all` 与 `limit=200` 的差异 | `Expecting actual: 14L to be greater than: 200L`（两条用例都红在"数不出差异"上） | 用例自建 250 条近 7 天夹具（`@BeforeEach`）、按 `trace_id` 清理（`@AfterEach`），断言口径不变 |
+
+**修复后的本地干净库复演**（等同 Job1 的序列；MySQL 8.0.29）：
+
+```
+全新建空库
+  → mvn -pl guarantee-web -am -DskipTests package          # BUILD SUCCESS
+  → 起 jar 播种（16.1s 含启动，DataInitializer 自身 6.0s）
+    形状：机构 21 / 部门 11 / 顶级 1 / 用户 300 / 投标 100000 / 履约 50000
+  → mvn -B verify
+[INFO] guarantee-common ................................... SUCCESS
+[INFO] guarantee-system ................................... SUCCESS
+[INFO] guarantee-auth ..................................... SUCCESS
+[INFO] guarantee-order .................................... SUCCESS
+[INFO] guarantee-analysis ................................. SUCCESS
+[INFO] guarantee-ai ....................................... SUCCESS
+[INFO] guarantee-web ...................................... SUCCESS
+[INFO] BUILD SUCCESS
+```
+
+合计 **753 项用例，0 失败 0 错误**（其中 `guarantee-system` 120、`guarantee-web` 11 单测 + 120 IT）。
+
+> 为什么最后不走"测试仓库里再放一份最小基线"这条路：`guarantee-system/src/test/resources/application.yml`
+> 自己写着"演示数据由 `DataInitializer` 生成……**由真实初始化器生成的数据比测试里手工插入的更有验证价值**"。
+> 手工基线虽然能让该模块在空库上变绿，却会**掩盖**根因 ③（新库的部门形状与目标态不符），
+> 且要随 `DataInitializer` 的规格漂移手工同步。所以最终选择：**对齐初始化器 + 让 CI 用真实初始化路径播种**。
+
+**本地开发库不受影响**：`DataInitializer` 只在 `sys_user` 为空时执行，存量库一次都不会跑到；
+`schema.sql` 的 `CREATE TABLE IF NOT EXISTS` 对已存在的表是空操作（列由 migration V10 补）。
+
 | 作业 | 触发 | 内容 |
 |---|---|---|
-| `build-and-it` | 手动 + 每日 02:00 UTC | MySQL 8 + Redis service；`mvn -B verify`；上传 surefire/failsafe 报告 |
+| `build-and-it` | 手动 + 每日 02:00 UTC | MySQL 8 + Redis service；**先打包并起一次后端播种演示数据（Job1 的 `mvn -B verify` 依赖演示库，见 §3.0）**；`mvn -B verify`；上传 surefire/failsafe 报告 + 播种日志 |
 | `deterministic-eval` | 手动 + 每日 | `--suite=deterministic`（发布门禁）；上传确定性报告 |
 | `live-eval` | 手动；**或 定时 + 仓库变量 `EVAL_LIVE_ON_SCHEDULE='true'`（opt-in，默认关）** | 有 `secrets.DEEPSEEK_API_KEY` 才跑；起后端（8092）→ `--suite=live` **→ `--suite=refusal`（拒答类默认 3 轮）** → 上传 `reports/**`；缺 Key **打印"未跑"并跳过**；**两个步骤任一退出码 1（断言失败）即让作业失败**，退出码 2 按"未跑"告警不失败 |
 
@@ -170,12 +217,19 @@ python -c "import yaml; d=yaml.safe_load(open('.github/workflows/ai-eval.yml',en
 
 **语法自检 ≠ 执行验证**：解析通过只能说明 YAML 合法，**不能**说明 job 在 runner 上会成功
 （service 健康检查、schema、seed、artifact 路径都需要首跑校准）。
-**本 workflow（含本次 opt-in 改动）从未在 CI 上执行过**；`if:` 逻辑只做了静态自检（见上面的解析输出）。
+**Job1 已首跑并据此修好（§3.0，本地干净库复演 8/8 全绿）；Job2/Job3 仍未在 CI 上执行过**，其 `if:` 逻辑只做了静态自检（见上面的解析输出）。
 
 ## 5. 后续（本任务不做）
 
-1. 订单 seed 脚本（≥1000，区间正确）→ 之后把 Job3 的 `exit 2` 从"警告"改成"失败"。
+1. **订单 seed 已有替代路径**：Job1 现在会起一次后端播种 Demo 数据（15 万订单 / 2025-01-01~2026-09-30，
+   见 §3.0），已满足真机集的基线要求；Job3 若也要走这条路，把 Job1 的"打包 → 起一次播种"
+   两步复制过去即可。补一个**独立的 seed 脚本**（不依赖起服务）仍值得做，做完后把 Job3 的
+   `exit 2` 从"警告"改成"失败"。
 2. 真机集**定时跑**已由仓库变量 `EVAL_LIVE_ON_SCHEDULE` 控制（opt-in，默认关）；
    等基线数据可复现（seed 落地）后，再把该变量设为 `true` 打开每日门禁。
 3. 本地脚本若要跨平台（Linux/macOS），把 `Get-NetTCPConnection` 换成 `Test-NetConnection`/`lsof` 抽象层，
    或直接复用 Job3 的 bash 版本。
+4. **Job2 与 Job1 存在重复执行**：`--suite=deterministic` 内部就是重跑 `EvaluationDeterministicIT`
+   （`scripts/ai-golden-questions.mjs` L1368 起），而该 IT 在 Job1 的 `mvn -B verify` 里已经跑过
+   （本地复演 12/12 绿）。可改为"下载 Job1 的 surefire 工件 → 核验 12/12 → 出报告"，
+   发布门禁口径不变、少一次全量构建。**（未实施，待决策）**
