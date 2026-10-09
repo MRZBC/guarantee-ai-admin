@@ -71,8 +71,8 @@ function fillDemoAccount(): void {
     <el-card class="login-card" shadow="always">
       <div class="login-card__header">
         <el-icon class="login-card__icon"><Shield /></el-icon>
-        <h1 class="login-card__title">担保业务管理平台</h1>
-        <p class="login-card__subtitle">Guarantee Business Administration</p>
+        <h1 class="login-card__title">智能电子保函运营管理平台</h1>
+        <p class="login-card__subtitle">Intelligent Electronic Guarantee Operations Platform</p>
       </div>
 
       <el-form

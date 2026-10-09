@@ -60,6 +60,9 @@
 **覆盖没有丢**，改为在 `DataScopeIntegrationTest` 里用自建夹具（6 机构 + 2 用户，用完物理删除）
 验证"省级看本省及下级、市级只看本市、跨范围返回 0 条"。迁移脚本 `scripts/migrate-dept-single-org.ps1`。
 注意 `DataInitializer` 仍按 21 机构 × 11 部门生成，重置演示数据后需再跑该迁移。
+**（2026-10-08 已闭环）** `DataInitializer.seedDepartments` 已改为直接生成**单棵树**
+（11 个部门、id 从 1001 起、编码 `ORGHQ-*`），用户按序号轮转挂到 11 个部门上——
+与 `migrate-dept-single-org` 的目标态一致，**新库不再需要补一次迁移**。
 详见该方案 §15、§16。
 
 **验收**：`vue-tsc` 0、`npm run build` 0；产物中「显示已删除」/`row-deleted`/`deleted-tag` 均 0 处；

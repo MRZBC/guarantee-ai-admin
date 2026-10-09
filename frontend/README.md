@@ -1,4 +1,4 @@
-# 担保业务管理平台 · 前端（guarantee-ai-admin / frontend）
+# 智能电子保函运营管理平台 · 前端（guarantee-ai-admin / frontend）
 
 基于 **Vue 3 + TypeScript + Vite + Element Plus + ECharts + Pinia + Axios + vue-router 4** 的后台管理 SPA，
 对接 Spring Boot 后端（默认 `http://localhost:8080`，接口前缀 `/api`）。
@@ -44,6 +44,27 @@ npm run preview
 > ```powershell
 > $env:BACKEND_PORT=8082; npm run dev
 > ```
+
+### ⚠️ 依赖版本：`vue-router` 必须钉死在 4.5.1（不要升到 4.6.x）
+
+`package.json` 里写的是**精确版本** `"vue-router": "4.5.1"`，这是刻意的，不是随手一写：
+
+- **症状**：`vue-router` ≥ 4.6（我们中过 4.6.4）配新版 Edge 时，只要**当前激活的标签页**是本应用，
+  Edge 窗口就**无法最小化**——点最小化后窗口立刻弹回（或根本不动）；切到别的标签页、或换 Chrome 都正常。
+  实测（10–25ms 精度采样窗口状态）：4.6.4 下 `ShowWindow(SW_MINIMIZE)` 完全不生效；
+  换到 **4.5.1** 后同一页面最小化后**稳定保持**。
+- **原因**：Edge 处理页面历史状态（`history.replaceState` + 可见性切换）的时序与 vue-router 4.6 的实现
+  相互触发"页面被反复激活"；Chrome 不受影响，Edge 官方暂无修复计划。
+- **为什么不能写 `^4.5.0`**：宽松范围会在 `npm install` 时自动升到 4.6.x —— 我们就是这样中的招。
+- **改了依赖之后必须重启 dev server**：Vite 的预构建缓存（`node_modules/.vite`）不会自动换版本，
+  否则页面仍然加载旧版。确认实际生效的版本：
+  ```powershell
+  # 输出里应出现 "vue-router v4.5.1"，出现 4.6.x 说明缓存/进程还是旧的 → 重启 npm run dev
+  (Invoke-WebRequest http://localhost:5273/node_modules/.vite/deps/vue-router.js -UseBasicParsing).Content | Select-String 'vue-router v4'
+  ```
+
+> 参考：[Vue3 项目 Edge 无法最小化（CSDN）](https://blog.csdn.net/weixin_65879835/article/details/160858670)、
+> [Microsoft Q&A 同类反馈](https://learn.microsoft.com/zh-cn/answers/questions/5789532/web-edge)。
 
 ### 演示账号
 

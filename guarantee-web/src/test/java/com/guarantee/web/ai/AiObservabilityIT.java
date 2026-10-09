@@ -233,6 +233,14 @@ class AiObservabilityIT {
     void failingTurnStillPersistsTraceableMetric() {
         FAIL_STREAM.set(true);
         Long userId = adminUserId();
+        // 先记基线，再定位"**本轮**新建的会话"。
+        // 不能用"该用户最新一条会话"（原来的写法）：它是跨用例共享的查询，
+        // 一旦别的 IT 在它之前建了 admin 的会话，这里就会校验到别人的行。
+        // 2026-10-08 实测：把 IT 的执行顺序反转即复现——取到别人 config_version=0 的会话，
+        // 本用例报 "Expecting actual: 0L to be greater than: 0L"（假失败）。
+        // CI（Linux）的文件遍历顺序与本地不同，正是这类"只在别人跑过之后才红"的用例的温床。
+        Long baseline = jdbc.queryForObject(
+                "SELECT COALESCE(MAX(id), 0) FROM ai_conversation WHERE user_id = ?", Long.class, userId);
         AiChatRequest request = new AiChatRequest();
         request.setMessage("这一轮注定失败（用于验证失败路径的观测完整性）");
 
@@ -243,9 +251,14 @@ class AiObservabilityIT {
         assertThat(events).isNotNull().isNotEmpty();
         assertThat(events.stream().map(ServerSentEvent::event).toList()).contains("error");
 
+        Integer newConversations = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM ai_conversation WHERE user_id = ? AND id > ?",
+                Integer.class, userId, baseline);
+        assertThat(newConversations).as("失败轮同样算一次问答：必须新建且只新建一个会话").isEqualTo(1);
+
         Long conversationId = jdbc.queryForObject(
-                "SELECT id FROM ai_conversation WHERE user_id = ? ORDER BY id DESC LIMIT 1",
-                Long.class, userId);
+                "SELECT id FROM ai_conversation WHERE user_id = ? AND id > ? ORDER BY id ASC LIMIT 1",
+                Long.class, userId, baseline);
 
         Map<String, Object> metric = jdbc.queryForMap("""
                 SELECT rounds, tool_calls, source, outcome, trace_id
@@ -269,14 +282,26 @@ class AiObservabilityIT {
           修复前只有成功收尾（finishTurn）才写这两列，失败轮永远为空 → 第一轮就失败时
           这一列从头到尾都是 NULL，回溯链断在半路。
           prompt_version 允许为 NULL（DB 无发布版 = 用 classpath 内置提示词，这本身是事实），
-          但 config_version 一定来自本轮快照，必须非空且 > 0。
+          而 config_version 必须回填**本轮快照的真实版本号**。
+
+          断言用"等于那一刻库里的 MAX(version)"而不是"大于 0"：
+          AiConfigSnapshot 的口径就是"版本号 = ai_config_item.version 的最大值，
+          **0 表示空表**"，而应用/播种都不会预置配置行——干净库上这张表是空的。
+          原来的 "> 0" 等于要求"别的用例先往 ai_config_item 写过行"，于是在
+          单独跑本类、或 CI（Linux 的文件遍历顺序与本地不同）上都必红
+          （2026-10-08 实测：干净库单跑 → Expecting actual: 0L to be greater than: 0L）。
+          改成与快照同源比较后，空表（0）与非空表（正版本）两种状态都能验证"确实回填了本轮版本"。
         */
         Map<String, Object> versionTrace = jdbc.queryForMap(
                 "SELECT prompt_version, config_version FROM ai_conversation WHERE id = ?", conversationId);
+        long expectedConfigVersion = jdbc.queryForObject(
+                "SELECT COALESCE(MAX(version), 0) FROM ai_config_item", Long.class);
         assertThat(versionTrace.get("config_version"))
-                .as("失败轮必须回填 config_version（本轮快照的版本号）")
+                .as("失败轮必须回填 config_version（本轮配置快照的版本号；空表按 AiConfigSnapshot 口径为 0）")
                 .isNotNull();
-        assertThat(((Number) versionTrace.get("config_version")).longValue()).isGreaterThan(0L);
+        assertThat(((Number) versionTrace.get("config_version")).longValue())
+                .as("回填的必须是那一刻 ai_config_item 的版本快照")
+                .isEqualTo(expectedConfigVersion);
         Object promptVersion = versionTrace.get("prompt_version");
         if (promptVersion != null) {
             assertThat(((Number) promptVersion).intValue())
