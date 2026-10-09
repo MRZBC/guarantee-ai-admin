@@ -18,6 +18,14 @@
     <name>guarantee-ai-admin</name>
     <description>智能电子保函运营管理平台 - 模块化单体</description>
 
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
     <modules>
         <module>guarantee-common</module>
         <module>guarantee-auth</module>

@@ -622,3 +622,16 @@ sh scripts/setup-git.sh              # Linux / macOS / Git Bash
 
 > 这套能力是**作者本机**的 Agent 协作设施，对「跑起本项目」零贡献：
 > 相关配置（`.agent/`、`.agents/`、`.mcp.json`、`adapters/`）已在 `.gitignore` 中排除。
+
+---
+
+## 许可
+
+本项目采用 **Apache License 2.0** 授权，许可全文见 [LICENSE](LICENSE)。
+
+Copyright 2026 MRZBC
+
+- 允许自由使用、修改、分发（含商业用途），但需**保留版权与许可声明**；
+- 修改后分发，须在改动过的文件中**标明改动**；
+- 本项目按「现状」提供，**不附带任何明示或默示担保**；
+- 第三方依赖（见 `pom.xml` 与 `frontend/package.json`）各自遵循其原有许可。
