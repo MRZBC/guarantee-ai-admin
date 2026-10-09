@@ -161,10 +161,10 @@ function handleUserCommand(command: string): void {
 
 <template>
   <el-container class="app-layout">
-    <el-aside class="app-aside" :width="appStore.sidebarCollapsed ? '64px' : '220px'">
+    <el-aside class="app-aside" :width="appStore.sidebarCollapsed ? '64px' : '240px'">
       <div class="app-logo">
         <el-icon class="app-logo__icon"><Shield /></el-icon>
-        <span v-show="!appStore.sidebarCollapsed" class="app-logo__text">担保业务管理平台</span>
+        <span v-show="!appStore.sidebarCollapsed" class="app-logo__text">智能电子保函运营管理平台</span>
       </div>
       <el-scrollbar class="app-menu-scroll">
         <el-menu
@@ -288,7 +288,10 @@ function handleUserCommand(command: string): void {
   padding: 0 18px;
   color: #fff;
   font-weight: 600;
-  font-size: 15px;
+  /* 全称「智能电子保函运营管理平台」12 个字：14px ≈ 168px，
+     可用宽度 = 侧边栏 240 - padding 2×18 - 图标 20 - 间距 8 = 176px，正好一行放得下。
+     改回 15px 或把侧边栏收窄到 220px 都会溢出（nowrap 会被裁切）。 */
+  font-size: 14px;
   white-space: nowrap;
   background-color: #172432;
 }

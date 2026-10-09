@@ -231,7 +231,7 @@ router.beforeEach(async (to) => {
 
 router.afterEach((to) => {
   const title = to.meta.title ?? ''
-  document.title = title ? `${title} - 担保业务管理平台` : '担保业务管理平台'
+  document.title = title ? `${title} - 智能电子保函运营管理平台` : '智能电子保函运营管理平台'
 })
 
 export default router

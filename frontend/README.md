@@ -1,4 +1,4 @@
-# 担保业务管理平台 · 前端（guarantee-ai-admin / frontend）
+# 智能电子保函运营管理平台 · 前端（guarantee-ai-admin / frontend）
 
 基于 **Vue 3 + TypeScript + Vite + Element Plus + ECharts + Pinia + Axios + vue-router 4** 的后台管理 SPA，
 对接 Spring Boot 后端（默认 `http://localhost:8080`，接口前缀 `/api`）。
