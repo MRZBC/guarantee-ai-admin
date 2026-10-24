@@ -269,9 +269,16 @@
       phone / email 允许置空，因此这里用"是否显式传入"而不是"值是否为 null"判断——
       由 Service 层在构造 options 时决定包含哪些字段。
     -->
+    <select id="lockForMutation" resultType="java.lang.Long">
+        SELECT id FROM sys_user WHERE id=#{id} FOR UPDATE
+    </select>
+    <update id="advanceRevision">
+        UPDATE sys_user SET mutation_version=mutation_version+1 WHERE id=#{id}
+    </update>
     <update id="updateProfile">
         UPDATE sys_user
         <set>
+            mutation_version = mutation_version + 1,
             <if test="realName != null">real_name = #{realName},</if>
             <if test="phone != null">phone = #{phone},</if>
             <if test="email != null">email = #{email},</if>
@@ -301,7 +308,7 @@
     -->
     <update id="updatePassword">
         UPDATE sys_user
-        SET password = #{password},
+        SET mutation_version = mutation_version + 1, password = #{password},
             must_change_password = #{mustChangePassword}
         WHERE id = #{id}
           AND is_deleted = 0
@@ -309,7 +316,7 @@
 
     <!-- 条件更新状态：只有当前状态与预期一致时才改，防并发覆盖（T-08） -->
     <update id="updateStatus">
-        UPDATE sys_user SET status = #{status} WHERE id = #{id} AND status = #{expectedStatus}
+        UPDATE sys_user SET mutation_version = mutation_version + 1, status = #{status} WHERE id = #{id} AND status = #{expectedStatus}
     </update>
 
     <!--
@@ -361,7 +368,7 @@
     -->
     <update id="softDelete">
         UPDATE sys_user
-        SET is_deleted = 1,
+        SET mutation_version = mutation_version + 1, is_deleted = 1,
             deleted_at = NOW(6),
             deleted_by = COALESCE(#{operatorId}, 'DB')
         WHERE id = #{id} AND is_deleted = 0
@@ -370,7 +377,7 @@
     <!-- 恢复（设计 §9.4.2 / LD-04）：三列一起归零，只允许从"已删除"恢复 -->
     <update id="restore">
         UPDATE sys_user
-        SET is_deleted = 0,
+        SET mutation_version = mutation_version + 1, is_deleted = 0,
             deleted_at = NULL,
             deleted_by = 'DB'
         WHERE id = #{id} AND is_deleted = 1

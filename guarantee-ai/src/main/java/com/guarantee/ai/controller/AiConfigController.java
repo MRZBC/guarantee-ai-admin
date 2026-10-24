@@ -6,6 +6,8 @@ import com.guarantee.ai.config.AiConfigService;
 import com.guarantee.ai.config.AiConfigSnapshot;
 import com.guarantee.ai.config.AiPromptVersion;
 import com.guarantee.ai.config.PromptVersionService;
+import com.guarantee.ai.config.PromptEvaluation;
+import com.guarantee.ai.config.PromptEvaluationService;
 import com.guarantee.ai.service.OperationAuditService;
 import com.guarantee.common.api.Result;
 import com.guarantee.common.api.ResultCode;
@@ -71,6 +73,8 @@ public class AiConfigController {
     private final WebAuditor webAuditor;
     private final Environment environment;
     private final PromptVersionService promptVersionService;
+    @org.springframework.beans.factory.annotation.Autowired
+    private PromptEvaluationService evaluations;
 
     public AiConfigController(AiConfigService configService,
                               AiConfigCatalog catalog,
@@ -127,7 +131,9 @@ public class AiConfigController {
         // 先校验（纯内存、不查库）再取快照：非法值在触库前就被拒绝，调用方也不会产生任何副作用
         String normalized = AiConfigCatalog.validate(def, request.value());
 
-        AiConfigSnapshot before = configService.snapshot();
+        promptVersionService.lockConfigurationChange();
+
+        AiConfigSnapshot before = configService.refreshIfStale();
         String beforeValue = before.get(def.key());
 
         if (Objects.equals(beforeValue, normalized)) {
@@ -159,16 +165,56 @@ public class AiConfigController {
     // 提示词版本（REQ-CFG-02 / REQ-CFG-11）
     // ==================================================================
 
-    /**
-     * 版本历史 + 当前草稿 + 门禁结果。
-     *
-     * <p><b>门禁读的是"最近一次"</b>（可为 null = 尚未检查）：门禁命令要跑完整套确定性黄金
-     * 问题集（分钟级），列表接口顺手跑一次会让页面每次打开都卡住并超时（CDP 走查实测）。
-     * 真正的执行在「刷新门禁」（{@code GET /prompts/gate}）与**发布**时（发布是权威判定点）。</p>
-     *
-     * <p>返回必须如实：{@code ran=false} 是"未跑"，null 是"尚未检查"，
-     * 页面据此禁止发布，绝不能显示成"通过"（AC-CFG-10）。</p>
-     */
+    @GetMapping("/prompts/base")
+    @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_VIEW + "')")
+    public Result<com.guarantee.ai.config.PromptComposition.Base> promptBase() {
+        return Result.ok(com.guarantee.ai.config.PromptComposition.base());
+    }
+
+    @GetMapping("/prompts/effective")
+    @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_VIEW + "')")
+    public Result<PromptVersionService.EffectivePrompt> effectivePrompt() {
+        return Result.ok(promptVersionService.effectivePrompt());
+    }
+
+    @PostMapping("/prompts/evaluations")
+    @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_UPDATE + "')")
+    public Result<EvaluationView> evaluate(@Valid @RequestBody EvaluationRequest request) {
+        return Result.ok(evaluationView(evaluations.start(request.versionNo(), request.contentHash(), requireUserId().toString())));
+    }
+
+    @GetMapping("/prompts/evaluations/{id}")
+    @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_VIEW + "')")
+    public Result<EvaluationView> evaluation(@PathVariable String id) {
+        return Result.ok(evaluationView(evaluations.view(id)));
+    }
+
+    @GetMapping("/prompts/{versionNo}/evaluation")
+    @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_VIEW + "')")
+    public Result<EvaluationView> latestEvaluation(@PathVariable int versionNo) {
+        return Result.ok(evaluationView(evaluations.latest(versionNo)));
+    }
+
+    public record EvaluationRequest(@NotNull Integer versionNo, @NotBlank String contentHash) {}
+    public record EvaluationView(String id, int versionNo, String contentHash, String contextHash,
+            String suiteVersion, String status, String summary, String results, String contextSnapshot,
+            LocalDateTime createdAt, LocalDateTime finishedAt, boolean publishable, String eligibilityReason) {}
+    private EvaluationView evaluationView(PromptEvaluation row) {
+        if (row == null) return null;
+        boolean publishable = false;
+        String reason = row.getSummary();
+        if ("PASSED".equals(row.getStatus())) {
+            try {
+                evaluations.requirePassed(promptVersionService.requireVersion(row.getVersionNo()), row.getId());
+                publishable = true;
+            } catch (BizException ex) { reason = ex.getMessage(); }
+        }
+        return new EvaluationView(row.getId(), row.getVersionNo(), row.getContentHash(),
+                row.getContextHash(), row.getSuiteVersion(), row.getStatus(), row.getSummary(), row.getResults(), row.getContextSnapshot(),
+                row.getCreatedAt(), row.getFinishedAt(), publishable, reason);
+    }
+
+    /** 历史与草稿元信息；不会触发模型调用或构建。 */
     @GetMapping("/prompts")
     @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_VIEW + "')")
     public Result<PromptHistoryView> promptHistory() {
@@ -191,7 +237,7 @@ public class AiConfigController {
     @GetMapping("/prompts/gate")
     @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_VIEW + "')")
     public Result<GateView> promptGate() {
-        return Result.ok(toGateView(promptVersionService.evaluateGate(),
+        return Result.ok(toGateView(promptVersionService.lastGateResult(),
                 promptVersionService.liveGate()));
     }
 
@@ -199,23 +245,21 @@ public class AiConfigController {
     @PostMapping("/prompts/draft")
     @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_UPDATE + "')")
     public Result<PromptDetailView> savePromptDraft(@Valid @RequestBody PromptDraftRequest request) {
-        AiPromptVersion draft = promptVersionService.saveDraft(request.content(), request.note(),
+        AiPromptVersion draft = promptVersionService.saveBusinessDraft(request.businessContent(), request.note(),
+                request.baseVersion(), request.baseHash(), request.migrationSourceVersion(),
+                request.migrationSourceHash(), request.migrationConfirmed(),
                 requireUserId().toString());
         return Result.ok(toPromptDetail(draft));
     }
 
-    /**
-     * 发布草稿：服务端先校验保护标记，再跑确定性黄金问题集门禁；两者任一不通过都拒绝发布。
-     *
-     * <p>门禁"未跑"同样拒绝（REQ-CFG-11 / AC-CFG-10），错误信息里带原因，页面照原样展示。</p>
-     */
+    /** 发布精确匹配候选评测证据的草稿，事务内切换并写审计。 */
     @PostMapping("/prompts/publish")
     @PreAuthorize("hasAuthority('" + Permissions.AI_CONFIG_UPDATE + "')")
-    public Result<PromptPublishResult> publishPrompt(@Valid @RequestBody PromptVersionRequest request) {
+    public Result<PromptPublishResult> publishPrompt(@Valid @RequestBody PromptPublishRequest request) {
         AiPromptVersion published = promptVersionService.publish(request.versionNo(),
-                requireUserId().toString());
+                request.contentHash(), request.evaluationId(), requireUserId().toString());
         return Result.ok(new PromptPublishResult(published.getVersionNo(), published.getStatus(),
-                published.getContentHash(), true, "发布成功（确定性门禁通过），下一个请求生效"));
+                published.getContentHash(), true, "发布成功（候选版本评测通过），下一个请求生效"));
     }
 
     /** 回滚到历史版本（应急路径，不重跑门禁；写审计）。 */
@@ -303,7 +347,9 @@ public class AiConfigController {
 
     /** 版本正文 + 缺失的保护标记（缺失非空即不可发布）。 */
     public record PromptDetailView(PromptVersionView version, String content,
-                                   List<String> missingProtectedMarkers) {
+                                   List<String> missingProtectedMarkers, String baseVersion, String baseHash,
+                                   String baseContent, String businessContent, Integer migrationSourceVersion,
+                                   String migrationSourceHash) {
     }
 
     /** 版本历史 + 当前草稿 + 门禁结果。 */
@@ -311,14 +357,7 @@ public class AiConfigController {
                                     GateView gate) {
     }
 
-    /**
-     * 门禁结果：确定性维度（发布门禁）+ 真机集维度（只标注、不阻断发布；AC-CFG-10 子句②）。
-     *
-     * @param ran    确定性集是否真的跑起来（false = 未跑/尚未检查）
-     * @param passed 确定性集是否通过（**发布门禁只看它**）
-     * @param live   真机集状态：读最近一份 {@code reports/eval-live-*.json}；缺 Key/无报告一律
-     *               {@code NOT_RUN}，页面显示"真机集：未跑（原因）"，不作为发布阻断条件
-     */
+    /** 旧客户端兼容的历史报告视图；候选发布证据见 EvaluationView。 */
     public record GateView(boolean ran, boolean passed, String summary, LiveGateView live) {
     }
 
@@ -327,12 +366,16 @@ public class AiConfigController {
     }
 
     /** 保存草稿请求。 */
-    public record PromptDraftRequest(@NotBlank String content, String note) {
+    public record PromptDraftRequest(@NotNull String businessContent, String note,
+            @NotBlank String baseVersion, @NotBlank String baseHash, Integer migrationSourceVersion,
+            String migrationSourceHash, boolean migrationConfirmed) {
     }
 
     /** 发布 / 回滚的目标版本。 */
     public record PromptVersionRequest(@NotNull Integer versionNo) {
     }
+    public record PromptPublishRequest(@NotNull Integer versionNo, @NotBlank String contentHash,
+                                       @NotBlank String evaluationId) {}
 
     /** 发布 / 回滚结果。 */
     public record PromptPublishResult(int versionNo, String status, String contentHash,
@@ -361,7 +404,9 @@ public class AiConfigController {
 
     private static PromptDetailView toPromptDetail(AiPromptVersion version) {
         return new PromptDetailView(toPromptView(version), version.getContent(),
-                PromptVersionService.missingProtectedMarkers(version.getContent()));
+                version.getBaseVersion() == null ? PromptVersionService.missingProtectedMarkers(version.getContent()) : List.of(),
+                version.getBaseVersion(), version.getBaseHash(), version.getBaseContent(), version.getBusinessContent(),
+                version.getMigrationSourceVersion(), version.getMigrationSourceHash());
     }
 
     private static GateView toGateView(PromptVersionService.GateResult result,
@@ -374,7 +419,7 @@ public class AiConfigController {
                                    PromptVersionService.LiveGate live) {
         if (result == null) {
             return new GateView(false, false,
-                    "尚未检查：点击「刷新门禁」运行确定性黄金问题集（约 15 秒，最长 3 分钟）",
+                    "请保存草稿后评测候选版本",
                     toLiveView(live));
         }
         return toGateView(result, live);

@@ -27,10 +27,25 @@ public class AnalysisController {
 
     private final OverviewService overviewService;
     private final OrderAnalysisService orderAnalysisService;
+    private final com.guarantee.analysis.service.OrderReportService reportService;
 
-    public AnalysisController(OverviewService overviewService, OrderAnalysisService orderAnalysisService) {
+    public AnalysisController(OverviewService overviewService, OrderAnalysisService orderAnalysisService,
+                              com.guarantee.analysis.service.OrderReportService reportService) {
         this.overviewService = overviewService;
         this.orderAnalysisService = orderAnalysisService;
+        this.reportService = reportService;
+    }
+
+    @GetMapping("/order-comparison")
+    @org.springframework.security.access.prepost.PreAuthorize("hasAuthority('analysis:overview:view')")
+    public Result<com.guarantee.analysis.vo.OrderComparisonVO> comparison(@Valid OrderTrendQuery query) {
+        return Result.ok(reportService.compare(query));
+    }
+
+    @GetMapping("/order-report")
+    @org.springframework.security.access.prepost.PreAuthorize("hasAuthority('analysis:overview:view')")
+    public Result<com.guarantee.analysis.vo.OrderReportVO> report(@Valid OrderTrendQuery query) {
+        return Result.ok(reportService.report(query));
     }
 
     /** 概览指标：订单量、保额保费、企业/项目/机构基数、数据时间范围。 */

@@ -17,6 +17,8 @@ import java.util.List;
  */
 @Mapper
 public interface SysUserMapper {
+    Long lockForMutation(@Param("id") Long id);
+    int advanceRevision(@Param("id") Long id);
 
     // ---------------- 读 ----------------
 

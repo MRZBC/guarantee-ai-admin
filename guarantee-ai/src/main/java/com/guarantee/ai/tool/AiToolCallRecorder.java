@@ -85,7 +85,13 @@ public class AiToolCallRecorder {
 
         // 采集本轮工具事实（口径 + 真实提案编号）：这是收尾时服务端生成口径、校验编号的唯一来源。
         // 必须用**脱敏前**的原始返回值，避免掩码把 dataSource 里的内容改掉。
-        collectTurnFacts(toolContext, toolName, result);
+        Object turnValue = raw(toolContext, AiToolContextKeys.TURN_FACTS);
+        if (turnValue instanceof TurnFacts facts) {
+            boolean supportedRead = kind != ToolKind.READ
+                    || !TurnFacts.extract(result, objectMapper).dataSources().isEmpty();
+            facts.recordOutcome(kind, success && supportedRead);
+        }
+        if (success) collectTurnFacts(toolContext, toolName, result);
 
         // 脱敏后的入参/结果：落库与 SSE 使用同一份，避免"界面看到明文、审计只有掩码"
         String safeArguments = mask(arguments);

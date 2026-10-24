@@ -32,7 +32,7 @@ class WriteToolResultTest {
                 List.of("影响面：当前角色 只读用户"),
                 List.of("角色分配会立即改变该用户的权限"),
                 true, "把张涛的角色改成无系统配置的权限",
-                LocalDateTime.now().plusMinutes(15), "PENDING");
+                LocalDateTime.now().plusMinutes(15), "PENDING", null, null, null);
 
         BaseProposalTool.WriteToolResult result = BaseProposalTool.WriteToolResult.ok(payload);
 

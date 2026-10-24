@@ -188,6 +188,35 @@ jobs:
       - name: mvn -B verify
         run: mvn -B verify
 
+      - name: 前端构建与关键流程浏览器回归（不调用真实模型）
+        env:
+          BACKEND_PORT: '8093'
+        run: |
+          set -euo pipefail
+          npm ci --prefix frontend
+          npm run build --prefix frontend
+          cd frontend
+          npx playwright install --with-deps chromium
+          cd ..
+          node scripts/analysis-summary-model-stub.mjs > ci-browser-model.log 2>&1 &
+          model_pid=$!
+          java -jar guarantee-web/target/guarantee-ai-admin.jar --server.port=8093 --spring.ai.openai.base-url=http://127.0.0.1:18094 --spring.ai.openai.api-key=controlled-local-test > ci-browser-app.log 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" "$model_pid" 2>/dev/null || true' EXIT
+          ready=false
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8093/actuator/health > /dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != true ]; then
+            cat ci-browser-app.log
+            exit 1
+          fi
+          npm run test:e2e --prefix frontend
+
       - name: 上传 surefire/failsafe 报告与播种日志
         if: always()
         uses: actions/upload-artifact@v4
@@ -197,6 +226,9 @@ jobs:
             **/target/surefire-reports/**
             **/target/failsafe-reports/**
             ci-seed-app.log
+            ci-browser-app.log
+            frontend/test-results/**
+            frontend/playwright-report/**
           if-no-files-found: warn
 
   # ---------------------------------------------------------------------------

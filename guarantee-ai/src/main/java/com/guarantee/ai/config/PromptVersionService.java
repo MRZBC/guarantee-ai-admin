@@ -16,7 +16,6 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,50 +26,13 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
-/**
- * 提示词版本机（REQ-CFG-02 / REQ-CFG-11 / docs REQ §5.1.2、§5.1.11）。
- *
- * <p><b>状态机</b>：{@code DRAFT → PUBLISHED → ARCHIVED}，同一时刻**只有一个 PUBLISHED**
- * （发布时先把其它 PUBLISHED 归档，再发布目标版本，两步同一事务）。</p>
- *
- * <p><b>已发布版本只读</b>：内容更新语句只命中 {@code status='DRAFT'}（见
- * {@link AiPromptVersionMapper#updateDraft}），由 SQL 而不是调用方的自觉来保证。</p>
- *
- * <p><b>保护标记</b>：红线/服务端产出类条款在正文里以固定小标题存在，发布前**服务端**逐条校验；
- * 缺失即拒绝发布并列出缺了哪一条——只靠前端警告挡不住"直接 POST 接口"。</p>
- *
- * <p><b>发布门禁（REQ-CFG-11）</b>：发布前必须跑确定性评测集（Stub 模型、无需 Key）。
- * 判定只有三种，且**没有"默认放行"**：</p>
- * <ul>
- *   <li>{@code PASSED}：命令退出码 0 → 允许发布；</li>
- *   <li>{@code FAILED}：命令退出码非 0 → 拒绝发布；</li>
- *   <li>{@code NOT_RUN}：脚本不存在/未实现 {@code --suite} 参数/执行异常/超时 → **拒绝发布**，
- *       页面明确显示"未跑"。</li>
- * </ul>
- * 回滚**不过门禁**：它是"回到一个曾经通过门禁的版本"的应急路径，此时再要求评测可用会挡住止损。
- *
- * <p><b>事务边界（e2e 实测倒逼出来的）</b>：门禁是分钟级的外部命令，必须在事务**外**评估；
- * 只有"归档旧版 → 发布 → 投影 → 审计"进短事务。否则一个发布请求会持有一个分钟级的
- * 数据库连接与行锁（真机实测：并发构建下发布请求 >180s 未返回）。</p>
- *
- * <p><b>后续优化候选（本期不做）</b>：把门禁结果按 {@code versionNo + contentHash + TTL}
- * 缓存，发布时要求"该内容在 TTL 内有过 PASSED"——仍是"没有新鲜通过就不放行"，
- * 但发布请求可以立刻返回。它引入新的状态与审计口径，收益有限，登记为候选而非本期交付。</p>
- */
+/** 提示词版本管理：候选评测独立执行，发布仅校验持久化证据并原子切换。 */
 @Service
 public class PromptVersionService {
 
     private static final Logger log = LoggerFactory.getLogger(PromptVersionService.class);
-
-    /** 确定性评测集门禁命令（REQ-CFG-11）。可用属性 {@code guarantee.ai.prompt.gate-command} 覆盖。 */
-    public static final String GATE_COMMAND_DEFAULT =
-            "node scripts/ai-golden-questions.mjs --suite=deterministic";
-
-    /** 门禁命令超时（毫秒）：超过即判 NOT_RUN，绝不让发布请求无限挂住。 */
-    public static final long GATE_TIMEOUT_MS = 10 * 60 * 1000L;
 
     /**
      * 受保护段落标记（发布内容必须逐条包含）。
@@ -97,7 +59,66 @@ public class PromptVersionService {
     private final AiPromptVersionMapper mapper;
     private final AiConfigService configService;
     private final WebAuditor webAuditor;
-    private final PromptGate gate;
+    @Autowired
+    private org.springframework.beans.factory.ObjectProvider<PromptEvaluationService> evaluations;
+
+    public record EffectivePrompt(String source, Integer versionNo, String content, String contentHash) {}
+
+    /** 管理端严格读取，不把读库故障伪装成“从未发布”。 */
+    public EffectivePrompt effectivePrompt() {
+        AiPromptVersion current = mapper.selectPublished();
+        String content = current == null ? PromptEvaluationService.builtin() : current.getContent();
+        return new EffectivePrompt(current == null ? "BUILTIN" : "PUBLISHED",
+                current == null ? null : current.getVersionNo(), content, sha256(content));
+    }
+
+    /** 客户端只能提交补充规则；基础正文、最终正文和哈希全部由服务端生成。 */
+    @Transactional
+    public AiPromptVersion saveBusinessDraft(String business, String note, String baseVersion, String baseHash,
+            Integer sourceVersion, String sourceHash, boolean confirmed, String operator) {
+        mapper.lockControl();
+        PromptComposition.Base base = PromptComposition.base();
+        if (!java.util.Objects.equals(base.version(), baseVersion)
+                || !java.util.Objects.equals(base.contentHash(), baseHash))
+            throw BizException.badRequest("平台基础规则已变化，请刷新后核对并保存");
+        if (business == null || business.length() > 60000)
+            throw BizException.badRequest("业务补充规则不能为空值且不得超过60000字符（允许空文本）");
+        AiPromptVersion existing = mapper.selectLatestDraft();
+        AiPromptVersion source = existing == null ? mapper.selectPublished() : existing;
+        boolean legacy = source != null && source.getBaseVersion() == null;
+        if (confirmed && (source == null || !java.util.Objects.equals(sourceVersion, source.getVersionNo())
+                || !java.util.Objects.equals(sourceHash, source.getContentHash())))
+            throw BizException.badRequest("迁移来源已变化，请刷新后重新核对旧正文并确认迁移");
+        if (legacy && (!confirmed || !java.util.Objects.equals(sourceVersion, source.getVersionNo())
+                || !java.util.Objects.equals(sourceHash, source.getContentHash())))
+            throw BizException.badRequest("请核对旧完整正文并确认迁移；原版本或哈希已变化时须重新核对");
+        String content = PromptComposition.compose(base.content(), business);
+        AiPromptVersion draft;
+        if (existing != null && !legacy) {
+            int changed = mapper.updateDraft(existing.getVersionNo(), content, sha256(content), note);
+            if (changed != 1) throw BizException.badRequest("草稿状态已变化，请刷新");
+            draft = existing;
+        } else {
+            Integer max = mapper.maxVersionNo();
+            draft = new AiPromptVersion();
+            draft.setVersionNo(max == null ? 1 : max + 1);
+            draft.setStatus(AiPromptVersion.STATUS_DRAFT);
+            draft.setCreatedBy(operator);
+        }
+        draft.setContent(content); draft.setContentHash(sha256(content)); draft.setNote(note);
+        draft.setBaseVersion(base.version()); draft.setBaseHash(base.contentHash());
+        draft.setBaseContent(base.content()); draft.setBusinessContent(business);
+        if (legacy) {
+            draft.setMigrationSourceVersion(source.getVersionNo()); draft.setMigrationSourceHash(source.getContentHash());
+        }
+        if (existing == null || legacy) mapper.insert(draft);
+        mapper.saveComposition(draft);
+        return mapper.selectByVersionNo(draft.getVersionNo());
+    }
+
+    /** 配置修改与发布共用同一控制行，调用方须位于事务内。 */
+    public void lockConfigurationChange() { mapper.lockControl(); }
+
     /**
      * 真机集（{@code --suite=live}）报告的读取器：只读文件系统，**不执行任何评测**。
      *
@@ -108,54 +129,15 @@ public class PromptVersionService {
     private final ObjectMapper objectMapper;
     private final Environment environment;
 
-    /**
-     * 最近一次门禁结果（进程内缓存）。
-     *
-     * <p><b>为什么需要它</b>：门禁命令要跑一整套确定性黄金问题集（分钟级）。如果"读版本历史"
-     * 这种列表接口也顺手跑一次门禁，页面每次打开都会卡住并超时（CDP 走查实测就是这个表现）。
-     * 因此约定：</p>
-     * <ul>
-     *   <li>{@link #lastGateResult()} 只返回**最近一次**结果（可为 null = 尚未检查），不执行命令；</li>
-     *   <li>{@link #evaluateGate()} 显式执行（页面「刷新门禁」按钮）；</li>
-     *   <li>发布时**必跑**一次——发布是权威判定点，不能拿缓存放行。</li>
-     * </ul>
-     */
-    private volatile GateResult lastGateResult;
-
-    /**
-     * 短事务边界：只包住"归档旧发布版 + 发布目标版 + 配置投影 + 审计"。
-     *
-     * <p>用 {@link TransactionTemplate} 而不是在 {@code publish} 上加 {@code @Transactional}：
-     * 门禁（分钟级）必须在事务**外**先跑完，再用这个模板开一个毫秒级事务完成切换。
-     * 这也是同一个类里"自我调用不会走代理"的正确解法。</p>
-     */
+    /** 发布、回滚和草稿创建共用控制行锁，数据库变更与审计在短事务内完成。 */
     private final TransactionTemplate transactionTemplate;
 
-    /** 生产构造器：门禁用命令行实现。 */
-    @Autowired
-    public PromptVersionService(AiPromptVersionMapper mapper,
-                                AiConfigService configService,
-                                WebAuditor webAuditor,
-                                Environment environment,
-                                ObjectMapper objectMapper,
-                                PlatformTransactionManager transactionManager) {
-        this(mapper, configService, webAuditor, new CommandPromptGate(
-                environment.getProperty("guarantee.ai.prompt.gate-command", GATE_COMMAND_DEFAULT)),
-                environment, objectMapper, transactionManager);
-    }
-
-    /** 测试构造器：注入可打桩的门禁，避免单测真的去起 Node。 */
-    PromptVersionService(AiPromptVersionMapper mapper,
-                         AiConfigService configService,
-                         WebAuditor webAuditor,
-                         PromptGate gate,
-                         Environment environment,
-                         ObjectMapper objectMapper,
-                         PlatformTransactionManager transactionManager) {
+    public PromptVersionService(AiPromptVersionMapper mapper, AiConfigService configService,
+            WebAuditor webAuditor, Environment environment, ObjectMapper objectMapper,
+            PlatformTransactionManager transactionManager) {
         this.mapper = mapper;
         this.configService = configService;
         this.webAuditor = webAuditor;
-        this.gate = gate;
         this.environment = environment;
         this.objectMapper = objectMapper;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
@@ -216,21 +198,9 @@ public class PromptVersionService {
         return PROTECTED_MARKERS.stream().filter(marker -> !content.contains(marker)).toList();
     }
 
-    /**
-     * 显式执行门禁（页面按钮 / 发布路径）。
-     *
-     * <p>结果记入 {@link #lastGateResult()}，供"版本历史"这类列表接口**免费**读取，
-     * 避免每次打开页面都重跑一遍分钟级评测。</p>
-     */
-    public GateResult evaluateGate() {
-        GateResult result = gate.evaluate();
-        this.lastGateResult = result;
-        return result;
-    }
-
-    /** 最近一次门禁结果；从未检查过时返回 null（页面显示"未检查"，且不允许发布）。 */
+    /** 旧客户端兼容入口，只读提示，绝不启动外部程序。 */
     public GateResult lastGateResult() {
-        return lastGateResult;
+        return GateResult.notRun("请保存草稿后使用候选版本评测；确定性回归由CI执行");
     }
 
     // ==================================================================
@@ -331,6 +301,7 @@ public class PromptVersionService {
         if (content == null || content.isBlank()) {
             throw BizException.badRequest("提示词正文不能为空");
         }
+        mapper.lockControl();
         String hash = sha256(content);
         AiPromptVersion existing = mapper.selectLatestDraft();
         if (existing != null) {
@@ -358,33 +329,30 @@ public class PromptVersionService {
         return mapper.selectByVersionNo(next);
     }
 
-    /**
-     * 发布草稿（REQ-CFG-02 / REQ-CFG-11）。
-     *
-     * <p>顺序固定：**保护标记校验 → 门禁（事务外）→ 短事务切版本 + 审计**。
-     * 校验或门禁不通过时**不产生任何状态变化**。</p>
-     *
-     * <p><b>门禁必须跑在事务之外</b>：它要跑一整套确定性黄金问题集（嵌套 maven，实测独立 13.9s；
-     * 与其它构建并发时曾超过 180s）。若挂在 {@code @Transactional} 里，就会持有一个分钟级的
-     * 数据库连接与行锁——真机 e2e 实测撞到过这一点。因此这里是"先评估、再开短事务"，
-     * 而不是"先切版本、后补门禁"：**没有新鲜 PASSED 就绝不进入切版本那一步**。</p>
-     */
+    /** 兼容内部调用；仍须校验与目标正文一致的持久化评测证据。 */
     public AiPromptVersion publish(int versionNo, String operator) {
         AiPromptVersion version = requireVersion(versionNo);
         if (!AiPromptVersion.STATUS_DRAFT.equals(version.getStatus())) {
             throw BizException.badRequest("只有草稿可以发布：v" + versionNo + " 当前状态为 " + version.getStatus()
                     + "（已发布版本不可修改；如需回退请使用回滚）");
         }
-        requireProtectedMarkers(version.getContent());
+        PromptComposition.requireSnapshot(version);
 
-        GateResult result = evaluateGate();
-        if (!result.passed()) {
-            throw BizException.badRequest(result.ran()
-                    ? "发布门禁未通过：" + result.summary()
-                    : "发布门禁未跑：" + result.summary()
-                            + "（确定性黄金问题集必须先全绿；不允许在门禁未跑时发布）");
-        }
-        return transactionTemplate.execute(status -> switchPublished(version, operator, "PUBLISH"));
+        return publish(versionNo, version.getContentHash(), null, operator);
+    }
+
+    public AiPromptVersion publish(int versionNo, String expectedHash, String evaluationId, String operator) {
+        return transactionTemplate.execute(status -> {
+            mapper.lockControl();
+            AiPromptVersion version = mapper.lockVersion(versionNo);
+            if (version == null || !AiPromptVersion.STATUS_DRAFT.equals(version.getStatus()))
+                throw BizException.badRequest("只有草稿可以发布，请刷新后重试");
+            if (!java.util.Objects.equals(expectedHash, version.getContentHash()))
+                throw BizException.badRequest("草稿内容已变化，请刷新并重新评测");
+            PromptComposition.requireSnapshot(version);
+            String evidenceId = evaluations.getObject().requirePassed(version, evaluationId);
+            return switchPublished(version, operator, "PUBLISH", evidenceId);
+        });
     }
 
     /**
@@ -401,8 +369,17 @@ public class PromptVersionService {
         if (AiPromptVersion.STATUS_PUBLISHED.equals(target.getStatus())) {
             throw BizException.badRequest("版本 v" + toVersionNo + " 当前已是生效版本，无需回滚");
         }
-        requireProtectedMarkers(target.getContent());
-        return transactionTemplate.execute(status -> switchPublished(target, operator, "ROLLBACK"));
+        if (target.getBaseVersion() == null) requireProtectedMarkers(target.getContent());
+        else PromptComposition.requireSnapshot(target);
+        return transactionTemplate.execute(status -> {
+            mapper.lockControl();
+            AiPromptVersion locked = mapper.lockVersion(toVersionNo);
+            if (locked == null || !AiPromptVersion.STATUS_ARCHIVED.equals(locked.getStatus()))
+                throw BizException.badRequest("回滚目标状态已变化，请刷新后重试");
+            if (locked.getBaseVersion() == null) requireProtectedMarkers(locked.getContent());
+            else PromptComposition.requireSnapshot(locked);
+            return switchPublished(locked, operator, "ROLLBACK", null);
+        });
     }
 
     // ==================================================================
@@ -420,8 +397,17 @@ public class PromptVersionService {
     }
 
     /** 归档旧发布版 → 发布目标版本 → 同步配置投影 → 写审计（同一事务）。 */
-    private AiPromptVersion switchPublished(AiPromptVersion version, String operator, String action) {
-        String previousStatus = version.getStatus();
+    private AiPromptVersion switchPublished(AiPromptVersion version, String operator, String action, String evaluationId) {
+        // 调用方已持有控制行锁：记录真正的生效版切换，而不是目标版本自身的DRAFT→PUBLISHED。
+        AiPromptVersion previous = mapper.selectPublished();
+        Map<String, Object> before = new java.util.LinkedHashMap<>();
+        before.put("source", previous == null ? "BUILTIN" : "PUBLISHED");
+        before.put("versionNo", previous == null ? 0 : previous.getVersionNo());
+        before.put("status", previous == null ? "BUILTIN" : previous.getStatus());
+        before.put("contentHash", previous == null ? sha256(PromptEvaluationService.builtin()) : previous.getContentHash());
+        if (previous != null && previous.getBaseVersion() != null) {
+            before.put("baseVersion", previous.getBaseVersion()); before.put("baseHash", previous.getBaseHash());
+        }
         mapper.archivePublishedExcept(version.getVersionNo());
         int updated = mapper.publish(version.getVersionNo(), operator);
         if (updated != 1) {
@@ -430,22 +416,29 @@ public class PromptVersionService {
         }
 
         // 配置投影：prompt.active-version 指向当前生效版本（真源是 ai_prompt_version.status=PUBLISHED）
-        try {
-            configService.update(AiConfigCatalog.PROMPT_ACTIVE_VERSION,
-                    String.valueOf(version.getVersionNo()), operator);
-        } catch (RuntimeException ex) {
-            log.warn("同步 prompt.active-version 投影失败（不影响发布本身）：{}", ex.getMessage());
-        }
+        configService.update(AiConfigCatalog.PROMPT_ACTIVE_VERSION,
+                String.valueOf(version.getVersionNo()), operator);
 
         // 审计：发布/回滚都属于配置变更（REQ-CFG-05）
+        Map<String, Object> after = new java.util.LinkedHashMap<>();
+        after.put("promptAction", action);
+        after.put("source", "PUBLISHED");
+        after.put("versionNo", version.getVersionNo());
+        after.put("status", AiPromptVersion.STATUS_PUBLISHED);
+        after.put("contentHash", String.valueOf(version.getContentHash()));
+        if (evaluationId != null) after.put("evaluationId", evaluationId);
+        if (version.getBaseVersion() != null) {
+            after.put("baseVersion", version.getBaseVersion());
+            after.put("baseHash", version.getBaseHash());
+            if (version.getMigrationSourceVersion() != null) {
+                after.put("migrationSourceVersion", version.getMigrationSourceVersion());
+                after.put("migrationSourceHash", version.getMigrationSourceHash());
+            }
+        }
         webAuditor.success(
-                OperationAuditService.ACTION_CONFIG_UPDATE,
-                OperationAuditService.TARGET_TYPE_AI_CONFIG,
-                (long) version.getVersionNo(),
-                TARGET_NAME_PREFIX + version.getVersionNo(),
-                Map.of("status", previousStatus, "contentHash", String.valueOf(version.getContentHash())),
-                Map.of("status", AiPromptVersion.STATUS_PUBLISHED, "contentHash", String.valueOf(version.getContentHash())),
-                Set.of("status", "contentHash"));
+                OperationAuditService.ACTION_CONFIG_UPDATE, OperationAuditService.TARGET_TYPE_AI_CONFIG,
+                (long) version.getVersionNo(), TARGET_NAME_PREFIX + version.getVersionNo(),
+                before, after, Set.copyOf(after.keySet()));
 
         log.info("提示词{}完成 v{} hash={} operator={}（{}）",
                 "ROLLBACK".equals(action) ? "回滚" : "发布", version.getVersionNo(),
@@ -488,12 +481,6 @@ public class PromptVersionService {
         }
     }
 
-    /** 门禁执行端口（单测打桩用；生产实现见 {@link CommandPromptGate}）。 */
-    @FunctionalInterface
-    public interface PromptGate {
-        GateResult evaluate();
-    }
-
     /**
      * 真机集（{@code --suite=live}）状态。
      *
@@ -505,64 +492,4 @@ public class PromptVersionService {
     public record LiveGate(String status, String at, String reason, String source) {
     }
 
-    /**
-     * 命令行门禁：执行 {@code node scripts/ai-golden-questions.mjs --suite=deterministic}，
-     * 退出码 0 才算通过。
-     *
-     * <p><b>任何"没跑起来"的情况都是 NOT_RUN，而不是通过</b>：命令不存在、Node 未安装、
-     * 脚本还没实现 {@code --suite}（阶段五 task-14 正在补）、超时、读取输出失败——
-     * 一律拒绝发布，并把原因写进 summary 供页面显示"未跑"。</p>
-     */
-    static final class CommandPromptGate implements PromptGate {
-
-        private final String command;
-
-        CommandPromptGate(String command) {
-            this.command = command;
-        }
-
-        @Override
-        public GateResult evaluate() {
-            if (command == null || command.isBlank()) {
-                return GateResult.notRun("未配置门禁命令");
-            }
-            Process process = null;
-            try {
-                ProcessBuilder builder = new ProcessBuilder(command.trim().split("\\s+"));
-                builder.redirectErrorStream(true);
-                process = builder.start();
-                String output;
-                try (InputStream in = process.getInputStream()) {
-                    output = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-                }
-                if (!process.waitFor(GATE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                    process.destroyForcibly();
-                    return GateResult.notRun("门禁命令超时（>" + GATE_TIMEOUT_MS / 1000 + "s）：" + command);
-                }
-                int exit = process.exitValue();
-                if (exit == 0) {
-                    return GateResult.passed("确定性黄金问题集全绿（" + command + "）");
-                }
-                return GateResult.failed("确定性黄金问题集未全绿（exit=" + exit + "）：" + tail(output));
-            } catch (IOException ex) {
-                // 脚本不存在 / Node 未安装 / --suite 参数尚未实现（阶段五 task-14 才补齐）
-                return GateResult.notRun("门禁命令无法执行（" + ex.getMessage() + "）：" + command);
-            } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt();
-                return GateResult.notRun("门禁命令被中断：" + command);
-            } finally {
-                if (process != null && process.isAlive()) {
-                    process.destroyForcibly();
-                }
-            }
-        }
-
-        private static String tail(String output) {
-            if (output == null || output.isBlank()) {
-                return "（无输出）";
-            }
-            String flat = output.strip();
-            return flat.length() <= 300 ? flat : flat.substring(flat.length() - 300);
-        }
-    }
 }

@@ -15,6 +15,7 @@
 -- ---------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS sys_org (
+    mutation_version BIGINT NOT NULL DEFAULT 0,
     id          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
     org_code    VARCHAR(32)  NOT NULL COMMENT '机构编码',
     org_name    VARCHAR(64)  NOT NULL COMMENT '机构名称',
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS sys_org (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '机构配置';
 
 CREATE TABLE IF NOT EXISTS sys_department (
+    mutation_version BIGINT NOT NULL DEFAULT 0,
     id         BIGINT      NOT NULL AUTO_INCREMENT,
     dept_code  VARCHAR(32) NOT NULL COMMENT '部门编码',
     dept_name  VARCHAR(64) NOT NULL COMMENT '部门名称',
@@ -53,6 +55,7 @@ CREATE TABLE IF NOT EXISTS sys_department (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '部门配置';
 
 CREATE TABLE IF NOT EXISTS sys_user (
+    mutation_version BIGINT NOT NULL DEFAULT 0,
     id            BIGINT       NOT NULL AUTO_INCREMENT,
     username      VARCHAR(64)  NOT NULL COMMENT '登录账号',
     password      VARCHAR(100) NOT NULL COMMENT 'BCrypt 密码散列',
@@ -82,6 +85,7 @@ CREATE TABLE IF NOT EXISTS sys_user (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户配置';
 
 CREATE TABLE IF NOT EXISTS sys_role (
+    mutation_version BIGINT NOT NULL DEFAULT 0,
     id          BIGINT       NOT NULL AUTO_INCREMENT,
     role_code   VARCHAR(32)  NOT NULL COMMENT '角色编码',
     role_name   VARCHAR(64)  NOT NULL COMMENT '角色名称',
@@ -176,6 +180,7 @@ CREATE TABLE IF NOT EXISTS sys_region (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '行政区划基础信息';
 
 CREATE TABLE IF NOT EXISTS insurance_type (
+    mutation_version BIGINT NOT NULL DEFAULT 0,
     id          BIGINT        NOT NULL AUTO_INCREMENT,
     type_code   VARCHAR(32)   NOT NULL COMMENT '险种编码',
     type_name   VARCHAR(64)   NOT NULL COMMENT '险种名称',
@@ -742,3 +747,39 @@ CREATE TABLE IF NOT EXISTS ai_mcp_token (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'MCP 机器凭据（明文不入库）';
 
 
+
+-- 幂等增量脚本；同源 DDL 同时收录于 db/schema.sql。
+CREATE TABLE IF NOT EXISTS ai_prompt_control (
+    id INT NOT NULL PRIMARY KEY
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+INSERT IGNORE INTO ai_prompt_control(id) VALUES(1);
+
+CREATE TABLE IF NOT EXISTS ai_prompt_evaluation (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    version_no INT NOT NULL,
+    content_hash VARCHAR(64) NOT NULL,
+    content LONGTEXT NOT NULL,
+    baseline_content LONGTEXT NOT NULL,
+    context_hash VARCHAR(64) NOT NULL,
+    context_snapshot LONGTEXT NOT NULL,
+    suite_version VARCHAR(64) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    summary VARCHAR(512) NOT NULL,
+    results LONGTEXT NULL,
+    created_by VARCHAR(64) NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    finished_at DATETIME(6) NULL,
+    KEY idx_prompt_eval_version(version_no,created_at),
+    KEY idx_prompt_eval_status(status,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='候选提示词评测快照与结果';
+
+-- 不自动切割或改写历史正文；组合快照只在人工保存新草稿时写入。
+CREATE TABLE IF NOT EXISTS ai_prompt_composition (
+    version_no INT NOT NULL PRIMARY KEY,
+    base_version VARCHAR(64) NOT NULL,
+    base_hash VARCHAR(64) NOT NULL,
+    base_content LONGTEXT NOT NULL,
+    business_content LONGTEXT NOT NULL,
+    migration_source_version INT NULL,
+    migration_source_hash VARCHAR(64) NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='提示词基础规则与业务补充快照';

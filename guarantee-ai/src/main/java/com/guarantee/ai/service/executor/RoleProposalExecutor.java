@@ -39,10 +39,7 @@ public class RoleProposalExecutor implements ProposalExecutor {
     /**
      * 角色目标指纹（REQ-CFG-09）：名称/说明 + {@code updated_at} + {@code isDeleted}。
      *
-     * <p>不把"权限集合"纳入指纹：授权走 {@code ASSIGN_PERMISSIONS} 独立动作，
-     * 其并发修改由角色服务自身的事务与校验负责；把权限集合算进来会让"另一个人给别的角色
-     * 改权限"这类无关操作误伤当前提案。角色行本身的改名/停用/删除会被
-     * {@code updated_at} 捕捉到。</p>
+     * <p>权限集合属于目标状态，必须参与比对，防止旧授权提案覆盖新授权。</p>
      */
     @Override
     public String fingerprint(AiOperationProposal proposal, ProposalRequest request) {
@@ -59,7 +56,8 @@ public class RoleProposalExecutor implements ProposalExecutor {
             return MISSING_FINGERPRINT;
         }
         return ProposalExecutor.fingerprintHash(role.getRoleCode(), role.getRoleName(),
-                role.getDescription(), role.getStatus(), role.getIsDeleted(), role.getUpdatedAt());
+                role.getDescription(), role.getStatus(), role.getIsDeleted(), role.getUpdatedAt(),
+                ProposalExecutor.canonicalCodes(roleService.getById(role.getId()).getPermissionCodes()));
     }
 
     @Override

@@ -67,7 +67,10 @@
                 <!-- 层级前缀匹配：选省 = 含其全部市/区县（规则见 RegionCodePrefix） -->
                 <bind name="regionPrefix"
                       value="@com.guarantee.common.region.RegionCodePrefix@of(q.regionCode)"/>
-                AND o.region_code LIKE CONCAT(#{regionPrefix}, '%')
+                <choose>
+                    <when test="q.regionExact">AND o.region_code = #{q.regionCode}</when>
+                    <otherwise>AND o.region_code LIKE CONCAT(#{regionPrefix}, '%')</otherwise>
+                </choose>
             </if>
             <if test="q.orgId != null">
                 AND o.org_id = #{q.orgId}

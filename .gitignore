@@ -31,6 +31,9 @@ build/
 # 前端 Node / Vite
 # ---------------------------------------------------------------------
 node_modules/
+.probe/
+frontend/test-results/
+frontend/playwright-report/
 dist/
 dist-ssr/
 .vite/
@@ -161,3 +164,4 @@ adapters/
 # 说明：`reports/eval-*` 里的 `*` **不跨** `/`，所以 `reports/archive/eval-*` 不受这条影响。
 # ---------------------------------------------------------------------
 reports/eval-*
+/.playwright-cli/

@@ -21,6 +21,9 @@ public class TenderOrderQuery extends PageQuery {
 
     private String regionCode;
 
+    /** 图表下钻按完整编码匹配，普通筛选保持层级匹配。 */
+    private boolean regionExact;
+
     /** 承保机构 */
     private Long orgId;
 

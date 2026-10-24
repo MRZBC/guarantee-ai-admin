@@ -4,37 +4,42 @@
 <mapper namespace="com.guarantee.ai.config.mapper.AiPromptVersionMapper">
 
     <sql id="cols">
-        id, version_no, content, content_hash, status, note, created_by, created_at,
-        published_by, published_at, is_deleted, deleted_at, deleted_by
+        p.id, p.version_no, p.content, p.content_hash, p.status, p.note, p.created_by, p.created_at,
+        p.published_by, p.published_at, p.is_deleted, p.deleted_at, p.deleted_by,
+        c.base_version, c.base_hash, c.base_content, c.business_content,
+        c.migration_source_version, c.migration_source_hash
     </sql>
 
     <select id="selectAll" resultType="com.guarantee.ai.config.AiPromptVersion">
         SELECT <include refid="cols"/>
-        FROM ai_prompt_version
-        WHERE is_deleted = 0
-        ORDER BY version_no DESC
+        FROM ai_prompt_version p LEFT JOIN ai_prompt_composition c ON c.version_no=p.version_no
+        WHERE p.is_deleted = 0
+        ORDER BY p.version_no DESC
     </select>
 
     <select id="selectByVersionNo" resultType="com.guarantee.ai.config.AiPromptVersion">
         SELECT <include refid="cols"/>
-        FROM ai_prompt_version
-        WHERE version_no = #{versionNo} AND is_deleted = 0
+        FROM ai_prompt_version p LEFT JOIN ai_prompt_composition c ON c.version_no=p.version_no
+        WHERE p.version_no = #{versionNo} AND p.is_deleted = 0
         LIMIT 1
     </select>
 
     <select id="selectPublished" resultType="com.guarantee.ai.config.AiPromptVersion">
         SELECT <include refid="cols"/>
-        FROM ai_prompt_version
-        WHERE status = 'PUBLISHED' AND is_deleted = 0
-        ORDER BY version_no DESC
+        FROM ai_prompt_version p LEFT JOIN ai_prompt_composition c ON c.version_no=p.version_no
+        WHERE p.status = 'PUBLISHED' AND p.is_deleted = 0
+        ORDER BY p.version_no DESC
         LIMIT 1
     </select>
 
     <select id="selectLatestDraft" resultType="com.guarantee.ai.config.AiPromptVersion">
         SELECT <include refid="cols"/>
-        FROM ai_prompt_version
-        WHERE status = 'DRAFT' AND is_deleted = 0
-        ORDER BY version_no DESC
+        FROM ai_prompt_version p LEFT JOIN ai_prompt_composition c ON c.version_no=p.version_no
+        WHERE p.status = 'DRAFT' AND p.is_deleted = 0
+          AND NOT EXISTS (SELECT 1 FROM ai_prompt_composition newer
+              JOIN ai_prompt_version np ON np.version_no=newer.version_no AND np.is_deleted=0
+              WHERE newer.version_no &gt; p.version_no)
+        ORDER BY p.version_no DESC
         LIMIT 1
     </select>
 
@@ -74,4 +79,19 @@
         WHERE version_no = #{versionNo} AND status IN ('DRAFT', 'ARCHIVED') AND is_deleted = 0
     </update>
 
+    <select id="lockVersion" resultType="com.guarantee.ai.config.AiPromptVersion">
+        SELECT <include refid="cols"/>
+        FROM ai_prompt_version p LEFT JOIN ai_prompt_composition c ON c.version_no=p.version_no
+        WHERE p.version_no=#{versionNo} AND p.is_deleted=0 FOR UPDATE
+    </select>
+    <insert id="saveComposition">
+        INSERT INTO ai_prompt_composition(version_no,base_version,base_hash,base_content,business_content,
+            migration_source_version,migration_source_hash)
+        SELECT #{versionNo},#{baseVersion},#{baseHash},#{baseContent},#{businessContent},
+            #{migrationSourceVersion},#{migrationSourceHash}
+        FROM ai_prompt_version target
+        WHERE target.version_no=#{versionNo} AND target.status='DRAFT' AND target.is_deleted=0
+        ON DUPLICATE KEY UPDATE base_version=VALUES(base_version),base_hash=VALUES(base_hash),
+            base_content=VALUES(base_content),business_content=VALUES(business_content)
+    </insert>
 </mapper>

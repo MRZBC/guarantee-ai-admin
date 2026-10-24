@@ -163,7 +163,7 @@ function handleUserCommand(command: string): void {
   <el-container class="app-layout">
     <el-aside class="app-aside" :width="appStore.sidebarCollapsed ? '64px' : '240px'">
       <div class="app-logo">
-        <el-icon class="app-logo__icon"><Shield /></el-icon>
+        <el-icon class="app-logo__icon"><Lock /></el-icon>
         <span v-show="!appStore.sidebarCollapsed" class="app-logo__text">智能电子保函运营管理平台</span>
       </div>
       <el-scrollbar class="app-menu-scroll">

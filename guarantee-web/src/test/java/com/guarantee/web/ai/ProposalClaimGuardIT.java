@@ -71,6 +71,26 @@ class ProposalClaimGuardIT {
 
     /** 真机复现的正文形态：编号是改过尾数的假编号，且本轮没有任何工具调用。 */
     private static final String FABRICATED_NO = "OP202609231200258712";
+    private static String probeAnswer;
+
+    @Test
+    @DisplayName("审计探针：零工具直接声称执行成功应被纠正（预期暴露缺口）")
+    void bareExecutionSuccessMustBeCorrected() {
+        long adminId = userId("admin");
+        var conversation = conversationService.resolveOrCreate(adminId, null, "停用险种", "stub-model");
+        probeAnswer = "已成功停用该险种，变更已生效。";
+        try {
+            var events = streamOnce(adminId, conversation.getId(), "停用险种");
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM ai_tool_call WHERE conversation_id = ?", Integer.class,
+                    conversation.getId())).isZero();
+            String stored = lastAssistantMessage(conversation.getId());
+            System.out.println("EXECUTION_CLAIM_PROBE | " + stored);
+            assertThat(stored).as("无执行事实的成功声明必须被系统纠正").contains("系统提示");
+        } finally {
+            probeAnswer = null;
+        }
+    }
 
     private static final String FABRICATED_ANSWER =
             "待确认提案：提案编号 " + FABRICATED_NO + "，目标为险种「投标保函（标准）」。"
@@ -117,7 +137,7 @@ class ProposalClaimGuardIT {
                     .finishReason("stop")
                     .build();
             return new ChatResponse(List.of(new Generation(
-                    new AssistantMessage(FABRICATED_ANSWER), metadata)));
+                    new AssistantMessage(probeAnswer == null ? FABRICATED_ANSWER : probeAnswer), metadata)));
         }
     }
 

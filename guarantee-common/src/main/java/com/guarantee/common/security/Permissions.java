@@ -13,6 +13,9 @@ package com.guarantee.common.security;
  */
 public final class Permissions {
 
+    /** 导出聚合分析摘要，默认仅 ADMIN / ANALYST。 */
+    public static final String ANALYSIS_EXPORT = "analysis:export";
+
     // ---------------- 助手侧能力开关 ----------------
 
     /** 使用 AI 助手对话。 */

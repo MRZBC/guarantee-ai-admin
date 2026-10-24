@@ -110,8 +110,8 @@ $env:DEEPSEEK_API_KEY="sk-xxxxxxxx"     # Linux/macOS: export DEEPSEEK_API_KEY=.
 
 ## 五、数据库
 
-26 张表，DDL 见 **`guarantee-web/src/main/resources/db/schema.sql`**（空库自建；存量库靠
-`db/migration/V1..V10` 手工幂等脚本，**两者必须同步改**）。
+28 张表，DDL 见 **`guarantee-web/src/main/resources/db/schema.sql`**（空库自建；存量库靠
+`db/migration/V1..V12` 手工幂等脚本，**两者必须同步改**）。
 
 | 域 | 表 |
 |---|---|
@@ -119,7 +119,8 @@ $env:DEEPSEEK_API_KEY="sk-xxxxxxxx"     # Linux/macOS: export DEEPSEEK_API_KEY=.
 | 险种 | `insurance_type` |
 | 业务分析 | `enterprise`、`project` |
 | 订单 | `tender_order`、`performance_order` |
-| AI | `ai_conversation`、`ai_message`、`ai_tool_call`、`ai_audit_log` |
+| AI | `ai_conversation`、`ai_message`、`ai_tool_call`、`ai_audit_log`（及知识、配置、提案、审计、指标等表，详见 DDL） |
+| 提示词评测 | `ai_prompt_control`、`ai_prompt_evaluation` |
 
 订单表在 `apply_date`、`region_code`、`org_id`、`insurance_type_id` 以及 `(org_id, apply_date)` 上建了索引，
 保证 15 万行下的分析查询性能。表结构以外的约定（逻辑删除、审计分区等）见

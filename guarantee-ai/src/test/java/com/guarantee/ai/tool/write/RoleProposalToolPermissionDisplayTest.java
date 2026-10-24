@@ -90,7 +90,7 @@ class RoleProposalToolPermissionDisplayTest {
                 "proposeRoleChange", "ASSIGN_PERMISSIONS", "权限授权", "ROLE", "角色",
                 425L, "业务运营（无系统配置）", "角色授权：业务运营（无系统配置）",
                 List.of(), List.of(), List.of(), true, "给这个角色配业务权限",
-                LocalDateTime.now().plusMinutes(15), "PENDING");
+                LocalDateTime.now().plusMinutes(15), "PENDING", null, null, null);
     }
 
     private static SysRole role() {

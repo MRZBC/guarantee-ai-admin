@@ -60,7 +60,8 @@ public class UserProposalExecutor implements ProposalExecutor {
         }
         return ProposalExecutor.fingerprintHash(user.getUsername(), user.getRealName(), user.getPhone(),
                 user.getEmail(), user.getDeptId(), user.getStatus(), user.getIsDeleted(),
-                user.getUpdatedAt());
+                user.getUpdatedAt(), ProposalExecutor.canonicalCodes(
+                        userService.listRoleCodesByUserId(proposal.getTargetId())));
     }
 
     @Override

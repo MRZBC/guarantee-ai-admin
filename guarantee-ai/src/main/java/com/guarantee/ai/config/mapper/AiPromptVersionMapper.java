@@ -14,6 +14,10 @@ import java.util.List;
  */
 @Mapper
 public interface AiPromptVersionMapper {
+    @org.apache.ibatis.annotations.Select("SELECT id FROM ai_prompt_control WHERE id=1 FOR UPDATE")
+    Integer lockControl();
+
+    AiPromptVersion lockVersion(@Param("versionNo") int versionNo);
 
     /** 版本历史（按 version_no 倒序）。 */
     List<AiPromptVersion> selectAll();
@@ -31,6 +35,8 @@ public interface AiPromptVersionMapper {
     Integer maxVersionNo();
 
     int insert(AiPromptVersion version);
+
+    int saveComposition(AiPromptVersion version);
 
     /** 仅允许更新 DRAFT 的内容/哈希/说明。 */
     int updateDraft(@Param("versionNo") int versionNo,
