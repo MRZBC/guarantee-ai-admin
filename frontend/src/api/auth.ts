@@ -9,6 +9,10 @@ export function getMe() {
   return http.get<UserInfo>('/auth/me')
 }
 
+export function logout() {
+  return http.post<void>('/auth/logout')
+}
+
 /**
  * 自助修改密码（`PUT /auth/password`）。
  *

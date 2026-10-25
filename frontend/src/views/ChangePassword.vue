@@ -94,7 +94,7 @@ async function handleSubmit(): Promise<void> {
     })
     ElMessage.success('密码已修改，请使用新密码重新登录')
     // 不清 token 的话，用户的旧令牌已失效，下一次请求会先弹"登录状态已失效"再跳登录页
-    userStore.logout()
+    userStore.clearAuth()
     await router.replace('/login')
   } catch {
     // 失败原因（「原密码不正确」/「新密码不能与旧密码相同」等）已由响应拦截器统一提示；
@@ -110,9 +110,13 @@ async function handleSubmit(): Promise<void> {
  * <p>强制模式下这个入口是**必须的**（§7 E-8）：`POST /auth/logout` 在服务端闸门白名单内，
  * 否则用户会被永久锁死在改密页，连退出都做不到，只能清浏览器存储。</p>
  */
-function handleLogout(): void {
-  userStore.logout()
-  void router.replace('/login')
+async function handleLogout(): Promise<void> {
+  try {
+    await userStore.logout()
+    await router.replace('/login')
+  } catch {
+    // 保留当前会话，允许用户在服务端登出失败后重试。
+  }
 }
 
 /** 主动模式下的返回：回到用户来时的页面。 */

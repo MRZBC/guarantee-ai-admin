@@ -143,8 +143,12 @@ async function handleLogout(): Promise<void> {
   } catch {
     return
   }
-  userStore.logout()
-  await router.push('/login')
+  try {
+    await userStore.logout()
+    await router.push('/login')
+  } catch {
+    // 保留当前会话，允许用户在服务端登出失败后重试。
+  }
 }
 
 function handleUserCommand(command: string): void {
