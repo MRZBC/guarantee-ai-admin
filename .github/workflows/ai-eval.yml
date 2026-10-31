@@ -117,7 +117,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-and-it:
     name: 构建与集成测试（mvn -B verify）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # Playwright 1.58.2 不支持 Ubuntu 26.04
     services:
       mysql:
         image: mysql:8.0
