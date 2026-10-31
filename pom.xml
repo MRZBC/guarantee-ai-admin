@@ -13,7 +13,7 @@
 
     <groupId>com.guarantee</groupId>
     <artifactId>guarantee-ai-admin</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
     <packaging>pom</packaging>
     <name>guarantee-ai-admin</name>
     <description>智能电子保函运营管理平台 - 模块化单体</description>
