@@ -897,7 +897,7 @@ onBeforeUnmount(() => {
 }
 
 .ai-avatar--ai {
-  background: #409eff;
+  background: #2765b0;
   color: #fff;
   flex-shrink: 0;
 }
@@ -911,7 +911,7 @@ onBeforeUnmount(() => {
 }
 
 .ai-bubble--user {
-  background: #409eff;
+  background: #2765b0;
   color: #fff;
   max-width: 84%;
   white-space: pre-wrap;
@@ -1037,7 +1037,7 @@ onBeforeUnmount(() => {
 }
 
 .markdown-body :deep(a) {
-  color: #409eff;
+  color: #2765b0;
   text-decoration: none;
 }
 
@@ -1136,8 +1136,8 @@ onBeforeUnmount(() => {
 
 .ai-history__item:hover,
 .ai-history__item.is-active {
-  border-color: #409eff;
-  background: #ecf5ff;
+  border-color: #2765b0;
+  background: #edf5ff;
 }
 
 .ai-history__title {

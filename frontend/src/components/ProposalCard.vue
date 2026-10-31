@@ -328,7 +328,7 @@ onBeforeUnmount(stopTimer)
   margin: 8px 0;
   padding: 12px;
   border: 1px solid #a0cfff;
-  border-left: 4px solid #409eff;
+  border-left: 4px solid #2765b0;
   border-radius: 6px;
   background: #fff;
 }

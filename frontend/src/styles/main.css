@@ -2,6 +2,13 @@
   --app-header-height: 56px;
   --app-sidebar-width: 220px;
   --app-sidebar-collapsed-width: 64px;
+  --el-color-primary: #2765b0;
+  --el-color-primary-light-3: #6793c8;
+  --el-color-primary-light-5: #93b2d7;
+  --el-color-primary-light-7: #bed1e7;
+  --el-color-primary-light-8: #d4e1ef;
+  --el-color-primary-light-9: #edf5ff;
+  --el-color-primary-dark-2: #1f518d;
 }
 
 * {
@@ -17,23 +24,57 @@ body,
 }
 
 body {
-  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
-    Arial, sans-serif;
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-size: 14px;
-  color: #303133;
-  background-color: #f0f2f5;
+  color: #24374c;
+  background-color: #f5f7fa;
 }
 
 /* 页面通用容器 */
 .page-container {
-  padding: 16px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+  min-width: 0;
 }
 
-.filter-card :deep(.el-form-item) {
-  margin-bottom: 0;
+.filter-card .el-form-item {
+  margin-bottom: 14px;
+}
+
+.page-container > .el-card,
+.page-container > .el-row .el-card {
+  border-color: #e6ecf2;
+  border-radius: 8px;
+}
+
+.page-container .el-card__header {
+  border-bottom-color: #edf1f5;
+  color: #30435a;
+}
+
+.page-container .el-table {
+  --el-table-header-bg-color: #f8fafc;
+  --el-table-header-text-color: #718195;
+  --el-table-row-hover-bg-color: #f5f9ff;
+  --el-table-border-color: #edf1f5;
+  --el-table-text-color: #465b70;
+}
+
+.page-container .el-table th.el-table__cell {
+  font-weight: 600;
+}
+
+.page-container .el-table td.el-table__cell,
+.page-container .el-table th.el-table__cell {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.page-container .el-pagination {
+  flex-wrap: wrap;
+  row-gap: 8px;
 }
 
 /*
@@ -87,6 +128,7 @@ body {
   color: #303133;
   line-height: 1.3;
   word-break: break-all;
+  font-variant-numeric: tabular-nums;
 }
 
 .stat-card__unit {
@@ -98,6 +140,12 @@ body {
 
 .text-muted {
   color: #909399;
+}
+
+@media (max-width: 768px) {
+  .page-container { padding: 14px; gap: 12px; }
+  .page-container .el-card__body { padding: 16px; }
+  .pagination-wrapper { justify-content: flex-start; }
 }
 
 /* ---------------------------------------------------------------------

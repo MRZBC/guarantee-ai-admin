@@ -127,7 +127,6 @@ function handleBack(): void {
 
 <template>
   <div class="change-password-page">
-    <div class="change-password-page__bg" />
     <el-card class="change-password-card" shadow="always">
       <div class="change-password-card__header">
         <el-icon class="change-password-card__icon"><Lock /></el-icon>
@@ -247,17 +246,9 @@ function handleBack(): void {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #1f2d3d 0%, #2b4a6f 55%, #3a7bd5 100%);
+  background: #f5f7fa;
   overflow: hidden;
   padding: 16px;
-}
-
-.change-password-page__bg {
-  position: absolute;
-  inset: -40%;
-  background: radial-gradient(circle at 30% 30%, rgba(64, 158, 255, 0.28), transparent 55%),
-    radial-gradient(circle at 70% 65%, rgba(103, 194, 58, 0.18), transparent 55%);
-  pointer-events: none;
 }
 
 .change-password-card {
@@ -266,6 +257,8 @@ function handleBack(): void {
   max-width: calc(100vw - 32px);
   border-radius: 12px;
   padding: 8px 4px;
+  border-color: #e2eaf2;
+  box-shadow: 0 16px 48px rgba(36, 55, 76, 0.08);
 }
 
 .change-password-card__header {
@@ -275,13 +268,13 @@ function handleBack(): void {
 
 .change-password-card__icon {
   font-size: 32px;
-  color: #409eff;
+  color: #2765b0;
 }
 
 .change-password-card__title {
   margin: 8px 0 2px;
   font-size: 20px;
-  color: #303133;
+  color: #24374c;
 }
 
 .change-password-card__subtitle {

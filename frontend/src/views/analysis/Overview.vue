@@ -32,7 +32,7 @@ const exporting = ref(false)
 const orgOptions = ref<OrgOption[]>([])
 let requestId = 0
 
-const PALETTE = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#909399', '#9b59b6', '#00bcd4', '#ff9800']
+const PALETTE = ['#2765b0', '#67c23a', '#e6a23c', '#f56c6c', '#909399', '#9b59b6', '#00bcd4', '#ff9800']
 
 const loading = ref(false)
 const trendLoading = ref(false)
@@ -60,7 +60,7 @@ const statItems = computed<StatCardItem[]>(() => {
   const data = overview.value
   return [
     { label: '订单总数', value: data?.totalOrderCount ?? 0, unit: '笔' },
-    { label: '投标订单数', value: data?.tenderOrderCount ?? 0, unit: '笔', color: '#409eff' },
+    { label: '投标订单数', value: data?.tenderOrderCount ?? 0, unit: '笔', color: '#2765b0' },
     { label: '履约订单数', value: data?.performanceOrderCount ?? 0, unit: '笔', color: '#67c23a' },
     {
       label: '担保总金额',
@@ -111,7 +111,7 @@ const trendOption = computed<EChartsOption>(() => ({
       type: 'line',
       smooth: true,
       yAxisIndex: 0,
-      itemStyle: { color: '#409eff' },
+      itemStyle: { color: '#2765b0' },
       areaStyle: { opacity: 0.12 },
       data: trend.value.map((item) => item.orderCount)
     },
@@ -152,7 +152,7 @@ const regionOption = computed<EChartsOption>(() => ({
       name: '担保金额',
       type: 'bar',
       barMaxWidth: 40,
-      itemStyle: { color: '#409eff', borderRadius: [4, 4, 0, 0] },
+      itemStyle: { color: '#2765b0', borderRadius: [4, 4, 0, 0] },
       data: regions.value.map((item) => ({ value: item.guaranteeAmount, drilldown: { regionCode: item.regionCode, regionExact: true } }))
     },
     {

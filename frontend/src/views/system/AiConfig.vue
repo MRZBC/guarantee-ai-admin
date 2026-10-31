@@ -527,7 +527,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="ai-config">
+  <div class="page-container ai-config">
     <el-card shadow="never">
       <template #header>
         <div class="ai-config__header">
