@@ -60,6 +60,14 @@ const input = ref('')
 const conversationId = ref<number | null>(null)
 const conversationTitle = ref('新会话')
 const messages = ref<DisplayMessage[]>([])
+const announcement = ref('')
+watch(streaming, (active, wasActive) => {
+  if (active) announcement.value = '正在思考'
+  else if (wasActive) {
+    const last = [...messages.value].reverse().find((message) => message.role === 'assistant')
+    announcement.value = last?.content ? `助手回复：${last.content}` : '回答已结束'
+  }
+})
 const toolCalls = ref<ToolCallMap>({})
 const conversations = ref<ConversationItem[]>([])
 
@@ -583,6 +591,7 @@ onBeforeUnmount(() => {
       <el-badge :is-dot="streaming" class="ai-copilot__badge">
         <el-button
           class="ai-copilot__fab"
+          aria-label="打开业务分析助手"
           type="primary"
           circle
           size="large"
@@ -641,6 +650,7 @@ onBeforeUnmount(() => {
             <el-tooltip :content="expanded ? '还原为侧栏' : '展开占满页面'" placement="bottom">
               <el-button
                 class="ai-copilot__expand"
+                :aria-label="expanded ? '还原为侧栏' : '展开占满页面'"
                 size="small"
                 text
                 @click="toggleExpanded"
@@ -650,12 +660,13 @@ onBeforeUnmount(() => {
                 </el-icon>
               </el-button>
             </el-tooltip>
-            <el-button size="small" text @click="close">
+            <el-button size="small" text aria-label="关闭业务分析助手" @click="close">
               <el-icon><Close /></el-icon>
             </el-button>
           </div>
         </header>
 
+        <div class="sr-only" role="status" aria-live="polite">{{ announcement }}</div>
         <div ref="listRef" class="ai-panel__body">
           <el-empty
             v-if="showEmpty"
@@ -760,6 +771,7 @@ onBeforeUnmount(() => {
         <footer class="ai-panel__footer">
           <el-input
             v-model="input"
+            aria-label="输入问题"
             type="textarea"
             :rows="3"
             resize="none"
@@ -796,22 +808,23 @@ onBeforeUnmount(() => {
     <el-dialog v-model="historyVisible" title="历史会话" width="520px" append-to-body>
       <div v-loading="loadingHistory" class="ai-history">
         <el-empty v-if="!conversations.length && !loadingHistory" description="暂无历史会话" />
-        <div
+        <button
+          type="button"
           v-for="item in conversations"
           :key="item.id"
           class="ai-history__item"
           :class="{ 'is-active': item.id === conversationId }"
           @click="loadConversation(item.id)"
         >
-          <div class="ai-history__title">{{ item.title || '未命名会话' }}</div>
-          <div class="ai-history__meta">
+          <span class="ai-history__title">{{ item.title || '未命名会话' }}</span>
+          <span class="ai-history__meta">
             <span>{{ item.messageCount }} 条消息</span>
             <span>·</span>
             <span>{{ formatDateTime(item.updatedAt || item.createdAt) }}</span>
             <span>·</span>
             <span class="mono">{{ item.model }}</span>
-          </div>
-        </div>
+          </span>
+        </button>
       </div>
     </el-dialog>
   </div>
@@ -1125,13 +1138,40 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 .ai-history__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: white;
+  font: inherit;
   padding: 10px 12px;
   border: 1px solid #e4e7ed;
   border-radius: 6px;
   margin-bottom: 8px;
   cursor: pointer;
   transition: all 0.2s;
+}
+
+.ai-history__title,
+.ai-history__meta {
+  display: block;
+}
+
+.ai-history__item:focus-visible {
+  outline: 2px solid #2765b0;
+  outline-offset: 2px;
 }
 
 .ai-history__item:hover,

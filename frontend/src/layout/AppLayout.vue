@@ -183,10 +183,14 @@ function handleUserCommand(command: string): void {
     void router.push('/change-password')
   }
 }
+function focusMain(): void {
+  document.getElementById('main-content')?.focus()
+}
 </script>
 
 <template>
   <el-container class="app-layout">
+    <a href="#main-content" class="skip-link" @click.prevent="focusMain">跳至主内容</a>
     <el-aside class="app-aside" :width="sidebarCollapsed ? '64px' : '240px'">
       <div class="app-logo">
         <el-icon class="app-logo__icon"><Lock /></el-icon>
@@ -271,7 +275,7 @@ function handleUserCommand(command: string): void {
         </div>
       </el-header>
 
-      <el-main class="app-content">
+      <el-main id="main-content" class="app-content" tabindex="-1">
         <router-view v-slot="{ Component }">
           <keep-alive :max="6">
             <component :is="Component" />
@@ -294,6 +298,21 @@ function handleUserCommand(command: string): void {
  * 把 body 宽度收窄一个滚动条宽度 —— 表现就是打开详情弹窗时整页向左缩进 ~15px
  * （实测复现与覆盖规则见 styles/main.css 的「弹窗锁屏」一节）。
  */
+.skip-link {
+  position: fixed;
+  z-index: 3000;
+  top: 8px;
+  left: 8px;
+  padding: 8px 12px;
+  color: #fff;
+  background: #174c8c;
+  transform: translateY(-160%);
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
 .app-layout {
   height: 100%;
 }

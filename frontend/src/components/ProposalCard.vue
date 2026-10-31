@@ -291,6 +291,7 @@ onBeforeUnmount(stopTimer)
     <div v-else class="proposal-card__footer">
       <el-input
         v-model="rejectReason"
+        aria-label="拒绝原因（可选）"
         size="small"
         placeholder="拒绝原因（可选）"
         :disabled="buttonsDisabled"

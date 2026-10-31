@@ -83,7 +83,7 @@ function fillDemoAccount(): void {
         @keyup.enter="handleLogin"
       >
         <el-form-item label="用户名" prop="username">
-          <el-input v-model="form.username" placeholder="请输入用户名" clearable>
+          <el-input v-model="form.username" name="username" autocomplete="username" placeholder="请输入用户名" clearable>
             <template #prefix>
               <el-icon><User /></el-icon>
             </template>
@@ -93,6 +93,8 @@ function fillDemoAccount(): void {
         <el-form-item label="密码" prop="password">
           <el-input
             v-model="form.password"
+            name="password"
+            autocomplete="current-password"
             type="password"
             placeholder="请输入密码"
             show-password

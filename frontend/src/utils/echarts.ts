@@ -1,6 +1,7 @@
 import * as echarts from 'echarts/core'
 import { BarChart, LineChart, PieChart } from 'echarts/charts'
 import {
+  AriaComponent,
   DatasetComponent,
   GridComponent,
   LegendComponent,
@@ -20,6 +21,7 @@ import type {
 
 /** 按需注册：只打包项目实际用到的图表与组件 */
 echarts.use([
+  AriaComponent,
   LineChart,
   BarChart,
   PieChart,

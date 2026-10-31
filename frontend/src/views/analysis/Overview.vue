@@ -463,7 +463,7 @@ onMounted(() => {
     </el-row>
 
     <el-card v-if="report" shadow="never">
-      <template #header>分布明细与下钻</template>
+      <template #header>分布明细与下钻（可使用键盘选择“查看订单”）</template>
       <el-tabs>
         <el-tab-pane label="地区 Top 10">
           <el-table :data="regions"><el-table-column prop="regionName" label="地区" /><el-table-column prop="orderCount" label="订单数" />

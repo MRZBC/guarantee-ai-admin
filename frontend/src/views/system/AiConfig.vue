@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { onBeforeRouteLeave } from 'vue-router'
 import {
   changeAiConfig,
   getAiConfig,
@@ -248,6 +249,24 @@ const finalPreview = computed(() => {
 const draftNote = ref('')
 /** 编辑框内容是否还没保存（未保存时不允许发布，避免"发布了一个看不见的旧草稿"） */
 const draftDirty = ref(false)
+function warnBeforeUnload(event: BeforeUnloadEvent): void {
+  if (!draftDirty.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+onMounted(() => window.addEventListener('beforeunload', warnBeforeUnload))
+onUnmounted(() => window.removeEventListener('beforeunload', warnBeforeUnload))
+onBeforeRouteLeave(async () => {
+  if (!draftDirty.value) return true
+  try {
+    await ElMessageBox.confirm('提示词草稿有未保存的修改，离开后可能丢失。确定离开吗？', '未保存的修改', {
+      confirmButtonText: '离开', cancelButtonText: '继续编辑', type: 'warning'
+    })
+    return true
+  } catch {
+    return false
+  }
+})
 const effective = ref<EffectivePrompt | null>(null)
 const evaluation = ref<PromptEvaluation | null>(null)
 let pollTimer: ReturnType<typeof setTimeout> | undefined
@@ -424,7 +443,7 @@ async function publishDraft(): Promise<void> {
 async function rollbackTo(version: PromptVersionView): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      `确定回滚到 v${version.versionNo} 吗？回滚不重跑门禁（应急路径），会写审计；下一个请求生效。`,
+      `${draftDirty.value ? '未保存的草稿修改将被覆盖。' : ''}确定回滚到 v${version.versionNo} 吗？回滚不重跑门禁（应急路径），会写审计；下一个请求生效。`,
       '回滚提示词',
       { type: 'warning', confirmButtonText: '确认回滚' }
     )
@@ -713,6 +732,7 @@ onMounted(async () => {
             <p>业务补充规则（可留空；不得覆盖平台基础规则）</p>
             <el-input
               v-model="draftContent"
+              aria-label="业务补充规则"
               type="textarea"
               :rows="16"
               spellcheck="false"
@@ -722,6 +742,7 @@ onMounted(async () => {
             />
             <el-input
               v-model="draftNote"
+              aria-label="版本说明"
               class="mt-8"
               maxlength="200"
               show-word-limit
@@ -976,7 +997,7 @@ onMounted(async () => {
       <!-- 编辑配置项 -->
       <el-dialog v-model="editVisible" :title="editItem ? `修改 ${editItem.key}` : '修改配置'" width="520px">
         <template v-if="editItem">
-          <el-input v-model="editValue" :placeholder="editItem.defaultValue ?? '新值'" />
+          <el-input v-model="editValue" :aria-label="`修改配置 ${editItem.key}`" :placeholder="editItem.defaultValue ?? '新值'" />
           <div class="ai-config__desc mt-8">{{ editItem.description }}</div>
           <div class="ai-config__desc">
             类型 {{ editItem.valueType }}

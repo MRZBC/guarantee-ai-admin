@@ -33,7 +33,7 @@ const resolvedHeight = () =>
 
 function applyOption(option: EChartsOption, notMerge = false): void {
   if (!chart.value) return
-  chart.value.setOption(option, notMerge)
+  chart.value.setOption({ ...option, aria: { enabled: true } }, notMerge)
 }
 
 function scheduleResize(): void {
