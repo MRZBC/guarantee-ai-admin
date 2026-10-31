@@ -67,10 +67,9 @@ function fillDemoAccount(): void {
 
 <template>
   <div class="login-page">
-    <div class="login-page__bg" />
     <el-card class="login-card" shadow="always">
       <div class="login-card__header">
-        <el-icon class="login-card__icon"><Shield /></el-icon>
+        <el-icon class="login-card__icon"><Lock /></el-icon>
         <h1 class="login-card__title">智能电子保函运营管理平台</h1>
         <p class="login-card__subtitle">Intelligent Electronic Guarantee Operations Platform</p>
       </div>
@@ -140,16 +139,8 @@ function fillDemoAccount(): void {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #1f2d3d 0%, #2b4a6f 55%, #3a7bd5 100%);
+  background: #f5f7fa;
   overflow: hidden;
-}
-
-.login-page__bg {
-  position: absolute;
-  inset: -40%;
-  background: radial-gradient(circle at 30% 30%, rgba(64, 158, 255, 0.28), transparent 55%),
-    radial-gradient(circle at 70% 65%, rgba(103, 194, 58, 0.18), transparent 55%);
-  pointer-events: none;
 }
 
 .login-card {
@@ -158,6 +149,8 @@ function fillDemoAccount(): void {
   max-width: calc(100vw - 32px);
   border-radius: 12px;
   padding: 8px 4px;
+  border-color: #e2eaf2;
+  box-shadow: 0 16px 48px rgba(36, 55, 76, 0.08);
 }
 
 .login-card__header {
@@ -167,13 +160,13 @@ function fillDemoAccount(): void {
 
 .login-card__icon {
   font-size: 34px;
-  color: #409eff;
+  color: #2765b0;
 }
 
 .login-card__title {
   margin: 8px 0 2px;
   font-size: 20px;
-  color: #303133;
+  color: #24374c;
 }
 
 .login-card__subtitle {

@@ -1,4 +1,12 @@
+import type { EffectivePrompt, PromptEvaluation, PromptBase } from '@/types/ai'
 import { http } from './request'
+import type { AnalysisSummary, OrderComparison } from '@/types/analysis'
+
+export function generateAnalysisSummary(criteria: OrderComparison['criteria'], reportFingerprint: string, signal: AbortSignal) {
+  return http.post<AnalysisSummary>('/ai/analysis-summary', { criteria, reportFingerprint }, {
+    signal, timeout: 70000, validateStatus: status => (status >= 200 && status < 300) || status === 409
+  })
+}
 import type {
   AiConfigChangeResult,
   AiConfigView,
@@ -144,34 +152,35 @@ export function getPromptVersion(versionNo: number) {
   return http.get<PromptDetailView>(`/ai/config/prompts/${versionNo}`)
 }
 
-/**
- * 单独查门禁结果——**这个请求会真的执行门禁命令**（服务端跑嵌套 maven 的确定性黄金问题集）。
- *
- * <p>因此不能用全局 30s 超时：实测独立运行 ~14s、与其它构建并发时显著更久（e2e 实测曾 >180s）。
- * 单独放宽到 180s，并与页面上的"正在运行确定性评测（约 15 秒，最长 3 分钟）"提示配套，
- * 避免"前端已报失败、后端其实还在跑"的错位。</p>
- */
+/** 只读历史门禁状态，读取不会触发执行。 */
 export function getPromptGate() {
-  return http.get<PromptGateView>('/ai/config/prompts/gate', { timeout: 180_000 })
+  return http.get<PromptGateView>('/ai/config/prompts/gate')
+}
+export function getEffectivePrompt() {
+  return http.get<EffectivePrompt>('/ai/config/prompts/effective')
+}
+export function startPromptEvaluation(versionNo: number, contentHash: string) {
+  return http.post<PromptEvaluation>('/ai/config/prompts/evaluations', { versionNo, contentHash })
+}
+export function getPromptEvaluation(id: string) {
+  return http.get<PromptEvaluation>(`/ai/config/prompts/evaluations/${id}`)
+}
+export function latestPromptEvaluation(versionNo: number) {
+  return http.get<PromptEvaluation | null>(`/ai/config/prompts/${versionNo}/evaluation`)
 }
 
 /** 保存草稿（已有草稿则原地更新；已发布版本不可改）。 */
-export function savePromptDraft(content: string, note?: string | null) {
-  return http.post<PromptDetailView>('/ai/config/prompts/draft', { content, note: note ?? null })
+export function getPromptBase() { return http.get<PromptBase>('/ai/config/prompts/base') }
+export function savePromptDraft(request: {
+  businessContent: string; note: string | null; baseVersion: string; baseHash: string
+  migrationSourceVersion: number | null; migrationSourceHash: string | null; migrationConfirmed: boolean
+}) {
+  return http.post<PromptDetailView>('/ai/config/prompts/draft', request)
 }
 
-/**
- * 发布草稿（权限 `ai:config:update`）。
- *
- * 服务端**必须先过保护标记校验与确定性门禁**；门禁未跑/未全绿都会拒绝发布并返回可读原因。
- *
- * <p><b>为什么单独放宽超时到 180s</b>：发布会同步跑一次门禁（嵌套 maven）。
- * e2e 实测同一命令独立跑 13.9s；若沿用全局 30s 超时，页面会在后端仍可能成功时误报失败。
- * 这是过渡口径——门禁已在 T4-03 修成"评估在事务外"，进一步的"按内容哈希复用通过结果"
- * 登记为后续优化（见 REQ §17），本期不做。</p>
- */
-export function publishPrompt(versionNo: number) {
-  return http.post<PromptPublishResult>('/ai/config/prompts/publish', { versionNo }, { timeout: 180_000 })
+/** 发布只校验候选评测证据并切换版本。 */
+export function publishPrompt(versionNo: number, contentHash: string, evaluationId: string) {
+  return http.post<PromptPublishResult>('/ai/config/prompts/publish', { versionNo, contentHash, evaluationId })
 }
 
 /** 回滚到历史版本（应急路径，不重跑门禁；产生审计）。 */

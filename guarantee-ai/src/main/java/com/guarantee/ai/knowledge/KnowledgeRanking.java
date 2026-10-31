@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * 检索打分与排序（REQ-RAG-03）。
@@ -23,6 +24,9 @@ import java.util.Locale;
  * </ul>
  */
 public final class KnowledgeRanking {
+    // 通用叙述词不足以证明正文相关性；人工标题/标签仍可明确收录这些主题。
+    private static final Set<String> BODY_NOISE = Set.of("保证", "流程", "平台", "业务", "数据",
+            "怎样", "怎么", "如何", "什么", "申请", "办理", "说明", "可以", "支持");
 
     private KnowledgeRanking() {
     }
@@ -33,12 +37,20 @@ public final class KnowledgeRanking {
 
     /** 命中数全为 0 的候选不属于检索结果。 */
     public static List<Scored> rank(List<AiKnowledgeItem> candidates, String query) {
-        List<String> terms = KnowledgeTerms.meaningful(query);
+        String normalizedQuery = query == null ? "" : query.replace("钱数", "金额")
+                .replace("到角还是分", "小数位").replace("精确到分", "两位小数");
+        List<String> terms = KnowledgeTerms.meaningful(normalizedQuery);
         if (terms.isEmpty() || candidates == null || candidates.isEmpty()) {
             return List.of();
         }
         List<Scored> scored = new ArrayList<>(candidates.size());
         for (AiKnowledgeItem item : candidates) {
+            // 明确询问的办事主题必须有直接条目依据，概念相近不能替代材料/条件/制度。
+            String topics = lower(item.getTitle()) + "," + lower(item.getKeywords());
+            if (List.of("材料", "办理条件", "专户", "审计").stream()
+                    .anyMatch(topic -> normalizedQuery.contains(topic) && !topics.contains(topic))) {
+                continue;
+            }
             Scored hit = score(item, terms);
             if (hit != null) {
                 scored.add(hit);
@@ -78,7 +90,7 @@ public final class KnowledgeRanking {
             if (title.contains(term)) {
                 titleHits++;
             }
-            if (content.contains(term)) {
+            if (!BODY_NOISE.contains(term) && content.contains(term)) {
                 contentHits++;
             }
         }

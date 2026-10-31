@@ -109,6 +109,7 @@
     <update id="updateById" parameterType="com.guarantee.system.entity.SysDepartment">
         UPDATE sys_department
         <set>
+            mutation_version = mutation_version + 1,
             <if test="deptName != null">dept_name = #{deptName},</if>
             <if test="parentId != null">parent_id = #{parentId},</if>
             <if test="sortNo != null">sort_no = #{sortNo},</if>
@@ -117,7 +118,7 @@
     </update>
 
     <update id="updateStatus">
-        UPDATE sys_department SET status = #{status} WHERE id = #{id} AND status = #{expectedStatus}
+        UPDATE sys_department SET mutation_version = mutation_version + 1, status = #{status} WHERE id = #{id} AND status = #{expectedStatus}
     </update>
 
     <select id="selectPage" resultType="com.guarantee.system.vo.DepartmentVO">
@@ -166,7 +167,7 @@
     -->
     <update id="softDelete">
         UPDATE sys_department
-        SET is_deleted = 1,
+        SET mutation_version = mutation_version + 1, is_deleted = 1,
             deleted_at = NOW(6),
             deleted_by = COALESCE(#{operatorId}, 'DB')
         WHERE id = #{id} AND is_deleted = 0
@@ -175,7 +176,7 @@
     <!-- 恢复（设计 §9.4.2 / LD-04）：三列一起归零，只允许从"已删除"恢复 -->
     <update id="restore">
         UPDATE sys_department
-        SET is_deleted = 0,
+        SET mutation_version = mutation_version + 1, is_deleted = 0,
             deleted_at = NULL,
             deleted_by = 'DB'
         WHERE id = #{id} AND is_deleted = 1

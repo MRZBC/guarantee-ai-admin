@@ -71,3 +71,54 @@ export interface AnalysisQuery {
   endDate?: string
   limit?: number
 }
+
+
+export interface ComparisonMetric {
+  current: number
+  previous: number
+  change: number
+  changeRate?: number | null
+  status: 'NEW' | 'UNCHANGED' | 'UP' | 'DOWN'
+}
+
+export interface OrderComparison {
+  criteria: TrendQuery & { regionCode?: string; orgId?: number }
+  previousStartDate: string
+  previousEndDate: string
+  dataStartDate?: string
+  dataEndDate?: string
+  comparisonComplete: boolean
+  changeAlert: boolean
+  orderCount: ComparisonMetric
+  guaranteeAmount: ComparisonMetric
+  premiumAmount: ComparisonMetric
+}
+
+export interface OrderReport {
+  reportFingerprint: string
+  generatedAt: string
+  comparison: OrderComparison
+  trend: OrderTrendItem[]
+  regions: OrderRegionItem[]
+  insurances: OrderInsuranceItem[]
+  institutions: OrderInstitutionItem[]
+}
+
+export interface AnalysisEvidence {
+  id: string
+  kind: 'CHANGE' | 'PERIOD' | 'DISTRIBUTION'
+  text: string
+  drilldown: Record<string, string | number | boolean>
+}
+
+export interface AnalysisSummary {
+  status: 'GENERATED' | 'FACTS_ONLY' | 'NO_DATA' | 'REPORT_CHANGED'
+  report: OrderReport
+  reportFingerprint: string
+  generatedAt: string
+  observations: { text: string; evidenceIds: string[] }[]
+  evidence: AnalysisEvidence[]
+  limitations: string[]
+  message: string
+  traceId: string | null
+}

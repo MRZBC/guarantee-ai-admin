@@ -69,6 +69,7 @@ public final class PermissionCatalog {
             {"system:session:view", "在线会话查看", null},
             {"system:session:kick", "在线会话踢出", null},
 
+            {"analysis:export", "分析摘要导出", null},
             {"ai:chat", "AI 业务助手", null},
             {"ai:system:query", "AI 系统管理查询", null},
             {"ai:system:write", "AI 系统管理写操作", null},
@@ -129,6 +130,7 @@ public final class PermissionCatalog {
      * **不含** {@code system:audit:view}（D-1a）、不含任何写权限与 {@code ai:system:write}。
      */
     public static final Set<String> ANALYST_PERMISSIONS = Set.of(
+            "analysis:export",
             "dashboard:view",
             "order:tender:view", "order:performance:view",
             "analysis:overview:view", "project:view", "enterprise:view",

@@ -88,9 +88,14 @@ public class BusinessAssistantPrompt {
      * @param parsedTime 已由 {@code TimeSemanticParser} 解析出的时间范围（可能为空）
      */
     public String build(Optional<TimeRange> parsedTime) {
-        StringBuilder sb = new StringBuilder(loadTemplate());
+        return build(loadTemplate(), parsedTime, LocalDate.now());
+    }
+
+    /** 线上与候选评测使用相同的上下文组装；评测显式固定日期。 */
+    public static String build(String template, Optional<TimeRange> parsedTime, LocalDate today) {
+        StringBuilder sb = new StringBuilder(template);
         sb.append("\n\n# 本轮运行上下文\n");
-        sb.append("- 当前系统日期：").append(LocalDate.now()).append("\n");
+        sb.append("- 当前系统日期：").append(today).append("\n");
         parsedTime.ifPresent(range -> sb.append("- 系统已预解析本轮时间范围：")
                 .append(range.startDate()).append(" ~ ").append(range.endDate())
                 .append("（").append(range.description()).append("）\n")

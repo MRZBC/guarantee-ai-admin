@@ -281,7 +281,9 @@ public class RoleService {
      */
     @Transactional
     public RoleVO assignPermissions(String roleCode, List<String> permCodes) {
+        sysRoleMapper.lockForMutation(roleCode);
         SysRole existing = validateAssignPermissions(roleCode, permCodes);
+        sysRoleMapper.advanceRevision(roleCode);
         List<String> normalized = normalize(permCodes);
         // 变更前的权限必须在写入之前取，否则审计的 before 会等于 after
         RoleVO current = getById(existing.getId());

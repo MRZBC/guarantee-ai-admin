@@ -71,6 +71,10 @@ public interface ProposalExecutor {
      * <p>字段之间用不可打印分隔符拼接，避免 {@code ("ab","c")} 与 {@code ("a","bc")}
      * 得到同一个值；{@code null} 也有独立的标记（区别于空串）。</p>
      */
+    static java.util.List<String> canonicalCodes(java.util.List<String> codes) {
+        return codes == null ? java.util.List.of() : codes.stream().distinct().sorted().toList();
+    }
+
     static String fingerprintHash(Object... parts) {
         StringBuilder canonical = new StringBuilder();
         for (Object part : parts) {

@@ -19,6 +19,8 @@ import java.util.List;
  */
 @Mapper
 public interface SysRoleMapper {
+    Long lockForMutation(@Param("roleCode") String roleCode);
+    int advanceRevision(@Param("roleCode") String roleCode);
 
     // ---------------- 角色读 ----------------
 

@@ -36,7 +36,10 @@ public record ProposalPayload(
         String userText,
         LocalDateTime expiresAt,
         /** 状态：PENDING / EXECUTED / REJECTED / EXPIRED / INVALIDATED / FAILED。 */
-        String status) {
+        String status,
+        String resultMessage,
+        Long auditId,
+        LocalDateTime executedAt) {
 
     /** 单个字段的变更明细。 */
     public record ChangeItem(

@@ -101,7 +101,7 @@ const proposalTotal = computed(() => proposals.value.reduce((sum, item) => sum +
 const statItems = computed<StatCardItem[]>(() => {
   const data = overview.value
   return [
-    { label: '问答数', value: formatNumber(data?.turns), unit: '次', color: '#409eff' },
+    { label: '问答数', value: formatNumber(data?.turns), unit: '次', color: '#2765b0' },
     { label: '失败数', value: formatNumber(data?.errorTurns), unit: '次', color: '#f56c6c' },
     { label: '失败率', value: formatRate(data?.errorRate), color: '#f56c6c' },
     { label: '触顶数', value: formatNumber(data?.cappedTurns), unit: '次', color: '#e6a23c' },
@@ -139,7 +139,7 @@ const trendOption = computed<EChartsOption>(() => ({
       type: 'line',
       smooth: true,
       yAxisIndex: 0,
-      itemStyle: { color: '#409eff' },
+      itemStyle: { color: '#2765b0' },
       areaStyle: { opacity: 0.12 },
       data: trend.value.map((item) => item.turns)
     },

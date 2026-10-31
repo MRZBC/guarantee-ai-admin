@@ -157,6 +157,20 @@ class AiChatServiceBudgetGuardTest {
                 "test-model", fakeNanos::get);
     }
 
+    @Test
+    void candidateEvaluationUsesProductionToolLoopWithFixturesAndNoConversationWrites() {
+        model.setToolRequestRounds(1);
+        model.setToolCallsPerRound(1);
+        var result = service.evaluateCandidate("候选正文唯一标记", "订单有多少？", List.of(),
+                configService.snapshot(), java.time.LocalDate.of(2026, 10, 21));
+        assertThat(result.calls()).hasSize(1);
+        assertThat(result.calls().getFirst().name()).isEqualTo("queryOrderSummary");
+        assertThat(result.answer()).contains(FINAL_ANSWER);
+        assertThat(tool.executions()).as("生产业务工具不能被评测执行").isZero();
+        assertThat(model.evaluationSystem).contains("候选正文唯一标记", "2026-10-21");
+        org.mockito.Mockito.verifyNoInteractions(conversationService, promptProvider);
+    }
+
     @AfterEach
     void tearDown() {
         CurrentUser.clear();
@@ -343,6 +357,7 @@ class AiChatServiceBudgetGuardTest {
      * <p>与真实模型的行为一致——这正是 {@code finalAnswerRound} 能"硬收口"的前提。</p>
      */
     private static final class ScriptedChatModel implements ChatModel {
+        private String evaluationSystem;
 
         private final AtomicLong clock;
         private final AtomicInteger toolRequestRounds = new AtomicInteger();
@@ -405,6 +420,7 @@ class AiChatServiceBudgetGuardTest {
 
         @Override
         public Flux<ChatResponse> stream(Prompt prompt) {
+            evaluationSystem = prompt.getInstructions().getFirst().getText();
             if (failure != null) {
                 return Flux.error(failure);
             }

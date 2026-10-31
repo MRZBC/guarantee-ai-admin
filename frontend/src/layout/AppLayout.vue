@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { useAppStore } from '@/stores/app'
@@ -10,6 +10,28 @@ const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
 const userStore = useUserStore()
+const mobileViewport = ref(false)
+const mobileSidebarExpanded = ref(false)
+const sidebarCollapsed = computed(() => mobileViewport.value ? !mobileSidebarExpanded.value : appStore.sidebarCollapsed)
+let mobileQuery: MediaQueryList | undefined
+
+function updateMobileViewport(): void {
+  mobileViewport.value = mobileQuery?.matches ?? false
+  if (!mobileViewport.value) mobileSidebarExpanded.value = false
+}
+
+function toggleSidebar(): void {
+  if (mobileViewport.value) mobileSidebarExpanded.value = !mobileSidebarExpanded.value
+  else appStore.toggleSidebar()
+}
+
+onMounted(() => {
+  mobileQuery = window.matchMedia('(max-width: 768px)')
+  updateMobileViewport()
+  mobileQuery.addEventListener('change', updateMobileViewport)
+})
+
+onBeforeUnmount(() => mobileQuery?.removeEventListener('change', updateMobileViewport))
 
 interface MenuItem {
   path: string
@@ -143,8 +165,12 @@ async function handleLogout(): Promise<void> {
   } catch {
     return
   }
-  userStore.logout()
-  await router.push('/login')
+  try {
+    await userStore.logout()
+    await router.push('/login')
+  } catch {
+    // 保留当前会话，允许用户在服务端登出失败后重试。
+  }
 }
 
 function handleUserCommand(command: string): void {
@@ -161,19 +187,19 @@ function handleUserCommand(command: string): void {
 
 <template>
   <el-container class="app-layout">
-    <el-aside class="app-aside" :width="appStore.sidebarCollapsed ? '64px' : '240px'">
+    <el-aside class="app-aside" :width="sidebarCollapsed ? '64px' : '240px'">
       <div class="app-logo">
-        <el-icon class="app-logo__icon"><Shield /></el-icon>
-        <span v-show="!appStore.sidebarCollapsed" class="app-logo__text">智能电子保函运营管理平台</span>
+        <el-icon class="app-logo__icon"><Lock /></el-icon>
+        <span v-show="!sidebarCollapsed" class="app-logo__text">智能电子保函运营管理平台</span>
       </div>
       <el-scrollbar class="app-menu-scroll">
         <el-menu
           :default-active="activeMenu"
-          :collapse="appStore.sidebarCollapsed"
+          :collapse="sidebarCollapsed"
           :collapse-transition="false"
-          background-color="#1f2d3d"
-          text-color="#c0c4cc"
-          active-text-color="#ffffff"
+          background-color="#ffffff"
+          text-color="#556779"
+          active-text-color="#2765b0"
           router
           unique-opened
         >
@@ -204,9 +230,9 @@ function handleUserCommand(command: string): void {
     <el-container class="app-main-container">
       <el-header class="app-header">
         <div class="app-header__left">
-          <el-icon class="collapse-toggle" @click="appStore.toggleSidebar()">
-            <component :is="appStore.sidebarCollapsed ? 'Expand' : 'Fold'" />
-          </el-icon>
+          <button class="collapse-toggle" type="button" :aria-label="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'" @click="toggleSidebar()">
+            <el-icon><component :is="sidebarCollapsed ? 'Expand' : 'Fold'" /></el-icon>
+          </button>
           <el-breadcrumb separator="/">
             <el-breadcrumb-item v-for="(item, index) in breadcrumbs" :key="`${item}-${index}`">
               {{ item }}
@@ -273,7 +299,8 @@ function handleUserCommand(command: string): void {
 }
 
 .app-aside {
-  background-color: #1f2d3d;
+  background-color: #fff;
+  border-right: 1px solid #e6ecf2;
   transition: width 0.25s ease;
   display: flex;
   flex-direction: column;
@@ -286,19 +313,20 @@ function handleUserCommand(command: string): void {
   align-items: center;
   gap: 8px;
   padding: 0 18px;
-  color: #fff;
+  color: #24374c;
   font-weight: 600;
   /* 全称「智能电子保函运营管理平台」12 个字：14px ≈ 168px，
      可用宽度 = 侧边栏 240 - padding 2×18 - 图标 20 - 间距 8 = 176px，正好一行放得下。
      改回 15px 或把侧边栏收窄到 220px 都会溢出（nowrap 会被裁切）。 */
   font-size: 14px;
   white-space: nowrap;
-  background-color: #172432;
+  background-color: #fff;
+  border-bottom: 1px solid #edf1f5;
 }
 
 .app-logo__icon {
   font-size: 20px;
-  color: #409eff;
+  color: #2765b0;
   flex-shrink: 0;
 }
 
@@ -311,8 +339,21 @@ function handleUserCommand(command: string): void {
   border-right: none;
 }
 
+.app-aside :deep(.el-menu-item),
+.app-aside :deep(.el-sub-menu__title) {
+  height: 46px;
+  line-height: 46px;
+}
+
+.app-aside :deep(.el-menu-item.is-active) {
+  background-color: #edf5ff;
+  font-weight: 600;
+  box-shadow: inset 3px 0 #2765b0;
+}
+
 .app-main-container {
   height: 100%;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -322,8 +363,8 @@ function handleUserCommand(command: string): void {
   align-items: center;
   justify-content: space-between;
   background: #fff;
-  border-bottom: 1px solid #e4e7ed;
-  padding: 0 16px;
+  border-bottom: 1px solid #e8edf2;
+  padding: 0 24px;
 }
 
 .app-header__left {
@@ -333,13 +374,29 @@ function handleUserCommand(command: string): void {
 }
 
 .collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   font-size: 20px;
   cursor: pointer;
   color: #606266;
 }
 
 .collapse-toggle:hover {
-  color: #409eff;
+  color: #2765b0;
+  background: #edf5ff;
+}
+
+.collapse-toggle:focus-visible,
+.user-trigger:focus-visible {
+  outline: 2px solid #2765b0;
+  outline-offset: 2px;
 }
 
 .app-header__right {
@@ -355,7 +412,6 @@ function handleUserCommand(command: string): void {
   cursor: pointer;
   padding: 4px 6px;
   border-radius: 4px;
-  outline: none;
 }
 
 .user-trigger:hover {
@@ -363,7 +419,7 @@ function handleUserCommand(command: string): void {
 }
 
 .user-trigger__avatar {
-  background: #409eff;
+  background: #2765b0;
   color: #fff;
   font-size: 13px;
 }
@@ -375,7 +431,17 @@ function handleUserCommand(command: string): void {
 
 .app-content {
   padding: 0;
-  background: #f0f2f5;
+  background: #f5f7fa;
   overflow-y: auto;
+}
+
+@media (max-width: 768px) {
+  .app-header { padding: 0 12px; }
+  .app-header__left { gap: 6px; min-width: 0; }
+  .app-header__right .el-tag, .user-trigger__name { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-aside { transition: none; }
 }
 </style>

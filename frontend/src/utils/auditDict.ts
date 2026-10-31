@@ -44,6 +44,7 @@ export const AUDIT_DEFAULT_DAYS = 7
  * 不加就会在审计页整列显示英文码——而这两条恰恰是安全追溯的关键记录（RK-U-14）。
  */
 export const AUDIT_ACTION_LABELS: Record<string, string> = {
+  EXPORT: '导出',
   CREATE: '新增',
   UPDATE: '修改',
   ENABLE: '启用',
@@ -68,7 +69,8 @@ export const AUDIT_TARGET_TYPE_LABELS: Record<string, string> = {
   ROLE: '角色',
   PERMISSION: '权限',
   INSURANCE_TYPE: '险种',
-  AI_CONFIG: 'AI 配置'
+  AI_CONFIG: 'AI 配置',
+  ANALYSIS_REPORT: '分析摘要'
 }
 
 /** 结果码 → 中文。 */
@@ -88,6 +90,7 @@ export const AUDIT_SOURCE_LABELS: Record<string, string> = {
 
 /** 非 ADMIN 可查的目标类型（后端 SYS-A-10 白名单，显式查 ROLE/PERMISSION 会 403）。 */
 export const AUDIT_TARGET_TYPES_ADMIN = [
+  'ANALYSIS_REPORT',
   'USER',
   'ORG',
   'DEPT',

@@ -47,7 +47,8 @@ public class InsuranceTypeProposalExecutor implements ProposalExecutor {
             return MISSING_FINGERPRINT;
         }
         return ProposalExecutor.fingerprintHash(type.getTypeCode(), type.getTypeName(),
-                type.getCategory(), type.getStatus(), type.getIsDeleted(), type.getUpdatedAt());
+                type.getCategory(), type.getStatus(), type.getIsDeleted(), type.getUpdatedAt(),
+                type.getBaseRate(), type.getMinAmount(), type.getMaxAmount(), type.getDescription());
     }
 
     @Override

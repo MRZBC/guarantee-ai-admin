@@ -19,7 +19,7 @@ withDefaults(
 <template>
   <el-row :gutter="12">
     <el-col v-for="item in items" :key="item.label" :xs="24" :sm="12" :md="span" :lg="span">
-      <el-card class="stat-card" shadow="hover">
+      <el-card class="stat-card" shadow="never">
         <div class="stat-card__label">{{ item.label }}</div>
         <div class="stat-card__value" :style="item.color ? { color: item.color } : undefined">
           {{ item.value }}

@@ -77,6 +77,14 @@
         </choose>
     </sql>
 
+    <select id="selectAggregate" resultType="com.guarantee.analysis.vo.OrderAggregateVO">
+        SELECT COUNT(*) AS orderCount,
+               COALESCE(SUM(guarantee_amount), 0) AS guaranteeAmount,
+               COALESCE(SUM(premium_amount), 0) AS premiumAmount,
+               MIN(apply_date) AS dataStartDate, MAX(apply_date) AS dataEndDate
+        FROM (<include refid="orderSource"/>) merged
+    </select>
+
     <!--
       趋势：日 yyyy-MM-dd / 月 yyyy-MM（默认）/ 年 yyyy，按时间升序。
 
@@ -125,7 +133,7 @@
         LEFT JOIN enterprise et ON et.id = o.enterprise_id AND et.region_code = o.region_code
             AND et.is_deleted = 0
         GROUP BY o.region_code
-        ORDER BY `orderCount` DESC
+        ORDER BY `orderCount` DESC, o.region_code ASC
         LIMIT #{limit}
     </select>
 
@@ -178,7 +186,7 @@
         ) o
         LEFT JOIN sys_org g ON g.id = o.org_id
         GROUP BY o.org_id, o.region_code
-        ORDER BY `orderCount` DESC, o.org_id ASC
+        ORDER BY `orderCount` DESC, o.org_id ASC, o.region_code ASC
         LIMIT #{limit}
     </select>
     <!--

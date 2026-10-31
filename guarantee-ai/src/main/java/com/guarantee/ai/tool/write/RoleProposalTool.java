@@ -213,7 +213,7 @@ public class RoleProposalTool extends BaseProposalTool {
             throw new BizException("没有任何字段发生变化，无需提交提案");
         }
         return ProposalPreview.of("修改角色：" + target.getRoleName(), changes,
-                List.of(), List.of("roleCode 不可修改（已由服务端拦截）"), false);
+                List.of(), List.of(), false);
     }
 
     private static Set<String> requiredPermissions(String action) {

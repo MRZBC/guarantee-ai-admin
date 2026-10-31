@@ -20,6 +20,8 @@ const props = withDefaults(
   }
 )
 
+const emit = defineEmits<{ select: [data: unknown] }>()
+
 const containerRef = ref<HTMLDivElement | null>(null)
 // 用 shallowRef 保存实例，避免 Vue 对 ECharts 内部结构做响应式代理
 const chart = shallowRef<EChartsInstance | null>(null)
@@ -49,6 +51,7 @@ onMounted(() => {
   if (!containerRef.value) return
   chart.value = echarts.init(containerRef.value)
   applyOption(props.option, true)
+  chart.value.on('click', (params) => emit('select', params.data))
   window.addEventListener('resize', handleWindowResize)
   // ResizeObserver 同时覆盖侧边栏折叠等容器尺寸变化
   if (typeof ResizeObserver !== 'undefined' && containerRef.value) {
