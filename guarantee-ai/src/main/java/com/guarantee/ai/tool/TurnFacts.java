@@ -36,22 +36,33 @@ import java.util.Set;
  * 不可信），绝不影响工具本身的执行与返回。</p>
  */
 public final class TurnFacts {
+    private boolean querySucceeded;
+    private boolean toolFailed;
+    public synchronized void recordOutcome(ToolKind kind, boolean success) {
+        if (!success) toolFailed = true;
+        if (success && kind == ToolKind.READ) querySucceeded = true;
+    }
+    public synchronized boolean querySucceeded() { return querySucceeded; }
+    public synchronized boolean toolFailed() { return toolFailed; }
 
     /** 一次工具返回值的提取结果。 */
-    public record Facts(List<String> dataSources, Set<String> proposalNumbers, List<String> metricBlocks) {
+    public record Facts(List<String> dataSources, Set<String> proposalNumbers, List<String> metricBlocks, Set<String> literalValues) {
 
-        static final Facts EMPTY = new Facts(List.of(), Set.of(), List.of());
+        static final Facts EMPTY = new Facts(List.of(), Set.of(), List.of(), Set.of());
 
         public Facts {
             dataSources = List.copyOf(dataSources);
             proposalNumbers = Set.copyOf(proposalNumbers);
             metricBlocks = List.copyOf(metricBlocks);
+            literalValues = Set.copyOf(literalValues);
         }
     }
 
     private final List<String> dataSources = new ArrayList<>();
     private final Set<String> proposalNumbers = new LinkedHashSet<>();
     private final List<String> metricBlocks = new ArrayList<>();
+    private final Set<String> literalValues = new LinkedHashSet<>();
+    public synchronized Set<String> literalValues() { return Set.copyOf(literalValues); }
 
     /**
      * 从工具返回值的原始 JSON 文本里提取事实。
@@ -81,7 +92,23 @@ public final class TurnFacts {
         walk(root, dataSources, proposalNumbers);
         // 指标块（数值溯源的服务端出口）：只认已登记的字段，渲染规则见 DataMetrics
         List<String> metricBlocks = DataMetrics.blockOf(root).map(List::of).orElseGet(List::of);
-        return new Facts(dataSources, proposalNumbers, metricBlocks);
+        Set<String> literals = new LinkedHashSet<>();
+        collectLiterals(root, literals);
+        return new Facts(dataSources, proposalNumbers, metricBlocks, literals);
+    }
+
+    private static void collectLiterals(Object node, Set<String> values) {
+        if (node instanceof Map<?, ?> map) {
+            for (var entry : map.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                if (Set.of("targetName", "roleName", "orgName", "deptName", "typeName",
+                        "realName", "before", "after").contains(key)
+                        && entry.getValue() instanceof String text && !text.isBlank()) values.add(text);
+                collectLiterals(entry.getValue(), values);
+            }
+        } else if (node instanceof List<?> list) {
+            list.forEach(item -> collectLiterals(item, values));
+        }
     }
 
     private static void walk(Object node, List<String> dataSources, Set<String> proposalNumbers) {
@@ -112,6 +139,7 @@ public final class TurnFacts {
         if (facts == null) {
             return;
         }
+        literalValues.addAll(facts.literalValues());
         for (String dataSource : facts.dataSources()) {
             if (dataSource != null && !dataSource.isBlank() && !dataSources.contains(dataSource)) {
                 dataSources.add(dataSource);

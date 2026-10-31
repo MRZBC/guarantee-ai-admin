@@ -75,6 +75,151 @@ class ProposalFlowIT {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private com.guarantee.system.service.RoleService roleService;
+
+    @Autowired
+    private com.guarantee.system.mapper.InsuranceTypeMapper insuranceMapper;
+
+    @Autowired
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private com.guarantee.ai.service.TargetRevisionStore revisionStore;
+
+    @Test
+    void legacyProposalWithoutFingerprintCannotBypassVersionCheck() {
+        long typeId = insuranceTypeId("履约保函（质量）");
+        var created = createDisableInsuranceProposal(userId("admin"), typeId, "履约保函（质量）");
+        jdbcTemplate.update("UPDATE ai_operation_proposal SET target_fingerprint=NULL WHERE id=?", created.proposalId());
+        assertThatThrownBy(() -> proposalService.confirm(created.proposalId(), adminContext("trace-legacy-version")))
+                .hasMessageContaining("缺少目标版本信息");
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM insurance_type WHERE id=?", Integer.class, typeId)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("目标锁回归：页面 Mapper 写入等待确认事务释放目标锁")
+    void pageWriterWaitsForTargetLock() throws Exception {
+        long typeId = insuranceTypeId("履约保函（质量）");
+        var locked = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var started = new java.util.concurrent.CountDownLatch(1);
+        try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var holder = pool.submit(() -> new org.springframework.transaction.support.TransactionTemplate(transactionManager)
+                    .execute(status -> {
+                        revisionStore.lock("INSURANCE_TYPE", typeId);
+                        locked.countDown();
+                        try { if (!release.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("锁测试超时"); }
+                        catch (InterruptedException ex) { Thread.currentThread().interrupt(); throw new IllegalStateException(ex); }
+                        return true;
+                    }));
+            try {
+                assertThat(locked.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                var writer = pool.submit(() -> {
+                    started.countDown();
+                    var update = new com.guarantee.system.entity.InsuranceType();
+                    update.setId(typeId);
+                    update.setTypeName("履约保函（质量）");
+                    return insuranceMapper.updateById(update);
+                });
+                assertThat(started.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                assertThatThrownBy(() -> writer.get(200, java.util.concurrent.TimeUnit.MILLISECONDS))
+                        .isInstanceOf(java.util.concurrent.TimeoutException.class);
+                release.countDown();
+                assertThat(writer.get(10, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(1);
+                assertThat(holder.get(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            } finally { release.countDown(); }
+        }
+    }
+
+    @Test
+    @DisplayName("版本回归：同秒改后改回且恢复时间戳，旧提案仍失效")
+    void restoredFieldsAndTimestampStillInvalidateProposal() {
+        long typeId = insuranceTypeId("履约保函（质量）");
+        var created = createDisableInsuranceProposal(userId("admin"), typeId, "履约保函（质量）");
+        var original = jdbcTemplate.queryForMap("SELECT type_name, updated_at FROM insurance_type WHERE id=?", typeId);
+        try {
+            var update = new com.guarantee.system.entity.InsuranceType();
+            update.setId(typeId);
+            update.setTypeName(original.get("type_name") + "-changed");
+            insuranceMapper.updateById(update);
+            update.setTypeName(String.valueOf(original.get("type_name")));
+            insuranceMapper.updateById(update);
+            jdbcTemplate.update("UPDATE insurance_type SET updated_at=? WHERE id=?", original.get("updated_at"), typeId);
+            assertThatThrownBy(() -> proposalService.confirm(created.proposalId(), adminContext("trace-aba")))
+                    .hasMessageContaining(ProposalService.FINGERPRINT_MISMATCH_REASON);
+        } finally {
+            jdbcTemplate.update("UPDATE insurance_type SET type_name=?,updated_at=?,mutation_version=mutation_version+1 WHERE id=?",
+                    original.get("type_name"), original.get("updated_at"), typeId);
+        }
+    }
+
+    @Test
+    @DisplayName("并发回归：不同提案修改同一目标，只有一个成功")
+    void differentProposalsCannotOverwriteSameTarget() throws Exception {
+        long typeId = insuranceTypeId("履约保函（质量）");
+        var first = createDisableInsuranceProposal(userId("admin"), typeId, "履约保函（质量）");
+        var second = createDisableInsuranceProposal(userId("admin"), typeId, "履约保函（质量）");
+        assertThat(second.proposalId()).isNotEqualTo(first.proposalId());
+        var context = adminContext("trace-two-proposals");
+        var gate = new java.util.concurrent.CountDownLatch(1);
+        try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var futures = new java.util.ArrayList<java.util.concurrent.Future<Boolean>>();
+            for (var payload : List.of(first, second)) {
+                futures.add(pool.submit(() -> {
+                    gate.await();
+                    try { return "EXECUTED".equals(proposalService.confirm(payload.proposalId(), context).status()); }
+                    catch (com.guarantee.common.exception.BizException ex) {
+                        assertThat(ex.getMessage()).contains(ProposalService.FINGERPRINT_MISMATCH_REASON);
+                        return false;
+                    }
+                }));
+            }
+            gate.countDown();
+            int successes = 0;
+            for (var future : futures) if (future.get(30, java.util.concurrent.TimeUnit.SECONDS)) successes++;
+            assertThat(successes).isEqualTo(1);
+        }
+    }
+
+    @Test
+    @DisplayName("审计探针：提案后角色权限集合变化必须拦截旧授权（预期暴露缺口）")
+    void changedRolePermissionsMustInvalidateOldProposal() {
+        var operator = adminContext("trace-role-conflict");
+        com.guarantee.common.security.CurrentUser.set(new com.guarantee.common.security.CurrentUser.Principal(
+                operator.userId(), operator.username(), operator.realName(), operator.roles(), operator.permissions()));
+        String code = "AUDIT_PROBE_" + System.nanoTime();
+        var dto = new com.guarantee.system.dto.RoleDto.CreateRequest();
+        dto.setRoleCode(code);
+        dto.setRoleName("授权冲突检查夹具");
+        var role = roleService.create(dto);
+        var codes = jdbcTemplate.queryForList(
+                "SELECT perm_code FROM sys_permission WHERE is_deleted = 0 ORDER BY id LIMIT 2", String.class);
+        assertThat(codes).hasSize(2);
+        try {
+            roleService.assignPermissions(code, List.of(codes.get(0)));
+            var request = com.guarantee.ai.service.ProposalRequest.builder()
+                    .id(role.getId()).roleCode(code).targetName(role.getRoleName()).permCodes(List.of(codes.get(0))).build();
+            var created = proposalFixture.track(proposalService.create(new ProposalService.ProposalDraft(
+                    null, userId("admin"), "admin", "超级管理员", "proposeRoleChange",
+                    "ASSIGN_PERMISSIONS", "ROLE", role.getId(), role.getRoleName(), request,
+                    com.guarantee.ai.service.ProposalPreview.of("授权冲突检查", List.of(), List.of(), List.of(), false),
+                    java.util.Set.of("ai:system:write", Permissions.ROLE_ASSIGN_PERMISSION), "授权", null, "trace-role-conflict")));
+            roleService.assignPermissions(code, List.of(codes.get(1)));
+            assertThatThrownBy(() -> {
+                var result = proposalService.confirm(created.proposalId(), adminContext("trace-role-conflict"));
+                System.out.println("ROLE_PERMISSION_PROBE | proposal=" + created.proposalId()
+                        + " | status=" + result.status() + " | newer=" + codes.get(1)
+                        + " | actual=" + roleService.getById(role.getId()).getPermissionCodes());
+            })
+                    .as("他人已更新权限集合，应拦截旧提案而非覆盖新权限")
+                    .hasMessageContaining(ProposalService.FINGERPRINT_MISMATCH_REASON);
+        } finally {
+            jdbcTemplate.update("DELETE FROM sys_role_permission WHERE role_id = ?", role.getId());
+            jdbcTemplate.update("DELETE FROM sys_role WHERE id = ?", role.getId());
+        }
+    }
+
     /**
      * 测试前的险种状态快照——结束时按它**精确还原**。
      *
@@ -119,6 +264,7 @@ class ProposalFlowIT {
                     "UPDATE insurance_type SET status = ? WHERE id = ?", status, id));
         }
         proposalFixture.cleanUp();
+        com.guarantee.common.security.CurrentUser.clear();
     }
 
     // ==================================================================
@@ -181,6 +327,13 @@ class ProposalFlowIT {
         ProposalPayload executed = proposalService.confirm(created.proposalId(), adminContext("trace-it-2"));
 
         assertThat(executed.status()).isEqualTo("EXECUTED");
+        assertThat(executed.auditId()).isNotNull();
+        assertThat(executed.executedAt()).isNotNull();
+        assertThat(executed.resultMessage()).isNotBlank();
+        ProposalPayload restored = proposalService.listMine(adminId, "ALL", 50, created.conversationId()).stream()
+                .filter(item -> item.proposalId().equals(created.proposalId())).findFirst().orElseThrow();
+        assertThat(restored.status()).isEqualTo("EXECUTED");
+        assertThat(restored.auditId()).isEqualTo(executed.auditId());
         Integer after = jdbcTemplate.queryForObject(
                 "SELECT status FROM insurance_type WHERE id = ?", Integer.class, typeId);
         assertThat(after).as("确认后业务数据必须已变更").isEqualTo(0);
@@ -205,6 +358,58 @@ class ProposalFlowIT {
 
         // 恢复数据，避免影响其它用例
         jdbcTemplate.update("UPDATE insurance_type SET status = ? WHERE id = ?", before, typeId);
+    }
+
+    @Test
+    @DisplayName("诊断：并发确认只有一次成功且只有一条成功审计")
+    void concurrentConfirmExecutesOnlyOnce() throws Exception {
+        long adminId = userId("admin");
+        long typeId = insuranceTypeId("履约保函（质量）");
+        ProposalPayload created = createDisableInsuranceProposal(adminId, typeId, "履约保函（质量）");
+        var context = adminContext("trace-concurrent-probe");
+        var gate = new java.util.concurrent.CountDownLatch(1);
+        try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var tasks = new java.util.ArrayList<java.util.concurrent.Future<Boolean>>();
+            for (int i = 0; i < 2; i++) {
+                tasks.add(pool.submit(() -> {
+                    gate.await();
+                    try {
+                        return "EXECUTED".equals(proposalService.confirm(created.proposalId(), context).status());
+                    } catch (com.guarantee.common.exception.BizException ex) {
+                        assertThat(ex.getMessage()).containsAnyOf("已执行", "重复", "执行中");
+                        return false;
+                    }
+                }));
+            }
+            gate.countDown();
+            int successes = 0;
+            for (var task : tasks) {
+                if (task.get(30, java.util.concurrent.TimeUnit.SECONDS)) successes++;
+            }
+            assertThat(successes).isEqualTo(1);
+        }
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM ai_operation_audit WHERE proposal_id = ? AND result = 'SUCCESS' AND before_value IS NOT NULL",
+                Integer.class, created.proposalId())).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("诊断：真实目标字段变化后确认必须失效")
+    void changedBusinessTargetRejectsConfirmation() {
+        long typeId = insuranceTypeId("履约保函（质量）");
+        ProposalPayload created = createDisableInsuranceProposal(userId("admin"), typeId, "履约保函（质量）");
+        String name = jdbcTemplate.queryForObject("SELECT type_name FROM insurance_type WHERE id = ?", String.class, typeId);
+        try {
+            jdbcTemplate.update("UPDATE insurance_type SET type_name = ? WHERE id = ?", name + "-probe", typeId);
+            assertThatThrownBy(() -> proposalService.confirm(created.proposalId(), adminContext("trace-target-probe")))
+                    .hasMessageContaining(ProposalService.FINGERPRINT_MISMATCH_REASON);
+            assertThat(jdbcTemplate.queryForObject("SELECT status FROM ai_operation_proposal WHERE id = ?",
+                    String.class, created.proposalId())).isEqualTo("INVALIDATED");
+            assertThat(jdbcTemplate.queryForObject("SELECT status FROM insurance_type WHERE id = ?",
+                    Integer.class, typeId)).isEqualTo(1);
+        } finally {
+            jdbcTemplate.update("UPDATE insurance_type SET type_name = ? WHERE id = ?", name, typeId);
+        }
     }
 
     // ==================================================================

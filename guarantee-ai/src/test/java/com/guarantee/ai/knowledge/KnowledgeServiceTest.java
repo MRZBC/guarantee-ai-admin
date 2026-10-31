@@ -37,6 +37,18 @@ class KnowledgeServiceTest {
     // ------------------------------------------------------------------
 
     @Test
+    void genericBodyWordsDoNotInventRefundKnowledge() {
+        items.seed(item("KB-CONCEPT-0002", "CONCEPT", "电子保函：概念与制度背景",
+                "支持全流程线上申请，保证数据真实性。", "电子保函,CA证书,电子签名,担保凭证,制度背景"));
+        assertThat(service.search(List.of(), "保证金退还流程是怎样的", null, 3).items()).isEmpty();
+        assertThat(service.search(List.of(), "电子保函是什么", null, 3).items()).hasSize(1);
+        items.seed(item("KB-CONCEPT-0003", "CONCEPT", "保证金退还流程",
+                "实际收录的退款办理说明", "保证金,退还流程,退款,退还,制度"));
+        assertThat(service.search(List.of(), "保证金退还流程是怎样的", null, 3).items())
+                .extracting(KnowledgeHit::knowledgeNo).containsExactly("KB-CONCEPT-0003");
+    }
+
+    @Test
     @DisplayName("排序：标签命中 > 标题命中 > 正文命中（逐条对应需求，不是加权求和）")
     void rankingOrderIsKeywordThenTitleThenContent() {
         items.seed(item("KB-SYSTEM-0001", "SYSTEM", "业务对象的两种操作",

@@ -127,26 +127,8 @@ function hasToolCalls(messageId: number): boolean {
 
 /* ---------------- 提案状态维护 ---------------- */
 
-/** 终态：不再需要用户确认，卡片必须从消息流里移除。 */
-const TERMINAL_PROPOSAL_STATUSES = new Set(['EXECUTED', 'REJECTED', 'EXPIRED', 'INVALIDATED'])
-
-function isTerminalProposal(status?: string | null): boolean {
-  return TERMINAL_PROPOSAL_STATUSES.has((status || '').toUpperCase())
-}
-
-/**
- * 移除已终态的卡片。
- *
- * <p>为什么必须移除而不是"保留作记录"：确认卡挂在**消息流末尾**且会一直渲染，
- * 一段对话里连续做几次变更（例如先停用、再启用）就会堆成一列再也消不掉的卡片，
- * 把提问和回复挤出视野。执行结果由成功 Toast + 操作审计承载，
- * 不需要在对话里留一张不可操作的卡片。</p>
- */
-function removeProposal(proposalId: number): void {
-  proposals.value = proposals.value.filter((item) => item.proposalId !== proposalId)
-}
-
 function upsertProposal(payload: ProposalPayload): void {
+  if (payload.conversationId !== conversationId.value) return
   const index = proposals.value.findIndex((item) => item.proposalId === payload.proposalId)
   if (index >= 0) {
     proposals.value.splice(index, 1, { ...proposals.value[index], ...payload })
@@ -157,23 +139,20 @@ function upsertProposal(payload: ProposalPayload): void {
 }
 
 function applyProposalResult(payload: SseProposalResultPayload): void {
-  // 后端在别处（例如另一次确认、到期任务）把提案推到终态时，同样要把它从列表移除，
-  // 否则会留下一张永远点不动的卡片。
-  if (isTerminalProposal(payload.status)) {
-    removeProposal(payload.proposalId)
-    return
-  }
   const index = proposals.value.findIndex((item) => item.proposalId === payload.proposalId)
   if (index < 0) return
   proposals.value.splice(index, 1, {
     ...proposals.value[index],
-    status: payload.status
+    status: payload.status,
+    resultMessage: payload.message,
+    auditId: payload.auditId,
+    executedAt: payload.executedAt
   })
   proposals.value = [...proposals.value]
 }
 
 /**
- * 按**当前会话**刷新待确认卡片。
+ * 按**当前会话**恢复提案及执行结果。
  *
  * <p>确认卡是会话内资产（后端 `ai_operation_proposal.conversation_id`）。此前这里
  * 拉的是"该用户全部待确认提案"，于是别的会话里挂着的卡片会被塞进当前会话的消息流
@@ -189,9 +168,9 @@ async function refreshProposals(scopeConversationId: number | null = conversatio
     return
   }
   try {
-    // 待确认列表是**唯一权威来源**：只保留 PENDING。
-    // 之前这里把「本次会话内已终态的卡片」也合并保留，导致执行过的卡片永久堆积。
-    const list = await listProposals('PENDING', scopeConversationId)
+    // 恢复本会话结果；服务端列表有数量上限。
+    const list = await listProposals('ALL', scopeConversationId)
+    if (conversationId.value !== scopeConversationId) return
     proposals.value = [...(list ?? [])]
       // 双保险：后端已按会话过滤，这里再挡一次——
       // 只认"就是本会话"的卡片；conversationId 为空的提案不属于任何会话，故不渲染
@@ -206,12 +185,7 @@ async function handleConfirm(proposalId: number): Promise<void> {
   executingProposalId.value = proposalId
   try {
     const updated = await confirmProposalApi(proposalId)
-    // 执行后卡片已终态 → 从消息流移除，避免在对话里堆积；结果由下面的 Toast 反馈
-    if (isTerminalProposal(updated.status)) {
-      removeProposal(proposalId)
-    } else {
-      upsertProposal(updated)
-    }
+    upsertProposal(updated)
     if ((updated.status || '').toUpperCase() === 'EXECUTED') {
       ElMessage.success('变更已执行')
     } else {
@@ -230,11 +204,7 @@ async function handleReject(proposalId: number, reason: string): Promise<void> {
   executingProposalId.value = proposalId
   try {
     const updated = await rejectProposalApi(proposalId, reason || undefined)
-    if (isTerminalProposal(updated.status)) {
-      removeProposal(proposalId)
-    } else {
-      upsertProposal(updated)
-    }
+    upsertProposal(updated)
     ElMessage.info('已拒绝，系统未做任何变更')
   } catch {
     await refreshProposals()
@@ -927,7 +897,7 @@ onBeforeUnmount(() => {
 }
 
 .ai-avatar--ai {
-  background: #409eff;
+  background: #2765b0;
   color: #fff;
   flex-shrink: 0;
 }
@@ -941,7 +911,7 @@ onBeforeUnmount(() => {
 }
 
 .ai-bubble--user {
-  background: #409eff;
+  background: #2765b0;
   color: #fff;
   max-width: 84%;
   white-space: pre-wrap;
@@ -1067,7 +1037,7 @@ onBeforeUnmount(() => {
 }
 
 .markdown-body :deep(a) {
-  color: #409eff;
+  color: #2765b0;
   text-decoration: none;
 }
 
@@ -1166,8 +1136,8 @@ onBeforeUnmount(() => {
 
 .ai-history__item:hover,
 .ai-history__item.is-active {
-  border-color: #409eff;
-  background: #ecf5ff;
+  border-color: #2765b0;
+  background: #edf5ff;
 }
 
 .ai-history__title {

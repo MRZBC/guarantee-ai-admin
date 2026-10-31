@@ -37,7 +37,7 @@ import static org.mockito.Mockito.when;
  * 提示词版本机与发布门禁（TEST-CFG-04 / AC-CFG-02/03/09/10）。
  *
  * <p>不需要数据库、也不会真的去起 Node：{@link AiPromptVersionMapper} 用 Mockito 打桩，
- * 门禁用可替换的 {@link PromptVersionService.PromptGate} 打桩。重点守住五条：</p>
+ * 候选评测服务单独打桩。重点守住五条：</p>
  * <ol>
  *   <li><b>草稿不可运行</b>：没有 PUBLISHED 版本时 {@code currentContent()} 为空，
  *       助手回落到 classpath 内置提示词（冷启动必须可用）；</li>
@@ -52,9 +52,9 @@ class PromptVersionServiceTest {
     private AiPromptVersionMapper mapper;
     private AiConfigService configService;
     private WebAuditor webAuditor;
-    private PromptVersionService.PromptGate gate;
     private Environment environment;
     private PromptVersionService service;
+    private PromptEvaluationService evaluations;
 
     /** 合法正文：包含全部受保护标记。 */
     private static final String VALID_CONTENT =
@@ -65,19 +65,23 @@ class PromptVersionServiceTest {
         mapper = mock(AiPromptVersionMapper.class);
         configService = mock(AiConfigService.class);
         webAuditor = mock(WebAuditor.class);
-        gate = mock(PromptVersionService.PromptGate.class);
         environment = mock(Environment.class);
         // 报告目录给显式默认值：Mockito 的 mock 不会回落到方法签名的 default 参数
         when(environment.getProperty("guarantee.ai.eval.report-dir", "reports")).thenReturn("reports");
-        service = new PromptVersionService(mapper, configService, webAuditor, gate,
+        service = new PromptVersionService(mapper, configService, webAuditor,
                 environment, new ObjectMapper(), noopTransactionManager());
+        evaluations = mock(PromptEvaluationService.class);
+        org.springframework.beans.factory.ObjectProvider<PromptEvaluationService> provider = mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(provider.getObject()).thenReturn(evaluations);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "evaluations", provider);
+        when(mapper.lockVersion(anyInt())).thenAnswer(invocation -> version(invocation.getArgument(0), AiPromptVersion.STATUS_DRAFT, VALID_CONTENT));
     }
 
     /** 用指定报告目录重建服务（真机集状态测试用）。 */
     private PromptVersionService serviceWithReportDir(String reportDir) {
         Environment env = mock(Environment.class);
         when(env.getProperty("guarantee.ai.eval.report-dir", "reports")).thenReturn(reportDir);
-        return new PromptVersionService(mapper, configService, webAuditor, gate,
+        return new PromptVersionService(mapper, configService, webAuditor,
                 env, new ObjectMapper(), noopTransactionManager());
     }
 
@@ -110,6 +114,12 @@ class PromptVersionServiceTest {
         AiPromptVersion v = new AiPromptVersion();
         v.setVersionNo(no);
         v.setStatus(status);
+        if (VALID_CONTENT.equals(content)) {
+            var base = PromptComposition.base();
+            v.setBaseVersion(base.version()); v.setBaseHash(base.contentHash());
+            v.setBaseContent(base.content()); v.setBusinessContent(content);
+            content = PromptComposition.compose(base.content(), content);
+        }
         v.setContent(content);
         v.setContentHash(PromptVersionService.sha256(content));
         v.setNote("note-" + no);
@@ -120,6 +130,81 @@ class PromptVersionServiceTest {
     // ==================================================================
     // 草稿不可运行 + classpath 兜底（AC-CFG-02 前半 / 冷启动）
     // ==================================================================
+
+    @Test
+    void businessDraftUsesServerBaseAndAllowsEmptySupplement() {
+        var base = PromptComposition.base();
+        service.saveBusinessDraft("", "基础版", base.version(), base.contentHash(), null, null, false, "7");
+        var captured = ArgumentCaptor.forClass(AiPromptVersion.class);
+        verify(mapper).saveComposition(captured.capture());
+        var saved = captured.getValue();
+        assertThat(saved.getBaseContent()).isEqualTo(base.content());
+        assertThat(saved.getBusinessContent()).isEmpty();
+        assertThat(saved.getContent()).isEqualTo(PromptComposition.compose(base.content(), ""));
+        assertThat(saved.getContentHash()).isEqualTo(PromptVersionService.sha256(saved.getContent()));
+        assertThat(saved.getBaseVersion()).isEqualTo(base.version());
+    }
+
+    @Test
+    void staleBaseOrUnconfirmedLegacyMigrationCannotWrite() {
+        var base = PromptComposition.base();
+        assertThatThrownBy(() -> service.saveBusinessDraft("补充", null, base.version(), "stale", null, null, false, "7"))
+                .hasMessageContaining("基础规则已变化");
+        var legacy = version(4, "DRAFT", "旧完整正文，保留定制内容");
+        when(mapper.selectLatestDraft()).thenReturn(legacy);
+        assertThatThrownBy(() -> service.saveBusinessDraft("补充", null, base.version(), base.contentHash(), 4, legacy.getContentHash(), false, "7"))
+                .hasMessageContaining("确认迁移");
+        assertThatThrownBy(() -> service.saveBusinessDraft("补充", null, base.version(), base.contentHash(), 4, "stale", true, "7"))
+                .hasMessageContaining("确认迁移");
+        verify(mapper, never()).insert(any());
+        verify(mapper, never()).saveComposition(any());
+    }
+
+    @Test
+    void confirmedMigrationCreatesNewVersionAndPreservesLegacyBody() {
+        var base = PromptComposition.base();
+        var legacy = version(4, "DRAFT", "旧完整正文，保留定制内容");
+        when(mapper.selectLatestDraft()).thenReturn(legacy);
+        when(mapper.maxVersionNo()).thenReturn(4);
+        service.saveBusinessDraft("人工提取的业务补充", "已核对", base.version(), base.contentHash(),
+                4, legacy.getContentHash(), true, "7");
+        var captured = ArgumentCaptor.forClass(AiPromptVersion.class);
+        verify(mapper).insert(captured.capture());
+        assertThat(captured.getValue().getVersionNo()).isEqualTo(5);
+        assertThat(captured.getValue().getMigrationSourceVersion()).isEqualTo(4);
+        assertThat(captured.getValue().getMigrationSourceHash()).isEqualTo(legacy.getContentHash());
+        assertThat(legacy.getContent()).isEqualTo("旧完整正文，保留定制内容");
+        verify(mapper, never()).updateDraft(anyInt(), anyString(), anyString(), any());
+    }
+
+    @Test
+    void modifiedCompositionIsRejectedBeforeEvaluationOrPublish() {
+        var draft = version(4, "DRAFT", VALID_CONTENT);
+        draft.setContent("伪造完整正文");
+        when(mapper.lockVersion(4)).thenReturn(draft);
+        assertThatThrownBy(() -> service.publish(4, draft.getContentHash(), "evaluation", "7"))
+                .hasMessageContaining("组合快照不一致");
+        verifyNoInteractions(evaluations);
+        verify(mapper, never()).publish(anyInt(), anyString());
+    }
+
+    @Test
+    void rollbackUsesStoredBaseInsteadOfCurrentApplicationBase() {
+        var archived = version(4, "ARCHIVED", "历史正文");
+        archived.setBaseVersion("platform-previous");
+        archived.setBaseContent("历史基础规则快照");
+        archived.setBaseHash(PromptVersionService.sha256(archived.getBaseContent()));
+        archived.setBusinessContent("历史补充");
+        archived.setContent(PromptComposition.compose(archived.getBaseContent(), archived.getBusinessContent()));
+        archived.setContentHash(PromptVersionService.sha256(archived.getContent()));
+        when(mapper.selectByVersionNo(4)).thenReturn(archived);
+        when(mapper.lockVersion(4)).thenReturn(archived);
+        when(mapper.publish(4, "7")).thenReturn(1);
+        service.rollback(4, "7");
+        assertThat(archived.getContent()).startsWith("历史基础规则快照");
+        verify(mapper, never()).saveComposition(any());
+        verifyNoInteractions(evaluations);
+    }
 
     @Test
     @DisplayName("没有 PUBLISHED 版本时：currentContent 为空，助手回落到 classpath 内置提示词（冷启动可用）")
@@ -165,7 +250,6 @@ class PromptVersionServiceTest {
         AiPromptVersion draft = version(4, AiPromptVersion.STATUS_DRAFT, VALID_CONTENT);
         when(mapper.selectByVersionNo(4)).thenReturn(draft, version(4, AiPromptVersion.STATUS_PUBLISHED, VALID_CONTENT));
         when(mapper.publish(eq(4), anyString())).thenReturn(1);
-        when(gate.evaluate()).thenReturn(PromptVersionService.GateResult.passed("全绿"));
 
         AiPromptVersion published = service.publish(4, "7");
 
@@ -178,7 +262,7 @@ class PromptVersionServiceTest {
                 eq(OperationAuditService.TARGET_TYPE_AI_CONFIG),
                 eq(4L),
                 eq("prompt.v4"),
-                any(), any(), eq(Set.of("status", "contentHash")));
+                any(), any(), eq(Set.of("status", "contentHash", "baseVersion", "baseHash", "versionNo", "source", "promptAction")));
     }
 
     @Test
@@ -224,11 +308,9 @@ class PromptVersionServiceTest {
 
         assertThatThrownBy(() -> service.publish(7, "7"))
                 .isInstanceOf(BizException.class)
-                .hasMessageContaining("缺少受保护段落")
-                .hasMessageContaining(PromptVersionService.PROTECTED_MARKERS.get(0));
+                .hasMessageContaining("人工核对迁移");
 
         verify(mapper, never()).publish(anyInt(), anyString());
-        verifyNoInteractions(gate);
     }
 
     @Test
@@ -247,12 +329,11 @@ class PromptVersionServiceTest {
     @DisplayName("门禁未跑（脚本不存在/参数未实现/执行失败）→ 拒绝发布，且不发布不放行")
     void gateNotRunRejectsPublish() {
         when(mapper.selectByVersionNo(8)).thenReturn(version(8, AiPromptVersion.STATUS_DRAFT, VALID_CONTENT));
-        when(gate.evaluate()).thenReturn(PromptVersionService.GateResult.notRun("node 命令无法执行"));
+        org.mockito.Mockito.doThrow(BizException.badRequest("候选评测未通过或未完成")).when(evaluations).requirePassed(any(), any());
 
         assertThatThrownBy(() -> service.publish(8, "7"))
                 .isInstanceOf(BizException.class)
-                .hasMessageContaining("门禁未跑")
-                .hasMessageContaining("node 命令无法执行");
+                .hasMessageContaining("候选评测未通过或未完成");
 
         verify(mapper, never()).publish(anyInt(), anyString());
         verify(mapper, never()).archivePublishedExcept(anyInt());
@@ -262,11 +343,11 @@ class PromptVersionServiceTest {
     @DisplayName("门禁跑了但未全绿 → 拒绝发布")
     void gateFailureRejectsPublish() {
         when(mapper.selectByVersionNo(9)).thenReturn(version(9, AiPromptVersion.STATUS_DRAFT, VALID_CONTENT));
-        when(gate.evaluate()).thenReturn(PromptVersionService.GateResult.failed("3 条断言失败"));
+        org.mockito.Mockito.doThrow(BizException.badRequest("候选评测未通过：3 条断言失败")).when(evaluations).requirePassed(any(), any());
 
         assertThatThrownBy(() -> service.publish(9, "7"))
                 .isInstanceOf(BizException.class)
-                .hasMessageContaining("门禁未通过")
+                .hasMessageContaining("候选评测未通过")
                 .hasMessageContaining("3 条断言失败");
 
         verify(mapper, never()).publish(anyInt(), anyString());
@@ -284,6 +365,7 @@ class PromptVersionServiceTest {
                 .thenReturn(archived, version(2, AiPromptVersion.STATUS_PUBLISHED, VALID_CONTENT));
         when(mapper.publish(eq(2), anyString())).thenReturn(1);
 
+        when(mapper.lockVersion(2)).thenReturn(archived);
         AiPromptVersion rolledBack = service.rollback(2, "7");
 
         assertThat(rolledBack.getStatus()).isEqualTo(AiPromptVersion.STATUS_PUBLISHED);
@@ -294,8 +376,7 @@ class PromptVersionServiceTest {
                 eq(OperationAuditService.TARGET_TYPE_AI_CONFIG),
                 eq(2L),
                 eq("prompt.v2"),
-                any(), any(), any());
-        verifyNoInteractions(gate);
+                any(), org.mockito.ArgumentMatchers.argThat(snapshot -> "ROLLBACK".equals(snapshot.get("promptAction"))), any());
     }
 
     @Test
@@ -323,11 +404,10 @@ class PromptVersionServiceTest {
     @Test
     @DisplayName("门禁结果如实透传：ran=false / passed=false 不会被包装成通过")
     void gateResultIsExposedFaithfully() {
-        when(gate.evaluate()).thenReturn(PromptVersionService.GateResult.notRun("未实现 --suite"));
-        PromptVersionService.GateResult result = service.evaluateGate();
+        PromptVersionService.GateResult result = service.lastGateResult();
         assertThat(result.ran()).isFalse();
         assertThat(result.passed()).isFalse();
-        assertThat(result.summary()).contains("未实现 --suite");
+        assertThat(result.summary()).contains("候选版本评测");
     }
 
     @Test
@@ -359,9 +439,10 @@ class PromptVersionServiceTest {
     @DisplayName("未被拒绝的发布路径：审计快照里带状态与内容哈希，且不含正文全文")
     void publishAuditCarriesHashNotWholeContent() {
         AiPromptVersion draft = version(13, AiPromptVersion.STATUS_DRAFT, VALID_CONTENT);
+        AiPromptVersion previous = version(12, AiPromptVersion.STATUS_PUBLISHED, "前一发布版原文");
+        when(mapper.selectPublished()).thenReturn(previous);
         when(mapper.selectByVersionNo(13)).thenReturn(draft, version(13, AiPromptVersion.STATUS_PUBLISHED, VALID_CONTENT));
         when(mapper.publish(eq(13), anyString())).thenReturn(1);
-        when(gate.evaluate()).thenReturn(PromptVersionService.GateResult.passed("全绿"));
 
         service.publish(13, "7");
 
@@ -373,9 +454,12 @@ class PromptVersionServiceTest {
                 before.capture(), after.capture(), any());
         assertThat(after.getValue()).containsEntry("status", "PUBLISHED");
         assertThat(String.valueOf(after.getValue().get("contentHash")))
-                .isEqualTo(PromptVersionService.sha256(VALID_CONTENT));
+                .isEqualTo(draft.getContentHash());
         assertThat(after.getValue().toString()).as("审计不落正文全文").doesNotContain("正文……");
-        assertThat(before.getValue()).containsEntry("status", "DRAFT");
+        assertThat(before.getValue()).containsEntry("status", "PUBLISHED")
+                .containsEntry("versionNo", 12).containsEntry("contentHash", previous.getContentHash());
+        assertThat(after.getValue()).containsEntry("versionNo", 13).containsEntry("promptAction", "PUBLISH");
+        assertThat(before.getValue().toString()).doesNotContain("前一发布版原文");
     }
 
     // ==================================================================
@@ -410,6 +494,45 @@ class PromptVersionServiceTest {
         PromptVersionService.LiveGate notRun = serviceWithReportDir(dir.toString()).liveGate();
         assertThat(notRun.status()).isEqualTo(PromptVersionService.LIVE_NOT_RUN);
         assertThat(notRun.reason()).contains("未跑");
+    }
+
+    @Test
+    void firstPublishAuditReferencesBuiltinAndRollbackIsExplicit() {
+        when(mapper.publish(eq(4), anyString())).thenReturn(1);
+        service.publish(4, version(4, "DRAFT", VALID_CONTENT).getContentHash(), "evaluation-id", "7");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> before = ArgumentCaptor.forClass(Map.class);
+        verify(webAuditor).success(anyString(), anyString(), any(), anyString(), before.capture(), any(), any());
+        assertThat(before.getValue()).containsEntry("source", "BUILTIN").containsEntry("versionNo", 0)
+                .containsEntry("contentHash", PromptVersionService.sha256(PromptEvaluationService.builtin()));
+    }
+
+    @Test
+    void effectiveTemplateIncludesBuiltinAndDoesNotHideDatabaseFailure() {
+        assertThat(service.effectivePrompt().content()).contains("# 铁律：数据必须来自 Tool");
+        assertThat(service.effectivePrompt().source()).isEqualTo("BUILTIN");
+        when(mapper.selectPublished()).thenThrow(new IllegalStateException("db unavailable"));
+        assertThatThrownBy(service::effectivePrompt).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void publishRejectsConcurrentContentChangeWithoutRunningModelOrArchiving() {
+        assertThatThrownBy(() -> service.publish(4, "old-hash", "evaluation-id", "7"))
+                .hasMessageContaining("草稿内容已变化");
+        verify(mapper, never()).archivePublishedExcept(anyInt());
+        verifyNoInteractions(evaluations);
+    }
+
+    @Test
+    void publishOnlyChecksStoredEvidenceAndDoesNotRunGate() {
+        when(mapper.publish(eq(4), anyString())).thenReturn(1);
+        when(mapper.selectByVersionNo(4)).thenReturn(version(4, AiPromptVersion.STATUS_PUBLISHED, VALID_CONTENT));
+        when(evaluations.requirePassed(any(), eq("evaluation-id"))).thenReturn("evaluation-id");
+        service.publish(4, version(4, "DRAFT", VALID_CONTENT).getContentHash(), "evaluation-id", "7");
+        verify(webAuditor).success(anyString(), anyString(), any(), anyString(), any(),
+                org.mockito.ArgumentMatchers.argThat(snapshot -> "evaluation-id".equals(snapshot.get("evaluationId"))),
+                eq(Set.of("status", "contentHash", "evaluationId", "baseVersion", "baseHash", "versionNo", "source", "promptAction")));
+        verify(evaluations).requirePassed(any(), eq("evaluation-id"));
     }
 
     /** 写一份最小可解析的真机集报告（字段与 ai-golden-questions.mjs 输出同构）。 */

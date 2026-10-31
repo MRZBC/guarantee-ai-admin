@@ -368,10 +368,12 @@ public class UserService {
      */
     @Transactional
     public UserVO assignRoles(Long id, List<String> roleCodes, DataScope scope, Long operatorUserId) {
+        sysUserMapper.lockForMutation(id);
         SysUser existing = requireVisible(id, scope);
         // 变更前的角色必须在写入之前取，否则审计的 before 会等于 after（Diff 恒为空）
         List<String> currentRolesSnapshot = sysUserMapper.listRoleCodesByUserId(id);
         List<String> normalized = validateAssignRoles(existing, roleCodes, operatorUserId);
+        sysUserMapper.advanceRevision(id);
         List<Long> roleIds = resolveRoleIds(normalized);
         // 关联表改造（设计 §4）：不再"先清后插"——逻辑删除后旧行仍在表中，
         // (user_id, role_id) 唯一键会拒绝 INSERT。改为一次 UPSERT 表达最终状态，两条语句顺序无关。

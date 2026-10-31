@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { getMe, login as loginApi } from '@/api/auth'
+import { getMe, login as loginApi, logout as logoutApi } from '@/api/auth'
 import type { LoginParams, UserInfo } from '@/types/auth'
 import { getToken, removeToken, setToken } from '@/utils/storage'
 
@@ -79,19 +79,18 @@ export const useUserStore = defineStore('user', () => {
     return user.value
   }
 
-  /**
-   * 退出登录：清本地登录态。
-   *
-   * <p>沿用既有口径——只清本地，**不发** `POST /auth/logout`（本仓库前端既有的登出路径
-   * 就是这样，`request.ts` 的 401 分支同样只做本地清理）。因此登出在任何状态下都必然可用，
-   * 包括被强制改密闸门拦住时：改密页的「退出登录」入口正是靠这一点才能成为逃生通道。</p>
-   */
-  function logout(): void {
+  function clearAuth(): void {
     token.value = ''
     user.value = null
     mustChangePassword.value = false
     removeToken()
     persistUser(null)
+  }
+
+  /** 服务端撤销当前令牌成功后清除本地登录态。 */
+  async function logout(): Promise<void> {
+    await logoutApi()
+    clearAuth()
   }
 
   return {
@@ -105,6 +104,7 @@ export const useUserStore = defineStore('user', () => {
     setAuth,
     login,
     fetchMe,
+    clearAuth,
     logout
   }
 })

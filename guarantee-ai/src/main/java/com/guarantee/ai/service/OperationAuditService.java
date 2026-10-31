@@ -62,7 +62,7 @@ public class OperationAuditService {
      * 它的 before/after 里含全站助手行为面的参数，与"谁能改配置"同档，
      * 因此非 ADMIN 显式查询时**明确 403**，而不是返回一个空列表（后者会让人以为"没有变更"）。</p>
      */
-    private static final List<String> ADMIN_ONLY_TARGET_TYPES = List.of("ROLE", "PERMISSION", "AI_CONFIG");
+    private static final List<String> ADMIN_ONLY_TARGET_TYPES = List.of("ROLE", "PERMISSION", "AI_CONFIG", "ANALYSIS_REPORT");
 
     /**
      * 非 ADMIN 可见的目标类型。

@@ -20,6 +20,13 @@ public class AiPromptVersion {
     /** ARCHIVED（已归档，只读历史）。 */
     public static final String STATUS_ARCHIVED = "ARCHIVED";
 
+    private String baseVersion;
+    private String baseHash;
+    private String baseContent;
+    private String businessContent;
+    private Integer migrationSourceVersion;
+    private String migrationSourceHash;
+
     private Long id;
     /** 版本号（递增，唯一）。 */
     private Integer versionNo;

@@ -138,6 +138,9 @@ export interface ProposalPayload {
   userText: string | null
   expiresAt: string
   status: ProposalStatus
+  resultMessage?: string | null
+  auditId?: number | null
+  executedAt?: string | null
 }
 
 /** SSE `proposal` 事件载荷（与 ProposalPayload 同构，无 status） */
@@ -391,7 +394,15 @@ export interface PromptVersionView {
 }
 
 /** 版本正文 + 缺失的保护标记（非空即不可发布，页面给强警告）。 */
+export interface PromptBase { version: string; content: string; contentHash: string }
+
 export interface PromptDetailView {
+  baseVersion: string | null
+  baseHash: string | null
+  baseContent: string | null
+  businessContent: string | null
+  migrationSourceVersion: number | null
+  migrationSourceHash: string | null
   version: PromptVersionView
   content: string
   missingProtectedMarkers: string[]
@@ -439,4 +450,26 @@ export interface PromptPublishResult {
   /** 是否经过门禁（回滚为 false：应急路径不重跑门禁） */
   gated: boolean
   message: string
+}
+
+export interface EffectivePrompt {
+  source: 'BUILTIN' | 'PUBLISHED'
+  versionNo: number | null
+  content: string
+  contentHash: string
+}
+export interface PromptEvaluation {
+  publishable: boolean
+  eligibilityReason: string
+  id: string
+  versionNo: number
+  contentHash: string
+  contextHash: string
+  contextSnapshot: string
+  suiteVersion: string
+  status: 'RUNNING' | 'PASSED' | 'FAILED' | 'ERROR'
+  summary: string
+  results: string | null
+  createdAt: string
+  finishedAt: string | null
 }

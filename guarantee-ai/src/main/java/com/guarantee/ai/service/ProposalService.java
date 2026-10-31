@@ -92,6 +92,9 @@ public class ProposalService {
     private final AiChatMetrics metrics;
 
     @Autowired
+    private TargetRevisionStore targetRevisions;
+
+    @Autowired
     public ProposalService(AiOperationProposalMapper proposalMapper,
                            ProposalSecretStore secretStore,
                            OperationAuditService auditService,
@@ -161,7 +164,7 @@ public class ProposalService {
      * <p>同一会话内已存在同目标同动作的 PENDING 提案时提示用户，
      * 避免重复点击导致重复执行（SYS-W-12）。</p>
      */
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public ProposalPayload create(ProposalDraft draft) {
         List<AiOperationProposal> existing = proposalMapper.selectPendingSameTarget(
                 draft.conversationId(), draft.targetType(), draft.targetId(), draft.action());
@@ -209,6 +212,10 @@ public class ProposalService {
             fingerprint = executorFingerprint(entity, draft.request());
         }
         if (fingerprint != null) {
+            if (targetRevisions != null && entity.getTargetId() != null) {
+                long revision = targetRevisions.lock(entity.getTargetType(), entity.getTargetId());
+                fingerprint = ProposalExecutor.fingerprintHash(revision, executorFingerprint(entity, draft.request()));
+            }
             entity.setTargetFingerprint(fingerprint);
         }
         proposalMapper.insert(entity);
@@ -259,7 +266,9 @@ public class ProposalService {
     @Transactional(readOnly = true)
     public List<ProposalPayload> listMine(Long userId, String status, int limit, Long conversationId) {
         int effective = limit <= 0 ? LIST_LIMIT : Math.min(limit, LIST_LIMIT);
-        return proposalMapper.selectByUserId(userId, status, effective, conversationId).stream()
+        // HTTP 空字符串会被 @RequestParam 的 PENDING 默认值替换；显式 ALL 用于历史恢复。
+        String statusFilter = "ALL".equalsIgnoreCase(status) ? null : status;
+        return proposalMapper.selectByUserId(userId, statusFilter, effective, conversationId).stream()
                 .map(entity -> toPayload(entity, readPreview(entity), null))
                 .toList();
     }
@@ -313,7 +322,7 @@ public class ProposalService {
      * 既保证"失败不留半成品"，也让 {@code FAILED} 审计不会因为业务回滚而丢失。
      * 业务成功时正常提交（SYS-C-06：业务执行 + 操作审计 + 提案状态回写同事务）。</p>
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW, noRollbackFor = BizException.class)
+    @Transactional(propagation = Propagation.REQUIRES_NEW, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED, noRollbackFor = BizException.class)
     public ProposalPayload confirm(Long proposalId, ProposalExecutionContext context) {
         /*
           指标来源：本方法内的每一次状态流转（确认成功 / 执行失败 / 失效 / 过期）都归给
@@ -657,13 +666,20 @@ public class ProposalService {
                                          ProposalExecutionContext context) {
         String recorded = proposal.getTargetFingerprint();
         if (recorded == null || recorded.isBlank()) {
+            if (targetRevisions != null && proposal.getTargetId() != null) {
+                invalidate(proposal, "缺少目标版本信息，请重新发起");
+                throw new BizException("缺少目标版本信息，请重新发起");
+            }
             return;
         }
         ProposalExecutor executor = findExecutorOrNull(proposal.getTargetType());
         if (executor == null) {
             return;
         }
+        Long revision = targetRevisions == null || proposal.getTargetId() == null ? null
+                : targetRevisions.lock(proposal.getTargetType(), proposal.getTargetId());
         String current = executor.fingerprint(proposal, request);
+        if (revision != null) current = ProposalExecutor.fingerprintHash(revision, current);
         if (recorded.equals(current)) {
             return;
         }
@@ -784,7 +800,7 @@ public class ProposalService {
                 preview != null && preview.dangerous(),
                 userText != null ? userText : (request == null ? null : request.userText()),
                 entity.getExpiresAt(),
-                entity.getStatus());
+                entity.getStatus(), entity.getResultMessage(), entity.getAuditId(), entity.getExecutedAt());
     }
 
     /**

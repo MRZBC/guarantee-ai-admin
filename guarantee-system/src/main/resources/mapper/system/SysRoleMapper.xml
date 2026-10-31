@@ -70,6 +70,12 @@
         SELECT <include refid="voCols"/> FROM sys_role r WHERE r.id = #{id}
     </select>
 
+    <select id="lockForMutation" resultType="java.lang.Long">
+        SELECT id FROM sys_role WHERE role_code=#{roleCode} FOR UPDATE
+    </select>
+    <update id="advanceRevision">
+        UPDATE sys_role SET mutation_version=mutation_version+1 WHERE role_code=#{roleCode}
+    </update>
     <select id="selectEntityById" resultType="com.guarantee.system.entity.SysRole">
         SELECT id, role_code, role_name, description, status, created_at, updated_at, is_deleted AS isDeleted, deleted_at AS deletedAt, deleted_by AS deletedBy
         FROM sys_role WHERE id = #{id} AND is_deleted = 0
@@ -153,6 +159,7 @@
     <update id="updateById" parameterType="com.guarantee.system.entity.SysRole">
         UPDATE sys_role
         <set>
+            mutation_version = mutation_version + 1,
             <if test="roleName != null">role_name = #{roleName},</if>
             <if test="description != null">description = #{description},</if>
             <if test="status != null">status = #{status},</if>
@@ -162,7 +169,7 @@
 
     <!-- 条件启停：只有当前状态与预期一致时才改，防并发覆盖（与其它实体同款） -->
     <update id="updateStatus">
-        UPDATE sys_role SET status = #{status} WHERE id = #{id} AND status = #{expectedStatus}
+        UPDATE sys_role SET mutation_version = mutation_version + 1, status = #{status} WHERE id = #{id} AND status = #{expectedStatus}
     </update>
 
     <!-- 角色授权同构改造：先清后插 -> UPSERT（设计 §4.2） -->
@@ -271,7 +278,7 @@
     -->
     <update id="softDelete">
         UPDATE sys_role
-        SET is_deleted = 1,
+        SET mutation_version = mutation_version + 1, is_deleted = 1,
             deleted_at = NOW(6),
             deleted_by = COALESCE(#{operatorId}, 'DB')
         WHERE id = #{id} AND is_deleted = 0
@@ -280,7 +287,7 @@
     <!-- 恢复（设计 §9.4.2 / LD-04）：三列一起归零，只允许从"已删除"恢复 -->
     <update id="restore">
         UPDATE sys_role
-        SET is_deleted = 0,
+        SET mutation_version = mutation_version + 1, is_deleted = 0,
             deleted_at = NULL,
             deleted_by = 'DB'
         WHERE id = #{id} AND is_deleted = 1

@@ -21,37 +21,17 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * 提示词版本生命周期的真实库集成测试（AC-CFG-02 / AC-CFG-03）。
- *
- * <p><b>为什么要有真库 IT</b>：单测证明了版本机的分支逻辑，证明不了"发布之后**同一个进程
- * 的下一次请求**真的读到了新正文"——而那正是 AC-CFG-02 要判定的东西。这里走完整链路：
- * 保存草稿 → 发布 → {@link BusinessAssistantPrompt#loadTemplate()} 读到 DB 正文 →
- * 再发一版 → 回滚 → 读回旧正文 → 审计落库。</p>
- *
- * <p><b>门禁</b>：用一个"一定成功且跨平台"的命令（{@code java -version}）把门禁打桩掉——
- * 本 IT 验证的是**门禁通过之后**的发布/回滚/生效链路；
- * "门禁未跑 / 未全绿必须拒绝"由 {@code PromptVersionServiceTest} 用假门禁覆盖。</p>
- *
- * <p><b>桩命令为什么不能写 {@code cmd /c exit 0}</b>：那是 Windows 专有命令。CI（ubuntu runner）
- * 上 {@code CommandPromptGate} 会以 {@code Cannot run program "cmd": ... (No such file or directory)}
- * 判为"门禁未跑"，进而拒绝发布，本 IT 就以 {@code 发布门禁未跑} 报错
- * （2026-10-08 CI 实测）。同时门禁实现是 {@code new ProcessBuilder(command.trim().split("\\s+"))}，
- * **按空白切分、不支持引号**，所以桩命令必须是"无引号 + JDK 自带工具"的形态：
- * {@code java -version} 满足（Maven 能跑就一定有 java），退出码 0，任何平台都不会"命令不存在"。</p>
- *
- * <p><b>不污染共享开发库</b>：用例创建的所有版本行与 {@code prompt.active-version} 配置行
- * 在 {@code @AfterEach} 里按版本号精确删除（审计行按既有约定保留：审计只增不删）。</p>
- */
+/** 版本切换与审计的数据库集成测试；候选评测另由专门测试覆盖。 */
 @SpringBootTest(
         classes = GuaranteeAiAdminApplication.class,
         properties = {
-                "guarantee.data-init.enabled=false",
-                // 跨平台的可打桩门禁命令：任何平台都"命令存在 + 退出码 0"
-                // （详见类注释里为什么不能用 cmd /c）
-                "guarantee.ai.prompt.gate-command=java -version"
+                "guarantee.data-init.enabled=false"
         })
+@org.springframework.transaction.annotation.Transactional
 class PromptVersionLifecycleIT {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.guarantee.ai.config.PromptEvaluationService evaluations;
+
 
     @Autowired
     private PromptVersionService promptVersionService;
@@ -62,10 +42,35 @@ class PromptVersionLifecycleIT {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private com.guarantee.ai.config.mapper.PromptEvaluationMapper evaluationMapper;
+    @Autowired
+    private com.guarantee.ai.config.mapper.AiPromptVersionMapper versionMapper;
+
+    @Test
+    void evaluationSnapshotAndTerminalStateArePersisted() {
+        var row = new com.guarantee.ai.config.PromptEvaluation();
+        row.setId(java.util.UUID.randomUUID().toString()); row.setVersionNo(1000000);
+        row.setContent("待评测正文"); row.setBaselineContent("当前生效正文");
+        row.setContextSnapshot("{}"); row.setContentHash("hash"); row.setContextHash("context"); row.setSuiteVersion("test-suite");
+        row.setStatus("RUNNING"); row.setSummary("运行中"); row.setCreatedBy("1");
+        evaluationMapper.insert(row);
+        var loaded = evaluationMapper.select(row.getId());
+        assertThat(loaded.getContent()).isEqualTo("待评测正文");
+        assertThat(loaded.getBaselineContent()).isEqualTo("当前生效正文");
+        assertThat(loaded.getCreatedAt()).isNotNull();
+        row.setStatus("PASSED"); row.setSummary("1/1"); row.setResults("[]");
+        assertThat(evaluationMapper.finish(row)).isEqualTo(1);
+        assertThat(evaluationMapper.finish(row)).as("终态不可覆盖").isZero();
+        assertThat(evaluationMapper.select(row.getId()).getFinishedAt()).isNotNull();
+    }
+
     private final List<Integer> createdVersions = new ArrayList<>();
 
     @BeforeEach
     void setUp() {
+        // 事务内隔离既有版本，方法结束全部回滚，不发布或覆盖用户真实版本。
+        jdbcTemplate.update("UPDATE ai_prompt_version SET status='ARCHIVED' WHERE is_deleted=0");
         // 直接调用 Service（不走 HTTP）时没有 JWT 线程上下文，必须显式建立身份：
         // 审计的可信度来自"每条记录都能定位到人"，OperationAuditPortAdapter 对空身份是拒绝的。
         CurrentUser.set(new CurrentUser.Principal(1L, "admin", "超级管理员",
@@ -98,8 +103,7 @@ class PromptVersionLifecycleIT {
                 .contains("# 铁律：数据必须来自 Tool");
 
         // 1) 草稿 A → 发布
-        AiPromptVersion draftA = promptVersionService.saveDraft(
-                bodyWithMarkers("IT-BODY-A"), "第一版", "1");
+        AiPromptVersion draftA = saveBusiness("IT-BODY-A", "第一版");
         createdVersions.add(draftA.getVersionNo());
         assertThat(draftA.getStatus()).isEqualTo(AiPromptVersion.STATUS_DRAFT);
         assertThat(versionContent(draftA.getVersionNo())).contains("IT-BODY-A");
@@ -115,8 +119,7 @@ class PromptVersionLifecycleIT {
                 .isEqualTo(String.valueOf(draftA.getVersionNo()));
 
         // 2) 草稿 B → 发布：同一时刻只有一个 PUBLISHED
-        AiPromptVersion draftB = promptVersionService.saveDraft(
-                bodyWithMarkers("IT-BODY-B"), "第二版", "1");
+        AiPromptVersion draftB = saveBusiness("IT-BODY-B", "第二版");
         createdVersions.add(draftB.getVersionNo());
         promptVersionService.publish(draftB.getVersionNo(), "1");
 
@@ -157,7 +160,7 @@ class PromptVersionLifecycleIT {
         org.assertj.core.api.Assertions.assertThatThrownBy(
                         () -> promptVersionService.publish(draft.getVersionNo(), "1"))
                 .isInstanceOf(com.guarantee.common.exception.BizException.class)
-                .hasMessageContaining("缺少受保护段落");
+                .hasMessageContaining("人工核对迁移");
 
         assertThat(statusOf(draft.getVersionNo())).as("被拒后状态不得变化")
                 .isEqualTo(AiPromptVersion.STATUS_DRAFT);
@@ -167,6 +170,32 @@ class PromptVersionLifecycleIT {
     // ==================================================================
     // 辅助
     // ==================================================================
+
+    @Test
+    void legacyMigrationPersistsSourceAndDoesNotResurrectOldDraft() {
+        var legacy = promptVersionService.saveDraft(bodyWithMarkers("LEGACY-CUSTOM"), "旧完整草稿", "1");
+        var base = com.guarantee.ai.config.PromptComposition.base();
+        var migrated = promptVersionService.saveBusinessDraft("保留业务补充", "人工迁移", base.version(),
+                base.contentHash(), legacy.getVersionNo(), legacy.getContentHash(), true, "1");
+        assertThat(migrated.getVersionNo()).isGreaterThan(legacy.getVersionNo());
+        assertThat(migrated.getMigrationSourceHash()).isEqualTo(legacy.getContentHash());
+        assertThat(migrated.getBaseContent()).isEqualTo(base.content());
+        assertThat(migrated.getBusinessContent()).isEqualTo("保留业务补充");
+        assertThat(versionContent(legacy.getVersionNo())).isEqualTo(legacy.getContent());
+        promptVersionService.publish(migrated.getVersionNo(), "1");
+        assertThat(promptVersionService.draft()).isNull();
+        migrated.setBusinessContent("试图修改已发布快照");
+        assertThat(versionMapper.saveComposition(migrated)).isZero();
+        assertThat(promptVersionService.requireVersion(migrated.getVersionNo()).getBusinessContent()).isEqualTo("保留业务补充");
+        assertThat(businessAssistantPrompt.loadTemplate()).isEqualTo(migrated.getContent());
+        assertThat(promptVersionService.requireVersion(migrated.getVersionNo()).getBaseHash()).isEqualTo(base.contentHash());
+    }
+
+    private AiPromptVersion saveBusiness(String body, String note) {
+        var base = com.guarantee.ai.config.PromptComposition.base();
+        return promptVersionService.saveBusinessDraft(body, note, base.version(), base.contentHash(),
+                null, null, false, "1");
+    }
 
     private String versionContent(int versionNo) {
         return jdbcTemplate.queryForObject(

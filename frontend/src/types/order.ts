@@ -34,6 +34,7 @@ export type TenderOrderItem = OrderItem
 
 /** 订单列表查询参数 */
 export interface OrderQuery extends PageQuery {
+  regionExact?: boolean
   orderNo?: string
   regionCode?: string
   orgId?: number | null

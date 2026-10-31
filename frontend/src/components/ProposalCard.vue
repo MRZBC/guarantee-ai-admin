@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import { confirmText } from '@/utils/confirmText'
+import { useUserStore } from '@/stores/user'
 import type { ProposalPayload, ProposalStatus } from '@/types/ai'
 
 /**
@@ -29,6 +30,7 @@ const emit = defineEmits<{
 
 /** 本地状态：执行结果由父组件通过 proposal.status 回流，这里只维护交互态。 */
 const executing = ref(false)
+const userStore = useUserStore()
 const rejected = ref(false)
 const rejectReason = ref('')
 const now = ref(Date.now())
@@ -97,7 +99,7 @@ const statusText = computed(() => {
     case 'EXPIRED':
       return '已过期'
     case 'INVALIDATED':
-      return '已失效（权限已变更）'
+      return '已失效，请重新发起'
     case 'EXECUTING':
       return '执行中…'
     default:
@@ -106,7 +108,8 @@ const statusText = computed(() => {
 })
 
 const canOperate = computed(
-  () => terminalStatus.value === null && !expired.value && !executing.value && !rejected.value
+  () => terminalStatus.value === null && props.proposal.status !== 'EXECUTING'
+    && !expired.value && !executing.value && !rejected.value
 )
 
 const buttonsDisabled = computed(
@@ -217,7 +220,7 @@ onBeforeUnmount(stopTimer)
     <div class="proposal-card__header">
       <div class="proposal-card__title">
         <el-tag :type="isDangerous ? 'danger' : 'primary'" size="small" effect="dark">
-          {{ isDangerous ? '危险操作' : '待确认变更' }}
+          {{ terminalStatus ? statusText : (isDangerous ? '危险操作' : '待确认变更') }}
         </el-tag>
         <span class="proposal-card__action">{{ proposal.actionName }}{{ proposal.targetTypeName }}</span>
         <span v-if="proposal.targetName" class="proposal-card__target">
@@ -234,7 +237,7 @@ onBeforeUnmount(stopTimer)
 
     <!-- 变更明细：字段 / 中文标签 / 原值 / 新值；新增动作只展示新值 -->
     <el-table
-      v-if="proposal.changes && proposal.changes.length"
+      v-if="!terminalStatus && proposal.changes && proposal.changes.length"
       :data="proposal.changes"
       size="small"
       border
@@ -254,13 +257,13 @@ onBeforeUnmount(stopTimer)
     </el-table>
 
     <!-- 影响面：逐条要点（impact 的每一项内部还可能用「；」串了多条，见 impactLines） -->
-    <div v-if="proposal.impact && proposal.impact.length" class="proposal-card__impact">
+    <div v-if="!terminalStatus && proposal.impact && proposal.impact.length" class="proposal-card__impact">
       <div v-for="(item, index) in impactLines(proposal.impact)" :key="index">• {{ item }}</div>
     </div>
 
     <!-- 风险提示 -->
     <el-alert
-      v-for="(warning, index) in proposal.warnings"
+      v-for="(warning, index) in (terminalStatus ? [] : proposal.warnings)"
       :key="index"
       :title="warning"
       type="warning"
@@ -270,7 +273,7 @@ onBeforeUnmount(stopTimer)
     />
 
     <!-- 用户原话与解析参数同时可见（SYS-C-15） -->
-    <div v-if="proposal.userText" class="proposal-card__origin">
+    <div v-if="!terminalStatus && proposal.userText" class="proposal-card__origin">
       <span class="proposal-card__origin-label">你的原话：</span>
       <span>{{ proposal.userText }}</span>
     </div>
@@ -278,6 +281,11 @@ onBeforeUnmount(stopTimer)
     <div v-if="terminalStatus" class="proposal-card__result">
       <el-tag :type="statusType" size="small">{{ statusText }}</el-tag>
       <span class="text-muted">提案号 {{ proposal.proposalNo }}</span>
+      <span>{{ proposal.resultMessage }}</span>
+      <span v-if="proposal.executedAt">{{ proposal.executedAt }}</span>
+      <span v-if="proposal.auditId">审计编号 {{ proposal.auditId }}</span>
+      <router-link v-if="proposal.auditId && userStore.permissions.includes('system:audit:view')"
+        to="/system/operation-audits">查看操作审计</router-link>
     </div>
 
     <div v-else class="proposal-card__footer">
@@ -320,7 +328,7 @@ onBeforeUnmount(stopTimer)
   margin: 8px 0;
   padding: 12px;
   border: 1px solid #a0cfff;
-  border-left: 4px solid #409eff;
+  border-left: 4px solid #2765b0;
   border-radius: 6px;
   background: #fff;
 }

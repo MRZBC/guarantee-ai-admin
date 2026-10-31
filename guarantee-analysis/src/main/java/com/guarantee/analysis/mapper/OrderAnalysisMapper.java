@@ -26,6 +26,8 @@ import java.util.List;
 @Mapper
 public interface OrderAnalysisMapper {
 
+    com.guarantee.analysis.vo.OrderAggregateVO selectAggregate(@Param("c") AnalysisCriteria criteria);
+
     /** 订单趋势，按 period 升序。 */
     List<OrderTrendVO> selectTrend(@Param("c") OrderTrendQuery query);
 

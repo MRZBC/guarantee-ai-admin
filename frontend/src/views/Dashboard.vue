@@ -16,18 +16,17 @@ const statItems = computed<StatCardItem[]>(() => {
   const data = overview.value
   return [
     { label: '订单总数', value: data?.totalOrderCount ?? 0, unit: '笔' },
-    { label: '投标订单', value: data?.tenderOrderCount ?? 0, unit: '笔', color: '#409eff' },
-    { label: '履约订单', value: data?.performanceOrderCount ?? 0, unit: '笔', color: '#67c23a' },
+    { label: '投标订单', value: data?.tenderOrderCount ?? 0, unit: '笔' },
+    { label: '履约订单', value: data?.performanceOrderCount ?? 0, unit: '笔' },
     {
       label: '担保总金额',
       value: formatAmount(data?.totalGuaranteeAmount ?? 0),
-      unit: '元',
-      color: '#e6a23c'
+      unit: '元'
     },
-    { label: '保费总额', value: formatAmount(data?.totalPremiumAmount ?? 0), unit: '元', color: '#f56c6c' },
+    { label: '保费总额', value: formatAmount(data?.totalPremiumAmount ?? 0), unit: '元' },
     { label: '企业数量', value: data?.enterpriseCount ?? 0, unit: '家' },
     { label: '项目数量', value: data?.projectCount ?? 0, unit: '个' },
-    { label: '在保订单', value: data?.effectiveOrderCount ?? 0, unit: '笔', color: '#909399' }
+    { label: '在保订单', value: data?.effectiveOrderCount ?? 0, unit: '笔' }
   ]
 })
 
@@ -60,7 +59,7 @@ const trendOption = computed<EChartsOption>(() => ({
       type: 'line',
       smooth: true,
       yAxisIndex: 0,
-      itemStyle: { color: '#409eff' },
+      itemStyle: { color: '#2765b0' },
       areaStyle: { opacity: 0.12 },
       data: trend.value.map((item) => item.orderCount)
     },
@@ -69,7 +68,7 @@ const trendOption = computed<EChartsOption>(() => ({
       type: 'line',
       smooth: true,
       yAxisIndex: 1,
-      itemStyle: { color: '#e6a23c' },
+      itemStyle: { color: '#8db6c6' },
       data: trend.value.map((item) => item.guaranteeAmount)
     }
   ]
@@ -116,7 +115,7 @@ const barOption = computed<EChartsOption>(() => {
         name: '担保金额',
         type: 'bar',
         barMaxWidth: 38,
-        itemStyle: { color: '#409eff', borderRadius: [4, 4, 0, 0] },
+        itemStyle: { color: '#2765b0', borderRadius: [4, 4, 0, 0] },
         data: top.map((item) => item.guaranteeAmount)
       }
     ]
@@ -146,6 +145,13 @@ onMounted(loadAll)
 
 <template>
   <div class="page-container">
+    <div class="dashboard-heading">
+      <div>
+        <h1>业务总览</h1>
+        <p>查看保函业务的整体情况</p>
+      </div>
+      <span>数据区间：{{ dataRangeText }}</span>
+    </div>
     <StatCards :items="statItems" :span="6" />
 
     <el-row :gutter="12">
@@ -194,10 +200,26 @@ onMounted(loadAll)
 </template>
 
 <style scoped>
+.dashboard-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dashboard-heading h1 { margin: 0 0 6px; font-size: 22px; color: #24374c; }
+.dashboard-heading p, .dashboard-heading > span { margin: 0; font-size: 13px; color: #8190a0; }
+
+@media (max-width: 600px) {
+  .dashboard-heading { align-items: flex-start; flex-direction: column; }
+}
+
 .card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   font-weight: 600;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 </style>

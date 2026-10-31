@@ -100,8 +100,7 @@ public class RoleQueryTool {
                                            com.guarantee.system.scope.DataScope scope) {
         RoleDto.Query query = new RoleDto.Query();
         query.setKeyword(keyword);
-        query.setRoleCode(roleCode != null && !roleCode.isBlank() ? roleCode : keyword);
-        query.setRoleName(keyword);
+        query.setRoleCode(roleCode == null || roleCode.isBlank() ? null : roleCode.trim());
         query.setStatus(status);
         query.setIncludeDeleted(Boolean.TRUE.equals(includeDeleted));
         query.setPageNum(1);

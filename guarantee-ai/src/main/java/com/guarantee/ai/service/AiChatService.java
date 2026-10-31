@@ -410,7 +410,9 @@ public class AiChatService {
         ToolCallingChatOptions options = buildToolCallingOptions(toolContext, budget, config);
 
         List<Message> messages = new ArrayList<>(history.size() + 2);
-        messages.add(new SystemMessage(systemPrompt));
+        messages.add(new SystemMessage(systemPrompt + PermissionGuidance.context(
+                toolContext.get(AiToolContextKeys.PERMISSIONS) instanceof List<?> permissions
+                        ? permissions : List.of())));
         messages.addAll(history);
         messages.add(new UserMessage(buildUserText(userText, parsedTime)));
 
@@ -504,6 +506,45 @@ public class AiChatService {
         // 注意：收尾（自动重试 / 纠正 / 落库 / done）已在 contentEvents 之内，
         // 出错时 concatWith 不会执行，与旧实现里 "failed 则跳过收尾" 等价。
         return safe.doFinally(signal -> proposalEventPublisher.unregister(conversationId));
+    }
+
+    /** 内部候选评测入口，无会话落库、无真实工具执行，复用生产模型参数与工具循环。 */
+    public record EvaluationCall(String name, String arguments) {}
+    public record EvaluationAnswer(String answer, List<EvaluationCall> calls) {}
+
+    public EvaluationAnswer evaluateCandidate(String template, String question, List<Message> history,
+                                               AiConfigSnapshot config, java.time.LocalDate today) {
+        Optional<TimeRange> parsed = timeSemanticParser.parse(question, today);
+        Map<String, Object> context = Map.of(AiToolContextKeys.PERMISSIONS, List.of());
+        ToolCallBudget budget = new ToolCallBudget(config.getInt(AiConfigCatalog.BUDGET_MAX_CALLS_PER_ROUND));
+        ToolCallingChatOptions options = buildToolCallingOptions(context, budget, config);
+        List<EvaluationCall> calls = new ArrayList<>();
+        List<ToolCallback> fixtures = new ArrayList<>();
+        for (ToolCallback original : options.getToolCallbacks()) {
+            fixtures.add(new ToolCallback() {
+                public ToolDefinition getToolDefinition() { return original.getToolDefinition(); }
+                public String call(String input) {
+                    String name = getToolDefinition().name();
+                    calls.add(new EvaluationCall(name, input));
+                    return switch (name) {
+                        case "getCurrentDate" -> today.toString();
+                        case "queryOrderSummary" -> "{\"totalOrders\":37,\"orderCount\":37,\"dataSource\":\"候选评测固定数据\"}";
+                        default -> throw new IllegalStateException("本评测不支持工具：" + name);
+                    };
+                }
+                public String call(String input, ToolContext ignored) { return call(input); }
+            });
+        }
+        options = options.mutate().toolCallbacks(fixtures).build();
+        List<Message> messages = new ArrayList<>();
+        messages.add(new SystemMessage(BusinessAssistantPrompt.build(template, parsed, today)));
+        messages.addAll(history);
+        messages.add(new UserMessage(buildUserText(question, parsed)));
+        StringBuilder answer = new StringBuilder();
+        runToolLoop(new Prompt(messages, options), answer, 0, new AtomicBoolean(), new AtomicReference<>(),
+                budget, new TurnCost(nanoClock), config)
+                .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()).then().block(Duration.ofSeconds(90));
+        return new EvaluationAnswer(answer.toString(), List.copyOf(calls));
     }
 
     /**
@@ -642,6 +683,10 @@ public class AiChatService {
                         return true;
                     })
                     .orElse(false);
+            if (!proposalClaimFlagged) {
+                ExecutionClaimGuard.correctionFor(produced, turnFacts.querySucceeded(), turnFacts.toolFailed(), turnFacts.literalValues())
+                        .ifPresent(corrections::add);
+            }
             // ② 本轮零工具调用却出现「口径：」行。必须在剥离之前判定，否则证据已经被自己删掉
             dataSourceClaimFlagged = dataSourceClaimGuard.correctionFor(produced, toolsExecuted.get())
                     .map(text -> {

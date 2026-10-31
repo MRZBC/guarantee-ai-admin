@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   changeAiConfig,
   getAiConfig,
-  getPromptGate,
+  getEffectivePrompt,
+  getPromptBase,
+  startPromptEvaluation,
+  getPromptEvaluation,
+  latestPromptEvaluation,
   getPromptVersion,
   listPromptVersions,
   pageOperationAudits,
@@ -17,8 +21,10 @@ import type {
   AiConfigItemView,
   AiConfigView,
   OperationAuditItem,
+  EffectivePrompt,
+  PromptBase,
+  PromptEvaluation,
   PromptDetailView,
-  PromptGateView,
   PromptHistoryView,
   PromptVersionView
 } from '@/types/ai'
@@ -26,10 +32,11 @@ import {
   auditActionLabel,
   auditResultLabel,
   auditResultTag,
-  buildSnapshotDiff,
-  noSnapshotHint,
-  splitChangedFields
+  noSnapshotHint
 } from '@/utils/auditDict'
+import { formatDateTime } from '@/utils/format'
+import { configHistoryDate, configAuditDiff, configTargetLabel, configChangeSummary,
+  isPromptAudit, configSnapshot, promptChangeFragment } from '@/utils/aiConfigAudit'
 
 /**
  * 「系统配置 → AI 配置」页（第四阶段 REQ-CFG-08，T4-04）。
@@ -96,8 +103,8 @@ function isNotWired(item: AiConfigItemView): boolean {
 
 const notWiredItems = computed(() => modelItems.value.filter(isNotWired))
 
-/* 真机集（--suite=live）：只标注、不阻断发布；没有证据就是"未跑"（AC-CFG-10 子句②）。 */
-const liveGate = computed(() => gate.value?.live ?? null)
+/* 历史整体评测（仅供参考）：只标注、不阻断发布；没有证据就是"未跑"（AC-CFG-10 子句②）。 */
+const liveGate = computed(() => promptHistory.value?.gate?.live ?? null)
 
 const liveLabel = computed(() => {
   const status = liveGate.value?.status
@@ -169,6 +176,7 @@ async function submitEdit(): Promise<void> {
     }
     editVisible.value = false
     await loadConfig()
+    if (draftDetail.value) evaluation.value = await latestPromptEvaluation(draftDetail.value.version.versionNo)
   } catch {
     // 请求拦截器已弹出可读错误（越界/类型错误/未知键都带原因），这里不重复提示
   } finally {
@@ -191,6 +199,7 @@ async function resetItem(item: AiConfigItemView): Promise<void> {
     const result = await changeAiConfig(item.key, null)
     ElMessage.success(result.changed ? '已恢复默认值，并已写入操作审计' : result.message)
     await loadConfig()
+    if (draftDetail.value) evaluation.value = await latestPromptEvaluation(draftDetail.value.version.versionNo)
   } catch {
     /* 拦截器已提示 */
   }
@@ -206,6 +215,7 @@ async function changeBoolean(item: AiConfigItemView, value: string | number | bo
     const result = await changeAiConfig(item.key, next ? 'true' : 'false')
     ElMessage.success(result.changed ? '已更新（下一个请求生效），并已写入操作审计' : result.message)
     await loadConfig()
+    if (draftDetail.value) evaluation.value = await latestPromptEvaluation(draftDetail.value.version.versionNo)
   } catch {
     /* 拦截器已提示 */
   }
@@ -215,60 +225,68 @@ async function changeBoolean(item: AiConfigItemView, value: string | number | bo
 
 const promptLoading = ref(false)
 const promptHistory = ref<PromptHistoryView | null>(null)
-const gate = ref<PromptGateView | null>(null)
 const published = ref<PromptDetailView | null>(null)
 const draftDetail = ref<PromptDetailView | null>(null)
-const draftContent = ref('')
+const draftContent = ref('') // 仅业务补充，不承载旧完整正文
+const platformBase = ref<PromptBase | null>(null)
+const snapshotDetail = ref<PromptDetailView | null>(null)
+const snapshotVisible = ref(false)
+async function viewSnapshot(version: PromptVersionView): Promise<void> {
+  try { snapshotDetail.value = await getPromptVersion(version.versionNo); snapshotVisible.value = true } catch { /* 拦截器提示 */ }
+}
+const migrationConfirmed = ref(false)
+const legacySource = computed(() => {
+  const source = draftDetail.value ?? published.value
+  return source && !source.baseVersion ? source : null
+})
+const finalPreview = computed(() => {
+  if (!draftDirty.value && draftDetail.value?.baseVersion) return draftDetail.value.content
+  if (!platformBase.value) return ''
+  return platformBase.value.content + '\n\n# 业务补充规则（不得覆盖平台基础规则）\n'
+    + '下列内容仅补充业务表达与工作习惯；冲突时遵守上方平台基础规则。\n' + draftContent.value
+})
 const draftNote = ref('')
 /** 编辑框内容是否还没保存（未保存时不允许发布，避免"发布了一个看不见的旧草稿"） */
 const draftDirty = ref(false)
+const effective = ref<EffectivePrompt | null>(null)
+const evaluation = ref<PromptEvaluation | null>(null)
+let pollTimer: ReturnType<typeof setTimeout> | undefined
+let disposed = false
+onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
+const evaluationMatches = computed(() => evaluation.value?.versionNo === draftDetail.value?.version.versionNo
+  && evaluation.value?.contentHash === draftDetail.value?.version.contentHash)
+const evaluationRows = computed<Array<{question: string; passed: boolean; expectation: string;
+  candidate: {answer: string; calls: unknown[]}; baseline: {answer: string; calls: unknown[]}}>>(() => {
+  try { return evaluation.value?.results ? JSON.parse(evaluation.value.results) : [] } catch { return [] }
+})
 
-/**
- * 门禁结果的三种显示：**未检查**（本次进程还没跑过）/ **未跑**（跑了但没跑起来）/
- * 通过 / 未通过。三者都不能被显示成"通过"，且都不能允许发布（AC-CFG-10）。
- *
- * <p>列表接口不会顺手跑门禁（那会让页面每次打开卡分钟级），所以初始状态通常是"未检查"，
- * 由「刷新门禁」按钮显式触发；发布时服务端仍会**强制**再跑一次（权威判定点）。</p>
- */
+
 const gateLabel = computed(() => {
-  const value = gate.value
-  if (!value) return '未检查'
-  if (!value.ran) return value.summary.startsWith('尚未检查') ? '未检查' : '未跑'
-  return value.passed ? '通过' : '未通过'
+  if (!evaluation.value) return '未评测'
+  if (!evaluationMatches.value) return '结果已失效'
+  if (evaluation.value.status === 'PASSED' && !evaluation.value.publishable) return '结果已失效'
+  return { RUNNING: '评测中', PASSED: '通过', FAILED: '未通过', ERROR: '未完成' }[evaluation.value.status]
 })
-
-const gateTag = computed<'success' | 'danger' | 'info'>(() => {
-  const value = gate.value
-  if (!value || !value.ran) return 'info'
-  return value.passed ? 'success' : 'danger'
-})
-
+const gateTag = computed<'success' | 'danger' | 'info'>(() =>
+  !evaluationMatches.value || (evaluation.value?.status === 'PASSED' && !evaluation.value.publishable) ? 'info' : evaluation.value?.status === 'PASSED' ? 'success'
+    : evaluation.value?.status === 'FAILED' || evaluation.value?.status === 'ERROR' ? 'danger' : 'info')
 const missingMarkers = computed(() => draftDetail.value?.missingProtectedMarkers ?? [])
-
-/** 可以发布的三个前提：有草稿、草稿已保存、门禁通过。 */
-const canPublish = computed(
-  () => canUpdate.value && !!draftDetail.value && !draftDirty.value && missingMarkers.value.length === 0 && gate.value?.passed === true
-)
-
+const canPublish = computed(() => canUpdate.value && !!draftDetail.value && !draftDirty.value
+  && !!draftDetail.value.baseVersion && evaluationMatches.value && evaluation.value?.publishable === true)
 const publishHint = computed(() => {
-  if (!canUpdate.value) return '你没有「修改 AI 配置」权限（ai:config:update）'
-  if (!draftDetail.value) return '还没有草稿：请先保存草稿'
-  if (draftDirty.value) return '草稿有未保存的修改：请先保存草稿'
-  if (missingMarkers.value.length > 0) return `草稿缺少受保护段落：${missingMarkers.value.join('；')}`
-  if (!gate.value) return '尚未检查发布门禁：请先点击「刷新门禁」（确定性评测约 15 秒、最长 3 分钟）'
-  if (!gate.value.ran) {
-    return gate.value.summary.startsWith('尚未检查')
-      ? '尚未检查发布门禁：请先点击「刷新门禁」（确定性评测约 15 秒、最长 3 分钟）'
-      : `发布门禁未跑（${gate.value.summary}）：确定性黄金问题集必须先全绿`
-  }
-  if (!gate.value.passed) return `发布门禁未通过：${gate.value.summary}`
+  if (!canUpdate.value) return '你没有修改 AI 配置权限'
+  if (!draftDetail.value || draftDirty.value) return '请先保存草稿'
+  if (!draftDetail.value.baseVersion) return '请先核对并迁移旧完整正文'
+  if (!evaluationMatches.value) return '候选内容尚未评测或结果已失效，请评测此版本'
+  if (evaluation.value?.status === 'PASSED' && !evaluation.value.publishable) return evaluation.value.eligibilityReason
+  if (evaluation.value?.status !== 'PASSED') return evaluation.value?.summary ?? '请先评测此版本'
   return ''
 })
 
 /** 行级差异（只显示新增/删除的行）：给运营看"我到底改了什么"，不做逐字符 diff。 */
 const lineDiff = computed(() => {
-  const before = (published.value?.content ?? '').split('\n')
-  const after = draftContent.value.split('\n')
+  const before = (effective.value?.content ?? '').split('\n')
+  const after = finalPreview.value.split('\n')
   const beforeSet = new Map<string, number>()
   before.forEach((line) => beforeSet.set(line, (beforeSet.get(line) ?? 0) + 1))
   const added: string[] = []
@@ -291,8 +309,10 @@ const lineDiff = computed(() => {
 async function loadPrompts(): Promise<void> {
   promptLoading.value = true
   try {
+    platformBase.value = await getPromptBase()
+    migrationConfirmed.value = false
+    effective.value = await getEffectivePrompt()
     promptHistory.value = await listPromptVersions()
-    gate.value = promptHistory.value.gate
 
     const publishedSummary = promptHistory.value.versions.find((item) => item.status === 'PUBLISHED')
     published.value = publishedSummary ? await getPromptVersion(publishedSummary.versionNo) : null
@@ -300,15 +320,17 @@ async function loadPrompts(): Promise<void> {
     const draftSummary = promptHistory.value.draft
     if (draftSummary) {
       draftDetail.value = await getPromptVersion(draftSummary.versionNo)
-      draftContent.value = draftDetail.value.content
+      draftContent.value = draftDetail.value.businessContent ?? ''
       draftNote.value = draftSummary.note ?? ''
     } else {
       draftDetail.value = null
       // 没有草稿时以发布版为起点，方便"改一句就发一版"
-      draftContent.value = published.value?.content ?? ''
+      draftContent.value = published.value?.businessContent ?? ''
       draftNote.value = ''
     }
     draftDirty.value = false
+    evaluation.value = draftSummary ? await latestPromptEvaluation(draftSummary.versionNo) : null
+    schedulePoll()
   } catch {
     /* 拦截器已提示 */
   } finally {
@@ -318,30 +340,47 @@ async function loadPrompts(): Promise<void> {
 
 const gateLoading = ref(false)
 
+function schedulePoll(): void {
+  clearTimeout(pollTimer)
+  const task = evaluation.value
+  if (disposed || task?.status !== 'RUNNING') return
+  pollTimer = setTimeout(async () => {
+    try {
+      const next = await getPromptEvaluation(task.id)
+      if (!disposed && evaluation.value?.id === task.id) evaluation.value = next
+      schedulePoll()
+    } catch { /* 读取失败时保留任务，可手动重新载入页面恢复 */ }
+  }, 2000)
+}
 async function refreshGate(): Promise<void> {
-  gateLoading.value = true
-  ElMessage.info('正在运行确定性评测（约 15 秒，最长 3 分钟）…')
+  const draft = draftDetail.value
+  if (!draft || draftDirty.value || !canUpdate.value) return
   try {
-    gate.value = await getPromptGate()
-    ElMessage.info(`门禁：${gateLabel.value}（${gate.value.summary}）`)
-    // 门禁结果同时反映在历史接口里，重新拉一次保持两处一致
-    const history = await listPromptVersions()
-    promptHistory.value = history
-  } catch {
-    /* 拦截器已提示 */
-  } finally {
-    gateLoading.value = false
-  }
+    await ElMessageBox.confirm('评测将调用当前配置的真实模型，产生模型调用费用；使用固定数据比较候选版与生效版。',
+      '评测候选版本', { confirmButtonText: '开始评测', type: 'info' })
+  } catch { return }
+  gateLoading.value = true
+  try {
+    evaluation.value = await startPromptEvaluation(draft.version.versionNo, draft.version.contentHash!)
+    schedulePoll()
+  } catch { /* 拦截器已提示 */ }
+  finally { gateLoading.value = false }
 }
 
 async function saveDraft(): Promise<void> {
-  if (!draftContent.value.trim()) {
-    ElMessage.warning('提示词正文不能为空')
+  if (!platformBase.value || (legacySource.value && !migrationConfirmed.value)) {
+    ElMessage.warning('请先核对旧完整正文并勾选迁移确认')
     return
   }
   promptLoading.value = true
   try {
-    draftDetail.value = await savePromptDraft(draftContent.value, draftNote.value || null)
+    draftDetail.value = await savePromptDraft({
+      businessContent: draftContent.value, note: draftNote.value || null,
+      baseVersion: platformBase.value!.version, baseHash: platformBase.value!.contentHash,
+      migrationSourceVersion: legacySource.value?.version.versionNo ?? null,
+      migrationSourceHash: legacySource.value?.version.contentHash ?? null,
+      migrationConfirmed: migrationConfirmed.value
+    })
     draftDirty.value = false
     if (draftDetail.value.missingProtectedMarkers.length > 0) {
       ElMessage.warning(
@@ -372,7 +411,7 @@ async function publishDraft(): Promise<void> {
   }
   promptLoading.value = true
   try {
-    const result = await publishPrompt(draft.version.versionNo)
+    const result = await publishPrompt(draft.version.versionNo, draft.version.contentHash!, evaluation.value!.id)
     ElMessage.success(result.message)
     await loadPrompts()
   } catch {
@@ -412,15 +451,49 @@ const historyTotal = ref(0)
 const historyLoaded = ref(false)
 const historyError = ref('')
 
-function isoDate(offsetDays: number): string {
-  const date = new Date()
-  date.setDate(date.getDate() + offsetDays)
-  return date.toISOString().slice(0, 10)
+const historyRange = ref<[string, string]>([configHistoryDate(-6), configHistoryDate(0)])
+const changeVisible = ref(false)
+const changeLoading = ref(false)
+const changeBefore = ref<string | null>(null)
+const changeAfter = ref<string | null>(null)
+const changeNote = ref('')
+const changeTitle = ref('提示词正文对比')
+const changeFragment = computed(() => changeBefore.value !== null && changeAfter.value !== null
+  ? promptChangeFragment(changeBefore.value, changeAfter.value) : null)
+
+async function openPromptChange(row: OperationAuditItem): Promise<void> {
+  changeVisible.value = true; changeLoading.value = true
+  changeBefore.value = null; changeAfter.value = null; changeNote.value = ''
+  changeTitle.value = configChangeSummary(row)
+  const before = configSnapshot(row.beforeValue), after = configSnapshot(row.afterValue)
+  async function readVersion(versionNo: number, hash: unknown): Promise<string> {
+    const detail = await getPromptVersion(versionNo)
+    if (typeof hash !== 'string' || detail.version.contentHash !== hash) throw new Error('版本正文与审计哈希不一致')
+    return detail.content
+  }
+  try {
+    const target = Number(after.versionNo ?? row.targetName?.slice('prompt.v'.length))
+    if (!Number.isSafeInteger(target) || target <= 0) throw new Error('无有效目标版本')
+    changeAfter.value = await readVersion(target, after.contentHash)
+    if (typeof before.versionNo !== 'number') {
+      changeNote.value = '这条旧记录只保存了目标版本自身的状态变化，未记录切换前的生效版本，无法还原准确的前后对比。下方可查看目标版本原文。'
+    } else if (before.versionNo === 0) {
+      const base = await getPromptBase()
+      if (base.contentHash === before.contentHash) changeBefore.value = base.content
+      else changeNote.value = '切换前使用内置模板，当前可读取模板与当时哈希不同，无法还原原文；下方展示变更后正文。'
+    } else {
+      changeBefore.value = await readVersion(before.versionNo, before.contentHash)
+    }
+  } catch {
+    changeNote.value = '无法读取与该审计哈希一致的版本正文，请核对版本记录或访问权限；不会使用其他正文代替。'
+  } finally { changeLoading.value = false }
 }
 
-const historyRange = ref<[string, string]>([isoDate(-6), isoDate(0)])
-
 async function loadHistory(): Promise<void> {
+  if (!historyRange.value?.[0] || !historyRange.value?.[1]) {
+    ElMessage.warning('请选择完整的查询日期区间')
+    return
+  }
   historyLoading.value = true
   historyError.value = ''
   try {
@@ -442,7 +515,7 @@ async function loadHistory(): Promise<void> {
 }
 
 function historyDiff(row: OperationAuditItem) {
-  return buildSnapshotDiff(row.beforeValue, row.afterValue)
+  return configAuditDiff(row)
 }
 
 /* ---------------- 生命周期 ---------------- */
@@ -454,7 +527,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="ai-config">
+  <div class="page-container ai-config">
     <el-card shadow="never">
       <template #header>
         <div class="ai-config__header">
@@ -570,25 +643,25 @@ onMounted(async () => {
               <el-tag v-if="published" type="success">v{{ published.version.versionNo }}</el-tag>
               <el-tag v-else type="info">无（使用 jar 内置提示词）</el-tag>
               <span v-if="published?.version.publishedAt" class="ml-8">
-                {{ published.version.publishedAt }} · {{ published.version.publishedBy }}
+                {{ formatDateTime(published.version.publishedAt) }} · {{ published.version.publishedBy }}
               </span>
             </div>
             <div>
               <span>发布门禁：</span>
               <el-tag :type="gateTag">{{ gateLabel }}</el-tag>
-              <el-tooltip :content="gate?.summary ?? ''" placement="top">
-                <span class="ai-config__desc ml-8">{{ gate?.summary }}</span>
+              <el-tooltip :content="evaluation?.summary ?? ''" placement="top">
+                <span class="ai-config__desc ml-8">{{ evaluation?.summary }}</span>
               </el-tooltip>
-              <el-button link type="primary" class="ml-8" :loading="gateLoading" @click="refreshGate">
-                刷新门禁
+              <el-button link type="primary" class="ml-8" :loading="gateLoading" :disabled="!canUpdate || !draftDetail?.baseVersion || draftDirty || evaluation?.status === 'RUNNING'" @click="refreshGate">
+                评测此版本
               </el-button>
             </div>
             <!--
-              真机集（--suite=live）：AC-CFG-10 子句②要求"缺失时页面明确标注未跑"。
-              它**只做标注、不阻断发布**——发布门禁以确定性集为准（REQ-CFG-11 的两级门禁口径）。
+              历史整体评测（仅供参考）：AC-CFG-10 子句②要求"缺失时页面明确标注未跑"。
+              历史报告仅供参考，发布必须校验本候选快照的行为评测结果。
             -->
             <div>
-              <span>真机集（--suite=live）：</span>
+              <span>历史整体评测（仅供参考）：</span>
               <el-tag :type="liveTag">{{ liveLabel }}</el-tag>
               <el-tooltip :content="liveGate?.reason ?? '未配置 DEEPSEEK_API_KEY 或未跑（--suite=live）'" placement="top">
                 <span class="ai-config__desc ml-8">
@@ -598,22 +671,20 @@ onMounted(async () => {
             </div>
           </div>
 
-          <el-alert
-            v-if="gate && !gate.ran"
-            type="warning"
-            show-icon
-            :closable="false"
-            title="发布门禁未跑 / 尚未检查（这不是「通过」）"
-            :description="`${gate.summary}。确定性黄金问题集必须先全绿才允许发布。`"
-          />
-          <el-alert
-            v-else-if="gate && !gate.passed"
-            type="error"
-            show-icon
-            :closable="false"
-            title="发布门禁未通过"
-            :description="gate.summary"
-          />
+          <el-alert v-if="evaluation" :type="gateTag === 'danger' ? 'error' : 'info'"
+            :closable="false" :title="!evaluationMatches ? '正文已变化，旧评测结果不能用于发布' : evaluation.status === 'PASSED' && !evaluation.publishable ? evaluation.eligibilityReason : evaluation.summary" />
+          <p class="ai-config__desc">候选评测使用真实模型和固定工具数据；服务端权限与确认机制由 CI 回归验证。</p>
+          <p v-if="evaluation" class="ai-config__desc">测试集 {{ evaluation.suiteVersion }} · {{ formatDateTime(evaluation.createdAt) }} · 结果有效期24小时</p>
+          <el-collapse v-if="evaluationRows.length">
+            <el-collapse-item v-for="(row, index) in evaluationRows" :key="index"
+              :title="`${row.passed ? '通过' : '失败'} · ${row.question}`" :name="index">
+              <p>{{ row.expectation }}</p>
+              <p>候选版：{{ row.candidate.answer }}</p>
+              <pre>{{ JSON.stringify(row.candidate.calls, null, 2) }}</pre>
+              <p>当前生效版：{{ row.baseline.answer }}</p>
+              <pre>{{ JSON.stringify(row.baseline.calls, null, 2) }}</pre>
+            </el-collapse-item>
+          </el-collapse>
           <el-alert
             v-if="missingMarkers.length > 0"
             type="error"
@@ -624,13 +695,29 @@ onMounted(async () => {
             :description="missingMarkers.join('；')"
           />
 
+          <el-collapse v-if="platformBase">
+            <el-collapse-item :title="`平台基础规则（只读） · ${platformBase.version} · ${platformBase.contentHash.slice(0, 12)}`">
+              <pre class="prompt-snapshot">{{ platformBase.content }}</pre>
+            </el-collapse-item>
+          </el-collapse>
+          <template v-if="legacySource">
+            <el-alert type="warning" :closable="false" title="旧完整正文需要人工迁移：核对原文与基础规则，只将需保留的业务补充填入下方。保存将创建新版本，旧正文保留。" />
+            <el-collapse>
+              <el-collapse-item :title="`旧完整正文 v${legacySource.version.versionNo}（只读）`">
+                <pre class="prompt-snapshot">{{ legacySource.content }}</pre>
+              </el-collapse-item>
+            </el-collapse>
+            <el-checkbox v-model="migrationConfirmed">已核对旧正文与基础规则，确认下方业务补充保留了需要迁移的内容</el-checkbox>
+          </template>
           <div class="prompt-editor">
+            <p>业务补充规则（可留空；不得覆盖平台基础规则）</p>
             <el-input
               v-model="draftContent"
               type="textarea"
               :rows="16"
               spellcheck="false"
-              placeholder="在这里编辑提示词草稿"
+              placeholder="补充业务表达与工作习惯；平台基础规则由上方只读区维护"
+              :disabled="!canUpdate"
               @input="draftDirty = true"
             />
             <el-input
@@ -659,16 +746,21 @@ onMounted(async () => {
                 </span>
               </el-tooltip>
               <span class="ai-config__desc">
-                {{ draftDirty ? '有未保存的修改' : '草稿已保存' }}
+                {{ legacySource ? '旧完整正文待迁移' : draftDirty ? '有未保存的修改' : draftDetail ? '草稿已保存' : '尚未保存组合草稿' }}
                 <template v-if="draftDetail"> · 草稿版本 v{{ draftDetail.version.versionNo }}</template>
               </span>
             </div>
           </div>
 
-          <el-divider content-position="left">与发布版的行级差异</el-divider>
+          <el-collapse>
+            <el-collapse-item title="最终正文预览（基础规则 + 业务补充）">
+              <pre class="prompt-snapshot">{{ finalPreview }}</pre>
+            </el-collapse-item>
+          </el-collapse>
+          <el-divider content-position="left">与当前生效提示词的行级差异</el-divider>
           <el-empty
-            v-if="!published || (lineDiff.added.length === 0 && lineDiff.removed.length === 0)"
-            description="与发布版没有差异"
+            v-if="!effective || (lineDiff.added.length === 0 && lineDiff.removed.length === 0)"
+            description="与当前生效提示词没有差异"
           />
           <div v-else class="prompt-diff">
             <div v-for="(line, index) in lineDiff.removed" :key="`r-${index}`" class="prompt-diff__line prompt-diff__line--removed">
@@ -695,15 +787,16 @@ onMounted(async () => {
               </template>
             </el-table-column>
             <el-table-column prop="note" label="说明" min-width="160" />
-            <el-table-column prop="publishedAt" label="发布时间" min-width="160" />
+            <el-table-column label="发布时间" min-width="160"><template #default="{ row }">{{ formatDateTime(row.publishedAt) }}</template></el-table-column>
             <el-table-column prop="publishedBy" label="发布人" width="100" />
             <el-table-column label="内容哈希" min-width="160">
               <template #default="{ row }">
                 <span class="ai-config__hash">{{ (row.contentHash ?? '').slice(0, 12) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="120" fixed="right">
+            <el-table-column label="操作" width="220" fixed="right">
               <template #default="{ row }">
+                <el-button link type="primary" @click="viewSnapshot(row)">查看快照</el-button>
                 <el-button
                   v-if="canUpdate && row.status === 'ARCHIVED'"
                   link
@@ -786,7 +879,7 @@ onMounted(async () => {
               end-placeholder="结束日期"
             />
             <el-button type="primary" :loading="historyLoading" @click="loadHistory">查询</el-button>
-            <span class="ai-config__desc">只查 target_type = AI_CONFIG 的记录（谁、何时、哪一项、before → after）</span>
+            <span class="ai-config__desc">按北京时间查询 AI 配置变更；展开记录可查看字段详情。</span>
           </div>
 
           <el-alert
@@ -801,6 +894,7 @@ onMounted(async () => {
             <el-table v-if="historyLoaded" :data="historyRows" v-loading="historyLoading" stripe>
               <el-table-column type="expand">
                 <template #default="{ row }">
+                  <p>{{ auditActionLabel(row.action) }} · {{ configTargetLabel(row) }}</p>
                   <el-table :data="historyDiff(row)" size="small" border>
                     <el-table-column prop="field" label="字段" min-width="200" />
                     <el-table-column prop="before" label="变更前" min-width="220" />
@@ -811,44 +905,73 @@ onMounted(async () => {
                   </div>
                 </template>
               </el-table-column>
-              <el-table-column prop="operatedAt" label="时间" min-width="170" />
-              <el-table-column label="动作" width="110">
-                <template #default="{ row }">{{ auditActionLabel(row.action) }}</template>
+              <el-table-column label="时间（北京时间）" min-width="180">
+                <template #default="{ row }">{{ formatDateTime(row.operatedAt) }}</template>
               </el-table-column>
-              <el-table-column label="目标" min-width="200">
+              <el-table-column label="变更内容" min-width="340">
                 <template #default="{ row }">
-                  <span>{{ row.targetName ?? '—' }}</span>
-                  <el-tag size="small" type="info" class="ml-4">{{ row.targetType }}</el-tag>
+                  <div>{{ configChangeSummary(row) }}</div>
+                  <el-button v-if="isPromptAudit(row)" link type="primary" @click="openPromptChange(row)">
+                    {{ typeof configSnapshot(row.beforeValue).versionNo === 'number' ? '查看正文对比' : '查看版本正文' }}
+                  </el-button>
                 </template>
               </el-table-column>
-              <el-table-column label="操作人" min-width="140">
+              <el-table-column label="操作人" min-width="120">
                 <template #default="{ row }">{{ row.operatorRealName || row.operatorUsername || '—' }}</template>
               </el-table-column>
-              <el-table-column label="渠道" width="110">
+              <el-table-column label="渠道" width="100">
                 <template #default="{ row }">
                   <el-tag size="small" :type="row.source === 'AI' ? 'warning' : 'primary'">
                     {{ row.source === 'AI' ? '助手确认' : '页面直连' }}
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="结果" width="100">
+              <el-table-column label="结果" width="80">
                 <template #default="{ row }">
                   <el-tag size="small" :type="auditResultTag(row.result)">
                     {{ auditResultLabel(row.result) }}
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="变更字段" min-width="180">
-                <template #default="{ row }">
-                  {{ splitChangedFields(row.changedFields).join('、') || '—' }}
-                </template>
-              </el-table-column>
+
             </el-table>
             <el-empty v-else description="选择时间区间后点击查询" />
             <div v-if="historyLoaded" class="ai-config__desc">共 {{ historyTotal }} 条</div>
           </template>
         </el-tab-pane>
       </el-tabs>
+
+      <el-dialog v-model="changeVisible" :title="changeTitle" width="85%">
+        <div v-loading="changeLoading">
+          <el-alert v-if="changeNote" :title="changeNote" type="warning" :closable="false" />
+          <template v-if="changeFragment">
+            <p>变更片段（相同的开头和结尾已省略；多处修改合并展示）</p>
+            <p v-if="!changeFragment.removed.length && !changeFragment.added.length">正文没有变化，仅切换了版本。</p>
+            <div class="history-prompt-diff">
+              <div><h4>变更前</h4><pre class="prompt-snapshot prompt-diff__line--removed" v-for="line in changeFragment.removed" :key="line.line">{{ line.line }} − {{ line.text }}</pre><p v-if="!changeFragment.removed.length">（没有删除内容）</p></div>
+              <div><h4>变更后</h4><pre class="prompt-snapshot prompt-diff__line--added" v-for="line in changeFragment.added" :key="line.line">{{ line.line }} + {{ line.text }}</pre><p v-if="!changeFragment.added.length">（没有新增内容）</p></div>
+            </div>
+            <el-collapse><el-collapse-item title="查看完整正文"><h4>变更前</h4><pre class="prompt-snapshot">{{ changeBefore }}</pre><h4>变更后</h4><pre class="prompt-snapshot">{{ changeAfter }}</pre></el-collapse-item></el-collapse>
+          </template>
+          <template v-else-if="changeAfter !== null"><h4>目标版本正文</h4><pre class="prompt-snapshot">{{ changeAfter }}</pre></template>
+        </div>
+      </el-dialog>
+
+      <el-dialog v-model="snapshotVisible" title="提示词版本快照（只读）" width="80%">
+        <template v-if="snapshotDetail">
+          <p>v{{ snapshotDetail.version.versionNo }} · 最终正文哈希 {{ snapshotDetail.version.contentHash }}</p>
+          <template v-if="snapshotDetail.baseVersion">
+            <p>基础规则 {{ snapshotDetail.baseVersion }} · {{ snapshotDetail.baseHash }}</p>
+            <p v-if="snapshotDetail.migrationSourceVersion">迁移自 v{{ snapshotDetail.migrationSourceVersion }} · {{ snapshotDetail.migrationSourceHash }}</p>
+            <el-collapse>
+              <el-collapse-item title="基础规则快照"><pre class="prompt-snapshot">{{ snapshotDetail.baseContent }}</pre></el-collapse-item>
+              <el-collapse-item title="业务补充快照"><pre class="prompt-snapshot">{{ snapshotDetail.businessContent || '（空）' }}</pre></el-collapse-item>
+            </el-collapse>
+          </template>
+          <p v-else>旧完整正文，尚未拆分；保留原始快照。</p>
+          <pre class="prompt-snapshot">{{ snapshotDetail.content }}</pre>
+        </template>
+      </el-dialog>
 
       <!-- 编辑配置项 -->
       <el-dialog v-model="editVisible" :title="editItem ? `修改 ${editItem.key}` : '修改配置'" width="520px">
@@ -873,6 +996,9 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.history-prompt-diff { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; max-height: 50vh; overflow: auto; }
+.history-prompt-diff pre { margin: 0; overflow-wrap: anywhere; }
+.prompt-snapshot { white-space: pre-wrap; max-height: 360px; overflow: auto; }
 .ai-config__header {
   display: flex;
   align-items: center;

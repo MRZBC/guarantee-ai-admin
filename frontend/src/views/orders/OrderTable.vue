@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { readOrderRoute, routeParams } from '@/utils/analysisNavigation'
 import { pageEnterprises } from '@/api/enterprise'
 import { getPerformanceOrder, getTenderOrder, pagePerformanceOrders, pageTenderOrders } from '@/api/orders'
 import { pageProjects } from '@/api/project'
@@ -18,6 +21,9 @@ const props = defineProps<{
   orderType: 'TENDER' | 'PERFORMANCE'
 }>()
 
+const route = useRoute()
+const router = useRouter()
+let loadId = 0
 const isPerformance = computed(() => props.orderType === 'PERFORMANCE')
 const pageTitle = computed(() => (isPerformance.value ? '履约订单' : '投标订单'))
 
@@ -32,6 +38,7 @@ const query = reactive<OrderQuery>({
   pageSize: 10,
   orderNo: '',
   regionCode: '',
+  regionExact: false,
   orgId: null,
   insuranceTypeId: null,
   projectId: null,
@@ -88,6 +95,7 @@ function buildParams(): OrderQuery {
     pageSize: query.pageSize,
     orderNo: query.orderNo || undefined,
     regionCode: query.regionCode || undefined,
+    regionExact: query.regionExact || undefined,
     orgId: query.orgId ?? undefined,
     insuranceTypeId: query.insuranceTypeId ?? undefined,
     projectId: query.projectId ?? undefined,
@@ -99,30 +107,40 @@ function buildParams(): OrderQuery {
 }
 
 async function loadData(): Promise<void> {
+  const id = ++loadId
   loading.value = true
   try {
     const params = buildParams()
     const result = isPerformance.value
       ? await pagePerformanceOrders(params)
       : await pageTenderOrders(params)
+    if (id !== loadId) return
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
   } catch {
+    if (id !== loadId) return
     rows.value = []
     total.value = 0
   } finally {
-    loading.value = false
+    if (id === loadId) loading.value = false
   }
+}
+
+function navigateQuery(): void {
+  const next = routeParams(buildParams())
+  if (JSON.stringify(next) === JSON.stringify(route.query)) void loadData()
+  else void router.replace({ query: next })
 }
 
 function handleSearch(): void {
   query.pageNum = 1
-  void loadData()
+  navigateQuery()
 }
 
 function handleReset(): void {
   query.orderNo = ''
   query.regionCode = ''
+  query.regionExact = false
   query.orgId = null
   query.insuranceTypeId = null
   query.projectId = null
@@ -133,18 +151,18 @@ function handleReset(): void {
   projectSearch.reset()
   enterpriseSearch.reset()
   query.pageNum = 1
-  void loadData()
+  navigateQuery()
 }
 
 function handlePageChange(page: number): void {
   query.pageNum = page
-  void loadData()
+  navigateQuery()
 }
 
 function handleSizeChange(size: number): void {
   query.pageSize = size
   query.pageNum = 1
-  void loadData()
+  navigateQuery()
 }
 
 /* ---------------- 详情 ---------------- */
@@ -227,14 +245,33 @@ const enterpriseSearch = useRemoteSearch<EnterpriseItem>({
   emptyText: '无匹配企业'
 })
 
-onMounted(() => {
-  void loadOptions()
-  void loadData()
-})
+function applyRoute(): void {
+  ++loadId
+  rows.value = []
+  total.value = 0
+  try {
+    const parsed = readOrderRoute(route.query)
+    Object.assign(query, { orderNo: '', regionCode: '', regionExact: false, orgId: null,
+      insuranceTypeId: null, projectId: null, enterpriseId: null, status: '', pageNum: 1, pageSize: 10 }, parsed)
+    query.pageNum = parsed.pageNum || 1
+    query.pageSize = parsed.pageSize || 10
+    dateRange.value = parsed.startDate && parsed.endDate ? [parsed.startDate, parsed.endDate] : null
+    void loadData()
+  } catch (error) {
+    loading.value = false
+    ElMessage.error(error instanceof Error ? error.message : '筛选参数无效')
+  }
+}
+watch(() => route.fullPath, () => {
+  if (route.name === (isPerformance.value ? 'PerformanceOrders' : 'TenderOrders')) applyRoute()
+  else ++loadId
+}, { immediate: true })
+onMounted(() => { void loadOptions() })
 </script>
 
 <template>
   <div class="page-container">
+    <el-alert v-if="query.regionExact" title="当前地区按完整编码精确匹配（来自分析下钻）；重新选择地区可恢复层级筛选" type="info" :closable="false" />
     <el-card class="filter-card" shadow="never">
       <el-form :model="query" label-width="82px" @submit.prevent>
         <el-row :gutter="12">
@@ -251,7 +288,7 @@ onMounted(() => {
           <el-col :xs="24" :sm="12" :md="8" :lg="6">
             <el-form-item label="地区">
               <!-- 地区下拉（行政区划字典）：替代原先手填"区域编码"，只列当前有数据的地区 -->
-              <RegionSelect v-model="query.regionCode" />
+              <RegionSelect v-model="query.regionCode" @update:model-value="query.regionExact = false" />
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="8" :lg="6">

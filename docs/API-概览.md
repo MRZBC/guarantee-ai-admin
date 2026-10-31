@@ -29,6 +29,7 @@
 | GET | `/api/orders/performance/{id}` |
 
 过滤参数：`orderNo`、`regionCode`、`orgId`、`insuranceTypeId`、`status`、`startDate`、`endDate`、`projectId`、`enterpriseId`。
+`regionExact=true` 用于图表下钻，按完整地区编码匹配；缺省保持原有地区层级前缀匹配。
 
 ## 业务分析
 
@@ -39,11 +40,26 @@
 | GET | `/api/analysis/order-region` | 区域分布 |
 | GET | `/api/analysis/order-insurance` | 险种分布 |
 | GET | `/api/analysis/order-institution` | 机构排行 |
+| GET | `/api/analysis/order-comparison` | 本期与前一等长周期比较 |
+| GET | `/api/analysis/order-report` | 同一快照内返回比较、趋势及三种分布 |
+| GET | `/api/analysis/order-report/export` | 聚合摘要 CSV，含 BOM、统计条件及 Top N 说明 |
 | GET | `/api/projects` / `/api/projects/{id}` | 项目管理 |
 | GET | `/api/enterprises` / `/api/enterprises/{id}` | 企业管理 |
 
-> `orderType=ALL` 时所有分析查询都对 `tender_order` 与 `performance_order` 做 `UNION ALL` 后再聚合，保证去重企业数/项目数口径正确。
-> `orderType` 支持 `TENDER` / `PERFORMANCE` / `ALL`，也接受中文「投标」「履约」。
+既有趋势与分布接口的 `orderType` 支持 `TENDER` / `PERFORMANCE` / `ALL`，也接受中文「投标」「履约」；ALL 合并两类订单后聚合。
+
+新增 comparison/report/export 接口只接受 `TENDER` 或 `PERFORMANCE`（大小写不敏感），拒绝其他值。
+通用参数为 `orderType`、`startDate`、`endDate`、`regionCode`、`orgId`；report 可带 `granularity`。
+日期需同时填写，跨度 1–366 天，按申请日期且含首尾；都不填时，以该类型/地区/机构已知数据结束日取最近最多 30 天。
+比较结果返回 `criteria`（归一后的实际条件）、`previousStartDate/previousEndDate`、已知覆盖日期、`comparisonComplete`、`changeAlert`，
+以及 `orderCount/guaranteeAmount/premiumAmount` 三个指标。每项含 `current/previous/change/changeRate/status`；
+零基数的变化率为空（JSON 可省略），状态 NEW/UNCHANGED/UP/DOWN。比较不完整时不生成提醒。
+地区榜为完整地区编码分组，机构榜实际按机构＋地区分组，均为 Top 10；下钻机构榜须同时保留机构与精确地区。
+
+新增读取入口要求 `analysis:overview:view`；导出同时要求 `analysis:export`，默认仅 ADMIN/ANALYST。
+导出重新查询并标注生成时间，返回 `text/csv;charset=UTF-8` 和附件头；拒绝仍按统一错误协议返回，前端不得将错误 JSON 当文件下载。
+导出通过既有审计端口记录 WEB/EXPORT/ANALYSIS_REPORT、查询条件、结果条数与 traceId，不记录文件正文；仅管理员可查看该目标类型的审计。
+无新增表结构，权限由 `PermissionCatalog` 的新库播种与存量同步初始化器补齐；手动部署可执行 `V11__analysis_export_permission.sql`。
 
 ## 系统配置
 
@@ -84,3 +100,15 @@ curl -N -X POST http://localhost:8081/api/ai/chat \
 
 AI 域的能力清单、事件协议与演示步骤见 [AI-能力与演示.md](AI-能力与演示.md)；
 可观测指标与 MCP 接入分别见 [REQ-第五阶段-MCP评测与可观测.md](REQ-第五阶段-MCP评测与可观测.md)、[MCP-外部接入.md](MCP-外部接入.md)。
+
+
+## 提示词候选评测与发布（2026-10-21）
+
+接口、请求字段、权限、任务状态、发布证据校验与迁移说明见 [IMPL-提示词候选评测与发布](IMPL-提示词候选评测与发布.md)。发布请求现须包含 `versionNo + contentHash + evaluationId`；保存和发布不执行 Maven。旧 `GET /api/ai/config/prompts/gate` 仅返回兼容提示，不触发评测。
+
+
+### 提示词基础规则与业务补充（2026-10-22）
+
+`GET /api/ai/config/prompts/base`（ai:config:view）：基础version/content/contentHash，只读。
+`POST /api/ai/config/prompts/draft`（ai:config:update）：businessContent（允许空串）、note、baseVersion、baseHash；旧全文迁移还须migrationSourceVersion、migrationSourceHash、migrationConfirmed=true。后端生成最终正文与内容哈希；不再接收可编辑的完整content。
+版本详情增加baseVersion/baseHash/baseContent/businessContent/migrationSourceVersion/migrationSourceHash；旧版这些字段为null。评测/发布只接收已迁移的组合草稿；回滚使用历史原始完整快照。表结构见V13；部署与兼容说明见 [实施记录](IMPL-提示词候选评测与发布.md)。

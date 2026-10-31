@@ -94,7 +94,7 @@ async function handleSubmit(): Promise<void> {
     })
     ElMessage.success('密码已修改，请使用新密码重新登录')
     // 不清 token 的话，用户的旧令牌已失效，下一次请求会先弹"登录状态已失效"再跳登录页
-    userStore.logout()
+    userStore.clearAuth()
     await router.replace('/login')
   } catch {
     // 失败原因（「原密码不正确」/「新密码不能与旧密码相同」等）已由响应拦截器统一提示；
@@ -110,9 +110,13 @@ async function handleSubmit(): Promise<void> {
  * <p>强制模式下这个入口是**必须的**（§7 E-8）：`POST /auth/logout` 在服务端闸门白名单内，
  * 否则用户会被永久锁死在改密页，连退出都做不到，只能清浏览器存储。</p>
  */
-function handleLogout(): void {
-  userStore.logout()
-  void router.replace('/login')
+async function handleLogout(): Promise<void> {
+  try {
+    await userStore.logout()
+    await router.replace('/login')
+  } catch {
+    // 保留当前会话，允许用户在服务端登出失败后重试。
+  }
 }
 
 /** 主动模式下的返回：回到用户来时的页面。 */
@@ -123,7 +127,6 @@ function handleBack(): void {
 
 <template>
   <div class="change-password-page">
-    <div class="change-password-page__bg" />
     <el-card class="change-password-card" shadow="always">
       <div class="change-password-card__header">
         <el-icon class="change-password-card__icon"><Lock /></el-icon>
@@ -243,17 +246,9 @@ function handleBack(): void {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #1f2d3d 0%, #2b4a6f 55%, #3a7bd5 100%);
+  background: #f5f7fa;
   overflow: hidden;
   padding: 16px;
-}
-
-.change-password-page__bg {
-  position: absolute;
-  inset: -40%;
-  background: radial-gradient(circle at 30% 30%, rgba(64, 158, 255, 0.28), transparent 55%),
-    radial-gradient(circle at 70% 65%, rgba(103, 194, 58, 0.18), transparent 55%);
-  pointer-events: none;
 }
 
 .change-password-card {
@@ -262,6 +257,8 @@ function handleBack(): void {
   max-width: calc(100vw - 32px);
   border-radius: 12px;
   padding: 8px 4px;
+  border-color: #e2eaf2;
+  box-shadow: 0 16px 48px rgba(36, 55, 76, 0.08);
 }
 
 .change-password-card__header {
@@ -271,13 +268,13 @@ function handleBack(): void {
 
 .change-password-card__icon {
   font-size: 32px;
-  color: #409eff;
+  color: #2765b0;
 }
 
 .change-password-card__title {
   margin: 8px 0 2px;
   font-size: 20px;
-  color: #303133;
+  color: #24374c;
 }
 
 .change-password-card__subtitle {
